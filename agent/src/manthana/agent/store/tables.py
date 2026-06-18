@@ -71,4 +71,29 @@ class CompactionRow(SQLModel, table=True):
     data: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
 
 
-__all__ = ["SessionRow", "TurnRow", "CompactionRow"]
+class ActionAuditRow(SQLModel, table=True):
+    """Persisted ``manthana.schemas.ActionAuditEntry`` — the action audit log."""
+
+    __tablename__ = "action_audit"  # type: ignore[assignment]
+
+    id: str = Field(primary_key=True)
+    action_id: str = Field(index=True)
+    actor: str | None = Field(default=None, index=True)
+    fired_at: str = Field(index=True)
+    outcome: str = Field(index=True)
+    data: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
+
+
+class ConsentRow(SQLModel, table=True):
+    """Persisted ``manthana.schemas.ConsentEntry`` — the consent registry."""
+
+    __tablename__ = "consent"  # type: ignore[assignment]
+
+    id: str = Field(primary_key=True)
+    subject: str = Field(index=True)
+    action_category: str = Field(index=True)
+    state: str = Field(index=True)
+    data: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
+
+
+__all__ = ["SessionRow", "TurnRow", "CompactionRow", "ActionAuditRow", "ConsentRow"]

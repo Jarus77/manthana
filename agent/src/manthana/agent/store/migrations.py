@@ -38,6 +38,9 @@ def _create_initial_tables(conn: Connection) -> None:
 
 MIGRATIONS: list[Migration] = [
     Migration(version=1, name="001_initial", apply=_create_initial_tables),
+    # create_all is idempotent (checkfirst): migration 2 adds the action_audit
+    # and consent tables to databases already at version 1.
+    Migration(version=2, name="002_action_consent_tables", apply=_create_initial_tables),
 ]
 
 _SCHEMA_MIGRATIONS_DDL = text(

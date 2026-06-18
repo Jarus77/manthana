@@ -118,6 +118,14 @@
     "surface": {
       "$ref": "#/$defs/Surface"
     },
+    "tags": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Auto-tag action output (project/task_type/outcome/friction)",
+      "title": "Tags",
+      "type": "object"
+    },
     "turn_count": {
       "default": 0,
       "title": "Turn Count",

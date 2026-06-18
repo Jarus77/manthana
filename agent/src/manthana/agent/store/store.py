@@ -16,8 +16,10 @@ from datetime import datetime
 from pathlib import Path
 
 from manthana.schemas import (
+    ActionAuditEntry,
     BaseCompaction,
     CompactionAdapter,
+    ConsentEntry,
     Mode,
     Session,
     Turn,
@@ -28,7 +30,7 @@ from sqlmodel import select
 
 from .engine import MEMORY, create_db_engine
 from .migrations import run_migrations
-from .tables import CompactionRow, SessionRow, TurnRow
+from .tables import ActionAuditRow, CompactionRow, ConsentRow, SessionRow, TurnRow
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -152,6 +154,17 @@ class Store:
             db.commit()
             return True
 
+    def update_session_tags(self, session_id: str, tags: dict[str, str]) -> bool:
+        with DBSession(self._engine) as db:
+            row = db.get(SessionRow, session_id)
+            if row is None:
+                return False
+            model = Session.model_validate(row.data)
+            model.tags = tags
+            db.merge(_session_row(model))
+            db.commit()
+            return True
+
     # ── turns ────────────────────────────────────────────────────────────
     def add_turns(self, turns: Iterable[Turn]) -> int:
         count = 0
@@ -222,6 +235,82 @@ class Store:
             db.merge(_compaction_row(model))
             db.commit()
             return True
+
+    # ── action audit log (seam) ──────────────────────────────────────────
+    def add_audit(self, entry: ActionAuditEntry) -> None:
+        with DBSession(self._engine) as db:
+            db.merge(
+                ActionAuditRow(
+                    id=entry.id,
+                    action_id=entry.action_id,
+                    actor=entry.actor,
+                    fired_at=entry.fired_at.isoformat(),
+                    outcome=str(entry.outcome),
+                    data=entry.model_dump(mode="json"),
+                )
+            )
+            db.commit()
+
+    def list_audit(
+        self,
+        *,
+        action_id: str | None = None,
+        actor: str | None = None,
+        limit: int | None = None,
+    ) -> list[ActionAuditEntry]:
+        with DBSession(self._engine) as db:
+            stmt = select(ActionAuditRow)
+            if action_id is not None:
+                stmt = stmt.where(ActionAuditRow.action_id == action_id)
+            if actor is not None:
+                stmt = stmt.where(ActionAuditRow.actor == actor)
+            stmt = stmt.order_by(ActionAuditRow.fired_at.desc())  # type: ignore[attr-defined]
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            return [ActionAuditEntry.model_validate(row.data) for row in db.exec(stmt)]
+
+    def last_fired_at(self, action_id: str, actor: str | None) -> datetime | None:
+        """Most recent successful fire time for cooldown checks."""
+        with DBSession(self._engine) as db:
+            stmt = (
+                select(ActionAuditRow.fired_at)
+                .where(ActionAuditRow.action_id == action_id)
+                .where(ActionAuditRow.actor == actor)
+                .where(ActionAuditRow.outcome == "fired")
+                .order_by(ActionAuditRow.fired_at.desc())  # type: ignore[attr-defined]
+                .limit(1)
+            )
+            value = db.exec(stmt).first()
+            return datetime.fromisoformat(value) if value else None
+
+    # ── consent registry (seam) ──────────────────────────────────────────
+    def set_consent(self, entry: ConsentEntry) -> None:
+        with DBSession(self._engine) as db:
+            db.merge(
+                ConsentRow(
+                    id=entry.id,
+                    subject=entry.subject,
+                    action_category=entry.action_category,
+                    state=str(entry.state),
+                    data=entry.model_dump(mode="json"),
+                )
+            )
+            db.commit()
+
+    def get_consent(self, subject: str, action_category: str) -> ConsentEntry | None:
+        with DBSession(self._engine) as db:
+            stmt = (
+                select(ConsentRow)
+                .where(ConsentRow.subject == subject)
+                .where(ConsentRow.action_category == action_category)
+                .limit(1)
+            )
+            row = db.exec(stmt).first()
+            return ConsentEntry.model_validate(row.data) if row else None
+
+    def list_consent(self) -> list[ConsentEntry]:
+        with DBSession(self._engine) as db:
+            return [ConsentEntry.model_validate(r.data) for r in db.exec(select(ConsentRow))]
 
 
 __all__ = ["Store"]

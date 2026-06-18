@@ -6,7 +6,8 @@ updated every phase. Companion to `manthana.md` (vision), `manthana-decisions.md
 (locked decisions — wins on conflict), `manthana-action.md` (actions), and
 `ECC_clone_instruction.md` (reuse).*
 
-Last updated: 2026-06-19 — end of **Phase 4 (compactor + cost tracking)**.
+Last updated: 2026-06-19 — end of **Phase 5 (dashboard + auto-tag + dispatcher)**
+— vertical slice complete.
 
 ---
 
@@ -213,6 +214,26 @@ local agent; the server uses async later.
   `claude -p` path is intentionally not auto-run in tests (token spend); covered
   by MockProvider.
 
+## 4e. Action dispatcher + dashboard (Phase 5)
+
+- **Dispatcher seam** (`manthana.agent.actions`): `Dispatcher.dispatch(event)`
+  routes `TriggerEvent`s to registered `ActionHandler`s, enforcing — in order —
+  personal-mode exclusion (hard), consent opt-out, cooldown, and confidence
+  threshold; every evaluation (fired/suppressed/failed) is written to the action
+  audit log. `default_dispatcher(store)` registers the v1 handler; `tag_all`
+  fires `session_closed` for all sessions.
+- **Auto-tag action** (`actions/auto_tag.py`): the one live v1 action (engineer /
+  write / silent). Writes `project`/`task_type`/`outcome`/`friction` tags to
+  `Session.tags` (new documented field) on session close.
+- **Store seams**: `action_audit` + `consent` tables (migration 2, idempotent
+  `create_all`); `add_audit`/`list_audit`/`last_fired_at` (cooldown),
+  `get_consent`/`set_consent`/`list_consent`, `update_session_tags`.
+- **Dashboard** (`manthana.agent.dashboard`, FastAPI + HTMX, no build step):
+  `/` sessions with one-click Work/Personal toggle + tags, `/cost` per-session +
+  total, `/actions` audit log. CLI: `manthana dashboard`, `manthana retag`.
+
+Vertical slice verified end-to-end: capture → store → compact → tag → view.
+
 ## 5. Trust contract in code
 
 **The single sync chokepoint:** `manthana.agent.sync.eligible_for_sync`. ALL
@@ -281,4 +302,10 @@ aggregate with <4 distinct released-compaction contributors.
 - ✅ **Phase 4 — Compactor + cost** (§4d): LLM provider abstraction (Claude/Codex
   CLI + Mock), verbatim ECC RATE_TABLE + cost estimation, v0 prompt, defensive
   compactor → EngineeringCompaction. Green (37 tests).
-- ⏭ **Phase 5** — dashboard + auto-tag + dispatcher.
+- ✅ **Phase 5 — Dashboard + auto-tag + dispatcher** (§4e): action dispatcher
+  seam (consent/cooldown/audit/personal-exclusion), auto-tag action, FastAPI+HTMX
+  dashboard. Green (47 tests). **Vertical slice complete.**
+
+**Next scope (not in this engagement):** server (FastAPI ingestion, Postgres +
+pgvector, multi-tenancy, k-anonymity, founder query), the remaining 7 v1 actions,
+skill miner v0, daemon packaging.

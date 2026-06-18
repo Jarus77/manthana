@@ -9,6 +9,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
 import typer
+from manthana.agent.actions import tag_all
 from manthana.agent.capture import ingest_all
 from manthana.agent.compact import compact_pending, compact_session
 from manthana.agent.datahome import db_path, resolve_data_home
@@ -88,6 +89,23 @@ def compact(session_id: str = "") -> None:
         return
     results = compact_pending(store)
     typer.echo(f"compacted {len(results)} pending session(s)")
+
+
+@app.command()
+def retag() -> None:
+    """Run the auto-tag action over all sessions (writes tags to the store)."""
+    store = Store.open()
+    count = tag_all(store)
+    typer.echo(f"dispatched auto-tag over sessions; {count} audit entries logged")
+
+
+@app.command()
+def dashboard(host: str = "127.0.0.1", port: int = 8765) -> None:
+    """Serve the local dashboard (sessions, cost, action audit)."""
+    import uvicorn
+    from manthana.agent.dashboard import create_app
+
+    uvicorn.run(create_app(Store.open()), host=host, port=port)
 
 
 def main() -> None:
