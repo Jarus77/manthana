@@ -6,7 +6,7 @@ updated every phase. Companion to `manthana.md` (vision), `manthana-decisions.md
 (locked decisions — wins on conflict), `manthana-action.md` (actions), and
 `ECC_clone_instruction.md` (reuse).*
 
-Last updated: 2026-06-19 — end of **Phase 2 (Claude Code collector)**.
+Last updated: 2026-06-19 — end of **Phase 3 (redaction + Work/Personal mode)**.
 
 ---
 
@@ -172,6 +172,26 @@ local agent; the server uses async later.
   toggle + redaction). Grounding: `ingest_all` over this machine's real data
   ingested 209 files → 425 sessions → 28,622 turns.
 
+## 4c. Redaction + Work/Personal mode (Phase 3)
+
+`manthana.agent.redaction` (+ `agent/config.py`, CLI):
+
+- **`patterns.py`** copies the ECC `governance-capture.js` literals **verbatim**
+  (SECRET_PATTERNS, APPROVAL_COMMANDS, SENSITIVE_PATHS), translated JS→Python
+  with the JS source preserved in comments; **PII_PATTERNS** (email, phone) are
+  Manthana additions. Attribution at the copy site + in `NOTICE`.
+- **`Redactor`** (`redactor.py`): `detect`, `redact_text` (typed-overloaded),
+  `redact_value` (recursive), `redact_turn`/`redact_turns` (return COPIES — the
+  local store keeps full fidelity; redaction applies on the path to release / in
+  the review preview), `detect_approval_required`, `detect_sensitive_path`.
+  Optional `llm_scrub` hook (off by default; provider arrives Phase 4).
+- **`config.py`**: optional `$MANTHANA_DATA_HOME/manthana.toml` (`[embeddings]`,
+  `[redaction]`); `build_redactor()` bridges config → Redactor.
+- **Work/Personal mode**: `Store.set_session_mode` + `manthana mode <id>
+  work|personal`. Personal toggle flows straight into the sync gate
+  (`eligible_for_sync`), tested end-to-end. New CLI: `capture`, `sessions`,
+  `mode`.
+
 ## 5. Trust contract in code
 
 **The single sync chokepoint:** `manthana.agent.sync.eligible_for_sync`. ALL
@@ -234,5 +254,8 @@ aggregate with <4 distinct released-compaction contributors.
 - ✅ **Phase 2 — Claude Code collector** (§4b): JSONL parse + flatten,
   sessionization, project/actor inference, capture pipeline, Codex stub.
   Green (22 tests); verified on real data.
-- ⏭ **Phase 3** — redaction pipeline + Work/Personal mode.
-- Phases 4–5 — compactor + cost, dashboard + auto-tag + dispatcher.
+- ✅ **Phase 3 — Redaction + Work/Personal mode** (§4c): verbatim ECC secret
+  patterns + PII, Redactor (copies), config, mode toggle wired to the sync gate,
+  CLI (capture/sessions/mode). Green (29 tests).
+- ⏭ **Phase 4** — compactor + cost tracking.
+- Phase 5 — dashboard + auto-tag + dispatcher.
