@@ -6,8 +6,8 @@ updated every phase. Companion to `manthana.md` (vision), `manthana-decisions.md
 (locked decisions — wins on conflict), `manthana-action.md` (actions), and
 `ECC_clone_instruction.md` (reuse).*
 
-Last updated: 2026-06-19 — vertical slice complete + adversarial review hardening
-(see §11).
+Last updated: 2026-06-19 — vertical slice + review hardening (§11), then the org
+server + founder query (§12).
 
 ---
 
@@ -338,3 +338,60 @@ confirmed issues across the slice; all fixed with regression tests in
 - **[low] Attribution roll-up** — `NOTICE` reflects shipped derivations (no
   "[lands]" markers) and includes `engine.py` (pragmas) and `claude_code.py`
   (session-end.js line-handling); `engine.py` cites its exact ECC path.
+
+## 12. Org server + founder query (`manthana.server`, AGPL-3.0)
+
+The org-side, self-hosted server. SQLite for dev/tests, Postgres for prod (same
+SQLModel models); pgvector is reserved for the later skill miner, not needed by
+the founder query.
+
+**Modules** (`server/src/manthana/server/`):
+
+- `config.py` — `ServerConfig` from `MANTHANA_SERVER_*` env (DB URL, JWT secret,
+  admin token, k-anon floor, object store). Insecure dev defaults; override in prod.
+- `tables.py` — multi-tenant SQLModel tables (distinct names to avoid clashing
+  with the local store on shared metadata): `org`, `team`, `actor`,
+  `released_compaction`, `raw_transcript`, `action_queue` (seam), `org_consent`
+  (seam). Same index-columns + `data` JSON pattern; UTC-normalized timestamps.
+- `db.py` — engine (SQLite/Postgres, StaticPool for `:memory:`) + `init_db`.
+- `auth.py` — **JWT team-scoped tokens** (`issue_team_token`/`verify_team_token`,
+  claims = actor/org/team) for agents; a static **admin token** for admin +
+  founder endpoints.
+- `store.py` — `ServerStore`: tenancy CRUD, `ingest_compaction` (org/team from
+  token, upserts actor), `query_compactions` (org-scoped + filters), `record_raw`,
+  consent.
+- `storage.py` — `ObjectStore` (`InMemoryObjectStore` for dev/tests;
+  `S3ObjectStore`/boto3 for prod — MinIO/S3/GCS/R2) for raw-transcript release.
+- `llm.py` — server-side `LLMProvider` (`MockProvider`/`ScriptedProvider`); kept
+  separate from the agent's so the AGPL server stays decoupled. **Open item:**
+  dev = mock; v1.5 the org provisions a real server key behind this interface.
+- `founder.py` — **structured-filter-first** pipeline: NL → LLM-parsed
+  `FounderFilter` → org-scoped SQL → **k-anonymity floor** (distinct contributors
+  < `k_anon_floor` ⇒ `insufficient data`, rollup suppressed) → grounded narrative
+  whose claims cite compaction ids; **non-optional grounding** (a narrative citing
+  nothing is withheld, rollup still returned).
+- `app.py` — FastAPI: `/healthz`, `/v1/admin/{orgs,teams,tokens}` (admin),
+  `/v1/compactions` + `/v1/compactions/{id}/raw` (team JWT), `/v1/founder/query`
+  (admin). Uses inline `Annotated[..., Depends(...)]` (no `from __future__ import
+  annotations` here, so FastAPI resolves closure-scoped deps at runtime).
+- `cli.py` — `manthana-server {serve,create-org,create-team,token}`.
+
+**Auth model:** admin bootstraps orgs/teams and mints team tokens; the local
+agent authenticates with its team JWT to ingest; the founder uses the admin token
+to query. **Dev infra:** `docker-compose.yml` (Postgres+pgvector, MinIO).
+
+**Tenancy:** Org > Team > Actor; Project = tag. Every server row is org-scoped;
+the founder query is always org-scoped. Tests: `tests/test_server.py` (auth,
+ingestion, raw release, k-anon suppression, grounded vs ungrounded narrative) on
+SQLite + in-memory object store + scripted provider.
+
+### Phase status (updated)
+
+- ✅ **Phase 6 — Server core**: tenancy, JWT auth, ServerStore, ingestion, raw
+  release, k-anonymity, object store, docker-compose. 
+- ✅ **Phase 7 — Founder query**: parse → SQL → k-anon → grounded narrative with
+  citations + insufficient-data fallback. Green (64 tests total).
+
+**Still next:** remaining 6 v1.5 actions, skill miner v0 (pgvector), daemon
+packaging, agent→server sync transport (the agent's `eligible_for_sync` →
+`/v1/compactions`).

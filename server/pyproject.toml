@@ -4,7 +4,22 @@ version = "0.1.0"
 description = "Manthana org server — ingestion, multi-tenancy, k-anonymity, founder query (AGPL-3.0)."
 requires-python = ">=3.11"
 license = "AGPL-3.0-or-later"
-dependencies = ["manthana-schemas"]
+dependencies = [
+    "manthana-schemas",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "sqlmodel>=0.0.22",
+    "pyjwt>=2.9",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+# Production drivers; dev/tests run on SQLite + the in-memory object store.
+postgres = ["psycopg[binary]>=3.2", "pgvector>=0.3"]
+s3 = ["boto3>=1.35"]
+
+[project.scripts]
+manthana-server = "manthana.server.cli:main"
 
 [build-system]
 requires = ["hatchling"]
