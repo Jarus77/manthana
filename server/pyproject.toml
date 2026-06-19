@@ -19,6 +19,8 @@ dependencies = [
 # Production drivers; dev/tests run on SQLite + the in-memory object store.
 postgres = ["psycopg[binary]>=3.2", "pgvector>=0.3"]
 s3 = ["boto3>=1.35"]
+# Real founder-narrative provider; dev/tests use the deterministic mock.
+llm = ["anthropic>=0.40"]
 
 [project.scripts]
 manthana-server = "manthana.server.cli:main"

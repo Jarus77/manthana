@@ -12,7 +12,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from .config import ServerConfig
 
 
 @runtime_checkable
@@ -54,4 +57,63 @@ class ScriptedProvider:
         return self._responses.pop(0)
 
 
-__all__ = ["LLMProvider", "MockProvider", "ScriptedProvider"]
+class AnthropicProvider:
+    """Real server-side provider — the Anthropic Messages API (arch §9).
+
+    The org provisions ``ANTHROPIC_API_KEY``; the SDK ships as the optional
+    ``manthana-server[llm]`` extra so dev/tests (which use the mock) stay
+    dependency-free. Tests inject a fake ``client`` to avoid any network/key.
+    """
+
+    name = "anthropic"
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        max_tokens: int = 1024,
+        api_key: str | None = None,
+        client: Any = None,
+    ) -> None:
+        self.model = model
+        self.max_tokens = max_tokens
+        if client is not None:
+            self._client = client
+            return
+        try:
+            from anthropic import Anthropic  # type: ignore[import-not-found]
+        except ImportError as exc:  # pragma: no cover - exercised only without the extra
+            raise RuntimeError(
+                "AnthropicProvider requires the 'anthropic' SDK — "
+                "install the extra: pip install 'manthana-server[llm]'"
+            ) from exc
+        # Anthropic() reads ANTHROPIC_API_KEY from the environment when api_key is None.
+        self._client = Anthropic(api_key=api_key) if api_key else Anthropic()
+
+    def complete(self, prompt: str) -> str:
+        message = self._client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        # Concatenate only text blocks (tool-use / thinking blocks have no .text).
+        parts = [
+            block.text
+            for block in message.content
+            if getattr(block, "type", None) == "text"
+        ]
+        return "".join(parts).strip()
+
+
+def make_provider(config: ServerConfig) -> LLMProvider:
+    """Select the founder-narrative provider from config (arch §9).
+
+    Defaults to the deterministic mock so dev/tests need no API key; the org
+    flips ``MANTHANA_SERVER_LLM=anthropic`` for a real, citation-grounded model.
+    """
+    if config.llm_provider == "anthropic":
+        return AnthropicProvider(model=config.llm_model, max_tokens=config.llm_max_tokens)
+    return MockProvider("{}")
+
+
+__all__ = ["LLMProvider", "MockProvider", "ScriptedProvider", "AnthropicProvider", "make_provider"]

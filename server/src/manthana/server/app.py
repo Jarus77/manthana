@@ -26,7 +26,7 @@ from pydantic import BaseModel, ValidationError
 from .auth import AuthError, TeamClaims, issue_team_token, verify_team_token
 from .config import ServerConfig
 from .founder import run_query
-from .llm import LLMProvider, MockProvider
+from .llm import LLMProvider, make_provider
 from .storage import ObjectStore, make_object_store
 from .store import ServerStore
 from .ui import mount_ui
@@ -197,8 +197,9 @@ def build_default_app() -> FastAPI:
     config = ServerConfig.from_env()
     store = ServerStore.open(config.db_url)
     object_store = make_object_store(config)
-    # v1.5: org provisions a real server-side provider; dev returns "{}".
-    provider: LLMProvider = MockProvider("{}")
+    # Founder-narrative provider: mock by default; real Anthropic model when the
+    # org sets MANTHANA_SERVER_LLM=anthropic + ANTHROPIC_API_KEY (arch §9).
+    provider = make_provider(config)
     return create_app(config, store, object_store, provider)
 
 

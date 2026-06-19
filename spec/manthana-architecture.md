@@ -686,6 +686,37 @@ critic; 21 agents, 16 raw → 10 confirmed) ran over `ui.py`, `dashboard/app.py`
   contributor → "insufficient". Logged in `manthana-decisions.md` as a v1.5
   hardening (per-filter contributor floor) rather than touched in this pass.
 
+## 23. Real server-side founder-narrative provider (resolves §9 open item)
+
+The founder narrative was a deterministic mock ("insufficient data" in dev). A
+real provider now plugs in behind the existing `LLMProvider` Protocol, keeping
+`founder.py` provider-agnostic:
+
+- **`AnthropicProvider`** (`server/llm.py`): Anthropic Messages API. Reads
+  `ANTHROPIC_API_KEY` from the env (or an explicit `api_key`); accepts an injected
+  `client` so tests run with no SDK and no key. `complete()` concatenates only
+  **text** blocks (skips tool_use/thinking) and strips. The `anthropic` SDK is the
+  optional **`manthana-server[llm]`** extra (import guarded like `sqlite_vec`), so
+  dev/tests stay dependency-free.
+- **`make_provider(config)`** factory: `mock` by default (offline dev/tests),
+  `anthropic` when `MANTHANA_SERVER_LLM=anthropic`. `build_default_app` uses it.
+- **Config** (`config.py`): `llm_provider` (`mock|anthropic`, validated),
+  `llm_model` (default `claude-sonnet-4-6` — a strong, cost-sensible default for
+  grounded summarization; override to `claude-opus-4-8` via
+  `MANTHANA_SERVER_LLM_MODEL`), `llm_max_tokens` (1024).
+- **Egress posture:** enabling a real provider sends compaction-derived text to
+  the org's own provisioned Anthropic key. By construction this is **already**
+  released + redacted org data, and `founder.py` passes **only k-anon-surviving**
+  compactions to the narrative prompt — sub-floor cohorts never reach the model.
+- **Tests** (`tests/test_server_llm.py`, 6): text-block concat + param passing,
+  non-text-block skipping, `make_provider` default/selection, invalid-provider
+  rejection, and an **integration** test proving a real-shaped provider yields a
+  **grounded, cited** narrative (vs the mock's "insufficient data"). 125 tests.
+
+To turn it on live:
+`MANTHANA_SERVER_LLM=anthropic ANTHROPIC_API_KEY=sk-... uv run manthana-server serve`
+(install the extra first: `uv pip install "manthana-server[llm]"` / `anthropic`).
+
 ### Phase status
 
 - ✅ **Phase 11 — Dashboard control plane**: compactions + skills pages + action

@@ -22,6 +22,11 @@ class ServerConfig:
     k_anon_floor: int = K_ANON_FLOOR_DEFAULT
     object_store: str = "memory"  # "memory" | "s3"
     s3_bucket: str | None = None
+    # Founder-narrative provider (arch §9): dev/tests use the deterministic mock;
+    # the org sets llm_provider="anthropic" + ANTHROPIC_API_KEY for a real model.
+    llm_provider: str = "mock"  # "mock" | "anthropic"
+    llm_model: str = "claude-sonnet-4-6"
+    llm_max_tokens: int = 1024
 
     def __post_init__(self) -> None:
         # An empty admin token or JWT secret is an auth bypass: hmac.compare_digest
@@ -31,6 +36,10 @@ class ServerConfig:
             raise ValueError("admin_token must not be empty (set MANTHANA_SERVER_ADMIN_TOKEN)")
         if not self.jwt_secret:
             raise ValueError("jwt_secret must not be empty (set MANTHANA_SERVER_JWT_SECRET)")
+        if self.llm_provider not in ("mock", "anthropic"):
+            raise ValueError(
+                f"llm_provider must be 'mock' or 'anthropic', got {self.llm_provider!r}"
+            )
 
     @classmethod
     def from_env(cls) -> ServerConfig:
@@ -42,6 +51,9 @@ class ServerConfig:
             k_anon_floor=int(env("MANTHANA_SERVER_K_ANON", str(cls.k_anon_floor))),
             object_store=env("MANTHANA_SERVER_OBJECT_STORE", cls.object_store),
             s3_bucket=env("MANTHANA_SERVER_S3_BUCKET", None),
+            llm_provider=env("MANTHANA_SERVER_LLM", cls.llm_provider),
+            llm_model=env("MANTHANA_SERVER_LLM_MODEL", cls.llm_model),
+            llm_max_tokens=int(env("MANTHANA_SERVER_LLM_MAX_TOKENS", str(cls.llm_max_tokens))),
         )
 
 
