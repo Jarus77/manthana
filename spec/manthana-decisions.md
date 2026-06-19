@@ -247,3 +247,14 @@ parsing, and config numeric bounds (`k_anon_floor >= 1`, `1 <= llm_max_tokens <=
 IDs would reject legitimate *future* models (e.g. a new Opus). An unknown model
 now fails the API call, which degrades gracefully via the exception handling
 above. `llm_model` stays free-form + configurable.
+
+### Secret handling — .env, never the command line
+
+Secrets (`MANTHANA_SERVER_JWT_SECRET`, `MANTHANA_SERVER_ADMIN_TOKEN`,
+`ANTHROPIC_API_KEY`) MUST live in a gitignored `.env`, not on the command line
+(CLI args leak into shell history, `ps`, and logs). Committed template:
+`.env.example` (kept tracked via a `!.env.example` negation in `.gitignore`).
+Loader: `scripts/serve.sh` (`set -a; source .env; set +a; uv run manthana-server
+serve`). Documented in `README.md` → "Running the server". Decided after an API
+key was pasted on a `!` command line during the live LLM-provider demo (rotate
+any key that touches a command line / shared transcript).

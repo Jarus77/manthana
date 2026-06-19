@@ -11,6 +11,8 @@ dist/
 venv/
 .env
 .env.*
+# ...but DO commit the template (it holds no real secrets)
+!.env.example
 
 # uv
 # (uv.lock IS committed)

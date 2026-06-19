@@ -47,6 +47,46 @@ uv run manthana-schemas-export  # regenerate schemas/json/*.schema.json
 uv run manthana datahome        # show resolved MANTHANA_DATA_HOME + db path
 ```
 
+## Running the server
+
+Configuration comes from `MANTHANA_SERVER_*` environment variables. **Keep
+secrets in a `.env` file — never on the command line** (they leak into shell
+history, process lists, and logs). `.env` is gitignored; `.env.example` is the
+committed template.
+
+```bash
+cp .env.example .env            # then edit .env: set JWT secret, admin token, etc.
+./scripts/serve.sh --port 8000  # loads .env and starts the server
+```
+
+`scripts/serve.sh` just sources `.env` and runs the server; the equivalent by
+hand is:
+
+```bash
+set -a; source .env; set +a     # export everything assigned in .env
+uv run manthana-server serve --port 8000
+```
+
+Then open the **founder console** at <http://127.0.0.1:8000/ui> (sign in with
+`MANTHANA_SERVER_ADMIN_TOKEN`) and the local **employee dashboard** with
+`uv run manthana dashboard` (<http://127.0.0.1:8765>).
+
+**Real founder narratives.** By default the narrative provider is a deterministic
+mock (returns "insufficient data"). For real, citation-grounded narratives,
+install the extra and set the provider + key in `.env`:
+
+```bash
+uv pip install "anthropic"      # or sync the manthana-server[llm] extra
+# in .env:
+#   MANTHANA_SERVER_LLM=anthropic
+#   ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Postgres + MinIO for a full local stack come from `docker compose up -d`
+(Postgres is published on host port **5433**; install the driver with
+`uv pip install "psycopg[binary]"`). If a key ever lands on a command line or in
+a shared transcript, **rotate it** at console.anthropic.com.
+
 ## Licensing
 
 Dual-licensed by component — see [`LICENSE`](LICENSE). The server is
