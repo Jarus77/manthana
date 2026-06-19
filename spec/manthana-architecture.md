@@ -740,6 +740,19 @@ surface the raw SDK exception). Fixes (128 tests):
   agent chokepoint already enforces the invariant). **Rejected:** an `llm_model`
   whitelist — it would reject valid future models; unknown models now fail-soft.
 
+**Citation matching fix (found in live testing with a real model).** The first
+live run returned "insufficient data" despite a *good* narrative: the model
+**abbreviated** the long UUID compaction ids (cited `comp-a0565012` for
+`comp-a0565012-55fe-…`) and grouped several in one `[…]`, so the old exact
+`id in cited` match found nothing. `founder._match_citations` now splits each
+bracket on commas/whitespace and matches a piece by **exact-or-unique-prefix** —
+an ambiguous prefix (matching >1 id) grounds nothing, so it never grounds to the
+wrong compaction. Live result: the `actioneer` query now returns a grounded,
+4-citation narrative. Regressions: abbreviated-prefix, comma-grouped, and
+ambiguous-prefix cases (131 tests). The mocks cite short exact ids, which is why
+only a real model surfaced this — a reminder that the deterministic providers
+can't exercise model-style output quirks.
+
 ### Phase status
 
 - ✅ **Phase 11 — Dashboard control plane**: compactions + skills pages + action

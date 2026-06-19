@@ -162,6 +162,49 @@ def test_run_query_degrades_gracefully_on_provider_error() -> None:
     assert result.citations == []
 
 
+def _seed_one(store: ServerStore, cid: str, *, org: str = "o1") -> None:
+    store.create_org(org, "Acme")
+    store.ingest_compaction(_comp(cid, "e@x.com"), org_id=org, team_id="t1")
+
+
+def test_citation_matches_abbreviated_uuid_prefix() -> None:
+    # A real model abbreviates long ids — cite a leading prefix, still grounds.
+    config = _cfg(k_anon_floor=1)
+    store = ServerStore.open("sqlite://")
+    full = "comp-a0565012-55fe-475c-a6aa-2b20144e0e16"
+    _seed_one(store, full)
+    provider = MockProvider("The team shipped the scribe work [comp-a0565012].")
+    result = run_query(store, config, org_id="o1", query="x", provider=provider)
+    assert result.insufficient_data is False
+    assert result.citations == [full]  # resolved to the full id
+
+
+def test_citation_matches_comma_grouped_bracket() -> None:
+    config = _cfg(k_anon_floor=1)
+    store = ServerStore.open("sqlite://")
+    store.create_org("o1", "Acme")
+    a, b = "comp-aaaa1111-x", "comp-bbbb2222-y"
+    store.ingest_compaction(_comp(a, "e1@x.com"), org_id="o1", team_id="t1")
+    store.ingest_compaction(_comp(b, "e2@x.com"), org_id="o1", team_id="t1")
+    provider = MockProvider("Two efforts [comp-aaaa1111, comp-bbbb2222].")
+    result = run_query(store, config, org_id="o1", query="x", provider=provider)
+    assert result.insufficient_data is False
+    assert set(result.citations) == {a, b}
+
+
+def test_ambiguous_prefix_citation_does_not_ground() -> None:
+    # A prefix matching >1 compaction is ambiguous → grounds nothing (conservative).
+    config = _cfg(k_anon_floor=1)
+    store = ServerStore.open("sqlite://")
+    store.create_org("o1", "Acme")
+    store.ingest_compaction(_comp("comp-aaa111", "e1@x.com"), org_id="o1", team_id="t1")
+    store.ingest_compaction(_comp("comp-aaa222", "e2@x.com"), org_id="o1", team_id="t1")
+    provider = MockProvider("Vague claim [comp-aaa].")  # prefix of both
+    result = run_query(store, config, org_id="o1", query="x", provider=provider)
+    assert result.insufficient_data is True
+    assert result.citations == []
+
+
 def test_founder_query_grounded_with_anthropic_provider() -> None:
     config = _cfg(k_anon_floor=1)
     store = ServerStore.open("sqlite://")

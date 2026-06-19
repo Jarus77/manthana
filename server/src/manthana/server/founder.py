@@ -78,6 +78,30 @@ _NARRATIVE_PROMPT = (
 )
 
 
+def _match_citations(narrative: str, visible: list[Any]) -> list[str]:
+    """Resolve bracketed citations to visible compaction ids.
+
+    Real models abbreviate long UUID-style ids (they cite a leading prefix) and
+    sometimes group several ids in one bracket, so split each bracket on
+    commas/whitespace and match a piece to an id by exact-or-**unique**-prefix.
+    A piece that matches more than one id is ambiguous and dropped, so grounding
+    stays conservative — it never grounds to the wrong compaction. Returns ids in
+    their original (visible) order.
+    """
+    pieces: set[str] = set()
+    for token in _CITE_RE.findall(narrative):
+        for part in re.split(r"[,\s]+", token.strip()):
+            if part:
+                pieces.add(part)
+    ids = [c.id for c in visible]
+    matched: set[str] = set()
+    for piece in pieces:
+        hits = [cid for cid in ids if cid == piece or cid.startswith(piece)]
+        if len(hits) == 1:  # unambiguous
+            matched.add(hits[0])
+    return [cid for cid in ids if cid in matched]
+
+
 def _extract_json(raw: str) -> dict[str, Any]:
     text = raw.strip()
     try:
@@ -198,8 +222,7 @@ def run_query(
             filter=spec, rollup=rollup, narrative=INSUFFICIENT, citations=[], insufficient_data=True
         )
 
-    cited = set(_CITE_RE.findall(narrative))
-    citations = [c.id for c in visible if c.id in cited]
+    citations = _match_citations(narrative, visible)
     # Non-optional grounding: a narrative citing nothing is withheld (rollup kept).
     if not citations:
         return FounderResult(
