@@ -83,7 +83,7 @@ def test_compact_produces_engineering_compaction() -> None:
     assert comp.tier_used == "opus"
     assert comp.est_cost_usd == 15.0
     assert comp.duration_seconds == 300.0
-    assert comp.prompt_version == "v0"
+    assert comp.prompt_version == "v1"
     assert comp.id == "comp-s1"
 
 

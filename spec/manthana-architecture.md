@@ -851,3 +851,13 @@ transcripts) and the 1 mined skill, then proposed prompt edits.
 - **Meta:** the trust/faithfulness layer is solid; skill quality needs (a) the
   anti-overfit prompt heuristics and (b) more diverse contributors — tying skill
   value directly to Phase B (team).
+
+**Applied (prompt-only, no token spend):** compaction prompt → **v1**
+(`compactor/prompt.py`): `approach` now must name exact data sources/files + tools
++ a causal clause for surprising results; `artifacts` names files + inline answer;
+`files_touched` includes data files; explicit "never invent" grounding. Skill
+synth prompt → **v1** (`synthesize.py`): anti-overfit heuristics (placeholders for
+dataset/file names, abstract output, invariant procedure), action-oriented name,
+abstract trigger patterns, failure-handling body; `fallback_draft` says "or
+similar work". 141 tests green. Re-verification (re-compact/re-mine) deferred
+until fresh sessions accrue.

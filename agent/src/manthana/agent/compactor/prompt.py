@@ -14,7 +14,7 @@ import json
 
 from manthana.schemas import Session, Turn
 
-PROMPT_VERSION = "v0"
+PROMPT_VERSION = "v1"
 
 _MAX_TURNS = 400
 _MAX_CHARS = 600
@@ -25,21 +25,28 @@ digest. Read the turns (a JSON array of {seq, role, text, tool}) and return ONLY
 single JSON object — no prose, no code fences — with EXACTLY these keys:
 
   task_intent: string  (what the engineer set out to do)
-  approach: string  (how they went about it, 1-3 sentences)
-  artifacts: string[]  (concrete things produced)
+  approach: string  (how they went about it, 1-3 sentences. NAME the exact data
+      sources / files / datasets accessed — specific CSV/file names, tables — and
+      the key tools, libraries, and commands used, e.g. pandas, grep, the column
+      filtered on. For a surprising or counterintuitive RESULT, add one clause on
+      the likely mechanism, caveat, or confound — not just the result.)
+  artifacts: string[]  (concrete things produced — name each file/output, and for
+      a short answer include the actual value, e.g. "answer.txt: 27 states")
   outcome: "success" | "partial" | "abandoned"
   reusable_pattern: boolean  (is there a generalizable pattern worth reusing?)
   friction_points: array of { "category": one of
       ["loop","tool_error","abandon","retry","deadend"], "description": string,
       "turn_refs": string[] }  (turn seq numbers as strings; [] if unknown)
-  files_touched: string[]
+  files_touched: string[]  (files read OR written — include DATA files such as the
+      CSVs/datasets consulted, not only source code edited)
   prs_opened: string[]
   tests_added: string[]
   dead_end_branches: string[]
   languages: string[]
   frameworks: string[]
 
-Ground every field in the turns. Use [] for unknowns. Output JSON only.
+Ground every field in the turns — never invent a file name, number, or fact not
+present. Use [] for unknowns. Output JSON only.
 """
 
 

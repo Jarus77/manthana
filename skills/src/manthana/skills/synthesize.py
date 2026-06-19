@@ -20,17 +20,29 @@ from .cluster import CompactionCluster
 from .provider import LLMProvider
 from .skillmd import SkillDraft, repair_draft, slugify_name, validate_draft
 
-PROMPT_VERSION = "v0"
+PROMPT_VERSION = "v1"
 
 _SYNTH_PROMPT = """You are Manthana's skill miner. Below are {n} engineering session
 digests, from {c} distinct contributor(s), that all solve the SAME class of problem.
 Distill them into ONE reusable Agent Skill that GENERALIZES across ALL the examples —
 do not overfit to any single example; extract the common invariant and parameterize
-what varies. Return ONLY a JSON object with keys:
-  "name": a lowercase-hyphen slug, <=64 chars, not containing 'anthropic' or 'claude'
+what varies. Concretely:
+  - replace specific dataset/file names (e.g. a particular CSV, "CSN reports") with
+    {{placeholders}} like {{dataset}} / {{input_file}};
+  - do NOT hard-code a rigid output (e.g. "answer.txt") — say "write results to the
+    requested output";
+  - extract the invariant PROCEDURE (e.g. discover source -> filter -> aggregate ->
+    report) independent of the specific domain, dataset, or tool.
+Return ONLY a JSON object with keys:
+  "name": a lowercase-hyphen slug, <=64 chars, not containing 'anthropic' or 'claude';
+    action-oriented (verb-noun, e.g. "analyze-tabular-reports"), NOT a dataset name
   "description": third person, <=1024 chars, stating WHAT the skill does AND WHEN to use
-    it (name concrete trigger contexts/phrases — this is the trigger metadata, be specific)
-  "body": concise markdown instructions for the reusable procedure (<500 lines)
+    it. Name the trigger PATTERN abstractly (e.g. "when asked to count/aggregate records
+    in a CSV by category"), NOT the specific files or one-off task wording.
+  "body": concise markdown for the reusable procedure (<500 lines): the generalized
+    steps with {{placeholders}} for what varies, concrete heuristics (how to find the
+    right source, match columns), and what to do on failure (missing file/columns).
+    Do NOT paste the literal example tasks.
 Digests (JSON):
 {examples}
 Output JSON only."""
@@ -96,9 +108,9 @@ def fallback_draft(cluster: CompactionCluster) -> SkillDraft:
     name = slugify_name(primary)
     triggers = "; ".join(unique[:3])
     description = (
-        f"Reusable approach for {primary}. Use it when a task resembles: {triggers}. "
-        f"Distilled from {cluster.size} sessions across "
-        f"{len(cluster.contributors)} contributor(s)."
+        f"Reusable procedure for {primary}. Use it when tasked to: {triggers} — "
+        f"or similar work of the same kind. Distilled from {cluster.size} sessions "
+        f"across {len(cluster.contributors)} contributor(s)."
     )[:1024]
     lines = ["## Pattern", "", f"Recurs across {cluster.size} sessions:", ""]
     lines += [f"- intent: {c.task_intent} — approach: {c.approach}" for c in cluster.compactions]
