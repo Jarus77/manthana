@@ -18,7 +18,7 @@ from manthana.agent.capture import IngestResult
 from manthana.agent.store import Store
 from manthana.agent.watcher import watch
 from manthana.collectors import ClaudeCodeCollector
-from manthana.schemas import Role, Session, Surface, Turn
+from manthana.schemas import EngineeringCompaction, Outcome, Role, Session, Surface, Turn
 
 
 def _touch(path: Path, content: str = "x") -> None:
@@ -210,6 +210,37 @@ def test_replace_session_family_replaces_and_clears() -> None:
     store.replace_session_family("s1", [])
     assert store.get_session("s1") is None
     assert store.get_turns("s1") == []
+
+
+def test_reingest_preserves_compaction(tmp_path: Path) -> None:
+    # Re-ingesting a transcript must NOT destroy an existing (possibly
+    # released/synced) compaction — the dogfood daemon re-reads constantly.
+    store = Store.open_memory()
+    store.replace_session_family("s1", [(_sess("s1"), [_turn("s1", 0)])])
+    store.upsert_compaction(
+        EngineeringCompaction(
+            id="comp-s1",
+            session_id="s1",
+            actor="e@x.com",
+            surface=Surface.claude_code,
+            project="p",
+            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ended_at=datetime(2026, 1, 1, tzinfo=UTC),
+            duration_seconds=1.0,
+            task_intent="x",
+            approach="a",
+            outcome=Outcome.success,
+            est_cost_usd=0.5,
+            tier_used="opus",
+            released=True,
+        )
+    )
+    store.replace_session_family("s1", [(_sess("s1"), [_turn("s1", 0), _turn("s1", 1)])])
+    surviving = store.get_compaction("comp-s1")
+    assert surviving is not None and surviving.released is True  # compaction preserved
+    # but an explicit family delete still removes everything
+    store.delete_session_family("s1")
+    assert store.get_compaction("comp-s1") is None
 
 
 def test_no_compaction_by_default(tmp_path: Path) -> None:

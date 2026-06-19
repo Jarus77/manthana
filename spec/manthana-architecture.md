@@ -810,3 +810,17 @@ Adversarial review of the daemon (14 raw → 7 confirmed). Fixes (140 tests):
   consistency, no corruption. Documented as known/mitigated; a settle-window
   (skip files whose mtime moved in the last N s) is an optional future tweak.
 - Regressions: atomic replace/clear, `discover()`-error resilience.
+
+### Dogfood finding #1 — re-ingest wiped compactions (fixed 2026-06-20)
+
+Running `manthana watch` immediately surfaced a real flaw: re-ingest deleted the
+session family's **compactions** (a derived, possibly released/synced artifact),
+so the daemon's catch-up cycle (and any `manthana capture`) wiped local
+compactions — the local store dropped from 4 → 0. `_delete_family` now takes
+`delete_compactions` (default True for an explicit `delete_session_family`);
+`replace_session_family` (re-ingest) passes False. `session_id` is a plain index
+column (no FK/cascade), so the preserved compaction safely survives the
+delete+reinsert of its session. Released copies on the server were unaffected
+(independent store). Regression: `test_reingest_preserves_compaction`. (Staleness
+of a preserved compaction whose transcript later grew is acceptable for v1 —
+tracked: a "needs-recompaction" flag.)

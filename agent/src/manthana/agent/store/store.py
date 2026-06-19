@@ -168,10 +168,19 @@ class Store:
             db.commit()
             return True
 
-    def _delete_family(self, db: DBSession, base_session_id: str) -> int:
+    def _delete_family(
+        self, db: DBSession, base_session_id: str, *, delete_compactions: bool = True
+    ) -> int:
         """Delete a base session, its derived splits (``base.2`` …), and all their
-        turns + compactions, on a caller-managed ``db`` (no commit). Shared by
-        ``delete_session_family`` and the atomic ``replace_session_family``."""
+        turns (and, when ``delete_compactions``, their compactions), on a
+        caller-managed ``db`` (no commit). Shared by ``delete_session_family`` and
+        the atomic ``replace_session_family``.
+
+        Re-ingest (``replace_session_family``) passes ``delete_compactions=False``:
+        a compaction is a derived, possibly **released/synced** artifact, so
+        re-reading the same transcript must not destroy it. An explicit
+        ``delete_session_family`` still removes everything.
+        """
         family_like = f"{base_session_id}.%"
         removed = 0
         derived = db.exec(
@@ -182,11 +191,12 @@ class Store:
             for turn in db.exec(select(TurnRow).where(TurnRow.session_id == sid)).all():
                 db.delete(turn)
                 removed += 1
-            for comp in db.exec(
-                select(CompactionRow).where(CompactionRow.session_id == sid)
-            ).all():
-                db.delete(comp)
-                removed += 1
+            if delete_compactions:
+                for comp in db.exec(
+                    select(CompactionRow).where(CompactionRow.session_id == sid)
+                ).all():
+                    db.delete(comp)
+                    removed += 1
         for row in derived:
             db.delete(row)
             removed += 1
@@ -216,7 +226,9 @@ class Store:
         so a concurrent reader (e.g. the dashboard's compaction thread sharing this
         SQLite file) never observes the session mid-delete."""
         with DBSession(self._engine) as db:
-            self._delete_family(db, base_session_id)
+            # Preserve compactions across re-ingest (they may be released/synced);
+            # only sessions + turns are rebuilt from the transcript.
+            self._delete_family(db, base_session_id, delete_compactions=False)
             for session, turns in items:
                 db.merge(_session_row(session))
                 for turn in turns:
