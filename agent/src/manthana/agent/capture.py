@@ -56,16 +56,13 @@ def ingest_file(
         mode=mode,
     )
 
-    # Idempotent re-ingest: drop any prior rows for this transcript's session
-    # family before persisting the freshly sessionized result (no phantom splits).
-    store.delete_session_family(meta.session_id)
-
-    persisted: list[Session] = []
-    for session, seg_turns in sessions:
-        store.upsert_session(session)
-        store.add_turns(seg_turns)
-        persisted.append(session)
-    return IngestResult(source=source, sessions=persisted)
+    # Idempotent re-ingest in ONE transaction: atomically drop any prior rows for
+    # this transcript's session family and persist the freshly sessionized result,
+    # so a concurrent reader (e.g. the dashboard compaction thread on the same
+    # SQLite file) never observes the session mid-delete (no phantom splits).
+    items = list(sessions)
+    store.replace_session_family(meta.session_id, items)
+    return IngestResult(source=source, sessions=[session for session, _ in items])
 
 
 def ingest_all(

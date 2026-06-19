@@ -11,7 +11,7 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -168,36 +168,60 @@ class Store:
             db.commit()
             return True
 
+    def _delete_family(self, db: DBSession, base_session_id: str) -> int:
+        """Delete a base session, its derived splits (``base.2`` …), and all their
+        turns + compactions, on a caller-managed ``db`` (no commit). Shared by
+        ``delete_session_family`` and the atomic ``replace_session_family``."""
+        family_like = f"{base_session_id}.%"
+        removed = 0
+        derived = db.exec(
+            select(SessionRow).where(col(SessionRow.id).like(family_like))
+        ).all()
+        ids = [base_session_id, *(row.id for row in derived)]
+        for sid in ids:
+            for turn in db.exec(select(TurnRow).where(TurnRow.session_id == sid)).all():
+                db.delete(turn)
+                removed += 1
+            for comp in db.exec(
+                select(CompactionRow).where(CompactionRow.session_id == sid)
+            ).all():
+                db.delete(comp)
+                removed += 1
+        for row in derived:
+            db.delete(row)
+            removed += 1
+        base = db.get(SessionRow, base_session_id)
+        if base is not None:
+            db.delete(base)
+            removed += 1
+        return removed
+
     def delete_session_family(self, base_session_id: str) -> int:
         """Delete a base session, its derived split sessions (``base.2`` …), and
         all their turns + compactions — so re-ingesting a transcript is
         idempotent and never leaves stale/phantom rows. Returns rows removed.
         """
-        family_like = f"{base_session_id}.%"
-        removed = 0
         with DBSession(self._engine) as db:
-            derived = db.exec(
-                select(SessionRow).where(col(SessionRow.id).like(family_like))
-            ).all()
-            ids = [base_session_id, *(row.id for row in derived)]
-            for sid in ids:
-                for turn in db.exec(select(TurnRow).where(TurnRow.session_id == sid)).all():
-                    db.delete(turn)
-                    removed += 1
-                for comp in db.exec(
-                    select(CompactionRow).where(CompactionRow.session_id == sid)
-                ).all():
-                    db.delete(comp)
-                    removed += 1
-            for row in derived:
-                db.delete(row)
-                removed += 1
-            base = db.get(SessionRow, base_session_id)
-            if base is not None:
-                db.delete(base)
-                removed += 1
+            removed = self._delete_family(db, base_session_id)
             db.commit()
         return removed
+
+    def replace_session_family(
+        self,
+        base_session_id: str,
+        items: Sequence[tuple[Session, Sequence[Turn]]],
+    ) -> None:
+        """Atomically replace a transcript's session family: delete the old family
+        and persist the freshly sessionized sessions + turns in ONE transaction,
+        so a concurrent reader (e.g. the dashboard's compaction thread sharing this
+        SQLite file) never observes the session mid-delete."""
+        with DBSession(self._engine) as db:
+            self._delete_family(db, base_session_id)
+            for session, turns in items:
+                db.merge(_session_row(session))
+                for turn in turns:
+                    db.merge(_turn_row(turn))
+            db.commit()
 
     def update_session_tags(self, session_id: str, tags: dict[str, str]) -> bool:
         with DBSession(self._engine) as db:

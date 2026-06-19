@@ -11,12 +11,14 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 from manthana.agent.capture import IngestResult
 from manthana.agent.store import Store
 from manthana.agent.watcher import watch
 from manthana.collectors import ClaudeCodeCollector
+from manthana.schemas import Role, Session, Surface, Turn
 
 
 def _touch(path: Path, content: str = "x") -> None:
@@ -159,6 +161,55 @@ def test_compact_flag_invokes_compact_fn(tmp_path: Path) -> None:
         iterations=1,
     )
     assert compacted == [True]
+
+
+def test_scan_survives_discover_error(tmp_path: Path) -> None:
+    # A glob failure in discover() must not crash the loop (logged + skipped).
+    class _BoomCollector:
+        def discover(self) -> list[str]:
+            raise PermissionError("projects dir not readable")
+
+    calls, ingest = _recorder()
+    watch(
+        Store.open_memory(),
+        collector=_BoomCollector(),  # type: ignore[arg-type]
+        ingest=ingest,  # type: ignore[arg-type]
+        sleep=_noop_sleep,
+        iterations=1,
+    )
+    assert calls == []  # nothing ingested, but no exception escaped
+
+
+# ── atomic re-ingest (Store.replace_session_family) ─────────────────────────
+def _sess(sid: str) -> Session:
+    return Session(
+        id=sid,
+        actor="e@x.com",
+        surface=Surface.claude_code,
+        project="p",
+        started_at=datetime(2026, 1, 1, tzinfo=UTC),
+        turn_count=1,
+    )
+
+
+def _turn(sid: str, i: int) -> Turn:
+    return Turn(
+        id=f"{sid}-t{i}", session_id=sid, actor="e@x.com", seq=i, role=Role.user, content="hi"
+    )
+
+
+def test_replace_session_family_replaces_and_clears() -> None:
+    store = Store.open_memory()
+    store.replace_session_family("s1", [(_sess("s1"), [_turn("s1", 0)])])
+    assert store.get_session("s1") is not None
+    assert len(store.get_turns("s1")) == 1
+    # re-ingest with a different shape: old turns gone, new persisted (idempotent)
+    store.replace_session_family("s1", [(_sess("s1"), [_turn("s1", 0), _turn("s1", 1)])])
+    assert len(store.get_turns("s1")) == 2
+    # emptied transcript → family fully removed
+    store.replace_session_family("s1", [])
+    assert store.get_session("s1") is None
+    assert store.get_turns("s1") == []
 
 
 def test_no_compaction_by_default(tmp_path: Path) -> None:

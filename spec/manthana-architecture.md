@@ -785,3 +785,28 @@ polls `~/.claude/projects` and ingests new/changed transcripts automatically.
 
 This is Phase A part 1. Part 2 (validate) is a quality-review workflow over real
 compactions + mined skills once a few days of data accrue.
+
+### Watcher review hardening (2026-06-20)
+
+Adversarial review of the daemon (14 raw → 7 confirmed). Fixes (140 tests):
+
+- **Atomic re-ingest (#1, the real one).** `ingest_file` used to call
+  `delete_session_family` → `upsert_session` → `add_turns` as three separate
+  committed transactions, so a concurrent reader on the same SQLite file (the
+  dashboard's compaction thread, a separate process) could observe the session
+  mid-delete. New `Store.replace_session_family(base_id, items)` does the
+  delete + all upserts in **one transaction**; `delete`/`replace` share a private
+  `_delete_family(db, …)` helper. `ingest_file` now calls it.
+- **CLI closes the store (#3):** `manthana watch` wraps the loop in
+  `try/finally: store.close()` so the engine pool is disposed on exit/Ctrl-C.
+- **`_scan` survives a `discover()` failure (#4):** a glob `OSError` (permission
+  change / broken symlink) is logged and the cycle skipped, not fatal.
+- **Defensive retry (#2):** failed ingests are `seen.pop`'d. (Behavior-neutral —
+  failures already retry because only successes record an mtime — but it makes the
+  guarantee explicit.)
+- **Partial-write hazard (critic-2):** a transcript read mid-append either fails
+  (isolated + retried) or persists a partial session that the next cycle's atomic
+  `replace_session_family` cleanly overwrites once the write settles — eventual
+  consistency, no corruption. Documented as known/mitigated; a settle-window
+  (skip files whose mtime moved in the last N s) is an optional future tweak.
+- Regressions: atomic replace/clear, `discover()`-error resilience.

@@ -33,7 +33,14 @@ _log = logging.getLogger(__name__)
 def _scan(collector: ClaudeCodeCollector) -> dict[str, float]:
     """Map each discovered transcript to its mtime (raced/removed files skipped)."""
     out: dict[str, float] = {}
-    for src in collector.discover():
+    try:
+        sources = collector.discover()
+    except OSError:
+        # A glob over the projects dir can raise on a permission change / broken
+        # symlink — log and skip this cycle rather than killing the daemon.
+        _log.exception("watch: discover() failed; skipping this cycle")
+        return out
+    for src in sources:
         try:
             out[src] = os.stat(src).st_mtime
         except OSError:
@@ -76,6 +83,7 @@ def watch(
                     result = ingest(store, src, collector=collector)
                 except Exception:  # noqa: BLE001 - one bad transcript must not kill the loop
                     _log.exception("watch: failed to ingest %s", src)
+                    seen.pop(src, None)  # forget it so it retries even if mtime is unchanged
                     continue
                 sessions += result.session_count
                 turns += result.turn_count

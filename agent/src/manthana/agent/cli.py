@@ -67,6 +67,8 @@ def watch(interval: float = 5.0, compact: bool = False) -> None:
         run_watch(store, interval=interval, compact=compact, log=typer.echo)
     except KeyboardInterrupt:
         typer.echo("\nstopped")
+    finally:
+        store.close()  # dispose the SQLite engine pool on exit
 
 
 @app.command()
