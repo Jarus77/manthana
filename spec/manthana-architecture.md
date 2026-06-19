@@ -824,3 +824,30 @@ delete+reinsert of its session. Released copies on the server were unaffected
 (independent store). Regression: `test_reingest_preserves_compaction`. (Staleness
 of a preserved compaction whose transcript later grew is acceptable for v1 —
 tracked: a "needs-recompaction" flag.)
+
+### Dogfood finding #2 — quality validation of compactions + skills (2026-06-20)
+
+Phase A.2: a grading workflow scored 4 real compactions (vs their actual
+transcripts) and the 1 mined skill, then proposed prompt edits.
+
+- **Compactions — avg 4.25/5 (overalls 4,5,5,3).** Faithfulness is strong (5/5 on
+  3 of 4, no hallucinations) — the grounding machinery works. Gaps: don't name the
+  exact source files/datasets or coverage period; don't explain counterintuitive
+  findings (causal reasoning/confounds); light on impl details (tools/commands).
+  Weakest = comp_3 (3/5): vague about which CSV it used.
+- **Skill — 2/5 (overfit).** Truncated 99-char name; boilerplate description with
+  literal task examples instead of abstracted triggers; hardcoded to the CSN
+  dataset + `answer.txt`; no real procedure. Root cause: 3 same-domain sessions
+  from 1 contributor → no diversity to force abstraction (this is exactly the
+  k-anon-≥4 rationale for org skills).
+- **Recommended prompt edits (workflow output):**
+  - `agent/.../compactor/prompt.py`: strengthen grounding — name exact files +
+    coverage period, list tools/commands, explain counterintuitive findings; opt.
+    new `data_sources`/`causal_notes` fields.
+  - `skills/.../synthesize.py` `_SYNTH_PROMPT` + `fallback_draft`: explicit
+    anti-overfitting heuristics (replace dataset/file names with placeholders,
+    abstract output format, extract domain-independent procedure); action-oriented
+    name; optional post-synthesis overfit warning.
+- **Meta:** the trust/faithfulness layer is solid; skill quality needs (a) the
+  anti-overfit prompt heuristics and (b) more diverse contributors — tying skill
+  value directly to Phase B (team).
