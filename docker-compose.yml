@@ -4,7 +4,7 @@
 # object store) for running the server against production-like backends.
 #
 #   docker compose up -d
-#   export MANTHANA_SERVER_DB_URL=postgresql://manthana:manthana@localhost:5432/manthana
+#   export MANTHANA_SERVER_DB_URL=postgresql+psycopg://manthana:manthana@localhost:5433/manthana
 #   export MANTHANA_SERVER_OBJECT_STORE=s3 MANTHANA_SERVER_S3_BUCKET=manthana-raw
 #   uv run manthana-server serve
 
@@ -16,7 +16,7 @@ services:
       POSTGRES_PASSWORD: manthana
       POSTGRES_DB: manthana
     ports:
-      - "5432:5432"
+      - "5433:5432"  # host 5433 (avoids clashing with a host Postgres on 5432)
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
