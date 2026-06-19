@@ -6,7 +6,7 @@ updated every phase. Companion to `manthana.md` (vision), `manthana-decisions.md
 (locked decisions — wins on conflict), `manthana-action.md` (actions), and
 `ECC_clone_instruction.md` (reuse).*
 
-Last updated: 2026-06-19 — slice (§11) + server (§12,§13) + sync (§14,§15) + skill miner (§16,§17) + miner→server (§18).
+Last updated: 2026-06-19 — slice (§11) + server (§12,§13) + sync (§14,§15) + skill miner (§16,§17) + miner→server (§18) + dashboard control plane (§19).
 
 ---
 
@@ -577,3 +577,30 @@ depended on by both `agent` and `server`.
 
 - ✅ **Phase 10 — Miner→server**: `manthana-skills` shared package; org mining
   endpoint behind k-anon + action queue. Green (104 tests).
+
+## 19. Dashboard control plane (Phase 11)
+
+The local dashboard (`manthana.agent.dashboard.app`) is now read **and** act —
+the employee runs the whole flow from the browser, no terminal needed:
+
+- **Pages:** Sessions, **Compactions** (review-before-sync inbox), **Skills**
+  (mined SKILL.md viewer reading `~/.claude/skills/personal/`), Cost, Actions.
+- **Actions (POST → 303 redirect; tunables via query string, so no
+  python-multipart):** `/capture` (ingest_all), `/session/{id}/compact`
+  (compact_session — labelled "runs claude, costs tokens"), `/compaction/{id}/release`
+  (toggle), `/skills/mine?threshold=…` (mine_personal + write_proposal), `/sync`
+  (SyncClient if configured, else an in-page notice). Work/Personal stays htmx.
+- **Testability:** `create_app(store, *, provider=None, skills_dir=None)` — tests
+  inject a `MockProvider` (no claude) + a tmp skills dir + monkeypatch capture, so
+  the suite is hermetic. CLI `manthana dashboard` uses the defaults.
+- All rendered values go through `html.escape`; path params hit parameterized
+  store lookups; localhost, single-employee, no auth by design.
+
+Reuses (not reinvented): `capture.ingest_all`, `compact.compact_session`,
+`skillminer.{mine_personal,write_proposal}`, `sync_client.SyncClient`,
+`store.*`, `cost.estimate_cost`. Green (107 tests); verified live on real data.
+
+### Phase status
+
+- ✅ **Phase 11 — Dashboard control plane**: compactions + skills pages + action
+  buttons. The dashboard is now the employee's full GUI.
