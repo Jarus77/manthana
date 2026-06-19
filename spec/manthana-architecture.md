@@ -6,7 +6,7 @@ updated every phase. Companion to `manthana.md` (vision), `manthana-decisions.md
 (locked decisions — wins on conflict), `manthana-action.md` (actions), and
 `ECC_clone_instruction.md` (reuse).*
 
-Last updated: 2026-06-19 — slice (§11) + server (§12,§13) + agent→server sync (§14).
+Last updated: 2026-06-19 — slice (§11) + server (§12,§13) + sync (§14,§15) + skill miner (§16).
 
 ---
 
@@ -474,3 +474,51 @@ itself had no bypass); all fixed with regression tests:
 - **[med] Verified ingest** — the client checks the server's `ingested` count
   (raises `SyncError` on mismatch, so nothing is marked synced) and guards a
   malformed 200 body.
+
+## 16. Skill miner v0 (`manthana.agent.skillminer`)
+
+Built against a fact-checked deep-research pass (108 agents; sources: Anthropic
+Agent Skills docs/engineering blog, sentence-transformers, scikit-learn, UMAP,
+peer-reviewed short-text clustering). Pipeline: embed → cluster (+ recurrence /
+k-anon gate) → synthesize → validate/render SKILL.md → provenance + content hash.
+
+**Modules:**
+- `embed.py` — `Embedder` protocol; `HashingEmbedder` (deterministic, dep-free,
+  default for tests/offline); `SentenceTransformerEmbedder` (bge-large via the
+  optional `embeddings` extra); `default_embedder()` prefers ST, falls back to
+  hashing; cosine on L2-normalized vectors.
+- `cluster.py` — SBERT-style **community detection** (greedy, non-overlapping,
+  unknown-k; cosine `threshold` 0.75 + min cluster size). **k-means avoided**
+  (fixed k). The **≥N-contributor/session recurrence gate is applied post-hoc**
+  on cluster membership (`recurring(...)`) — correct for k-anonymity (10 sessions
+  from one person don't qualify).
+- `skillmd.py` — the verified Anthropic format: `name` (≤64, `^[a-z0-9-]+$`, no
+  `anthropic`/`claude`) + `description` (non-empty, ≤1024, no XML tags) required;
+  validation, slug/repair, and rendering. Description is the load-bearing trigger
+  artifact (third person, what + when).
+- `synthesize.py` — LLM synthesis (give the model ALL cluster members; extract the
+  common invariant, don't overfit) with validate/repair; **deterministic fallback**
+  so mining works offline/in tests and never crashes.
+- `provenance.py` — re-expressed from ECC `skill-evolution/provenance.js`: a
+  validated record (source/created_at/confidence) + Manthana evidence trail
+  (compaction ids), contributor/session counts, cohesion, and **content-hash**
+  versioning (`sha256:`, from ECC `skillVersion.contentHash`). Written as a
+  `provenance.json` sidecar so SKILL.md frontmatter stays portable.
+  Privacy: contributor names included only for personal mining;
+  `include_contributors=False` for org-level k-anon (count only).
+- `miner.py` — `SkillMiner.mine(...)` orchestrates; `write_proposal` writes
+  `<dir>/<name>/{SKILL.md,provenance.json}`; `mine_personal(store)` mines the
+  engineer's own compactions (gate = ≥3 distinct sessions). CLI:
+  `manthana mine-skills [--write]` (deterministic by default — no token spend).
+
+**Researched gaps (logged):** no authoritative sources survived for synthesis
+prompts, provenance/versioning schemes, or exact k-anon thresholds — those use
+sound defaults + the ECC framework + the spec's locked ≥3 (personal) / ≥4 (org)
+floors. The specific embedding model (bge-large), L2/cosine, and a dedup cutoff
+are decisions-doc choices, not independently verified; validate on real corpus.
+
+### Phase status
+
+- ✅ **Phase 9 — Skill miner v0**: embed/cluster/synthesize/validate/provenance,
+  CLI, optional bge-large extra. Green (91 tests). Org-level cross-engineer mining
+  (pgvector, ≥4-contributor k-anon) reuses this core — deferred to the v1.5 action.

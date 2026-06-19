@@ -18,6 +18,9 @@ dependencies = [
 # Local vector store (sqlite-vec). Wired but optional; vector features are added
 # in a later phase. Install with: uv sync --extra vec
 vec = ["sqlite-vec>=0.1.3"]
+# Semantic embeddings for the skill miner (bge-large via sentence-transformers).
+# Heavy (torch); the miner falls back to a deterministic embedder without it.
+embeddings = ["sentence-transformers>=3.0"]
 
 [project.scripts]
 manthana = "manthana.agent.cli:main"

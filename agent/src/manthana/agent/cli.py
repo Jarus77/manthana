@@ -138,6 +138,32 @@ def sync(raw: bool = False) -> None:
     )
 
 
+@app.command(name="mine-skills")
+def mine_skills(min_sessions: int = 3, write: bool = False) -> None:
+    """Mine recurring patterns in your own compactions into proposed SKILL.md files.
+
+    Drafts are deterministic by default (no token spend / works offline). Pass
+    --write to draft them under ~/.claude/skills/personal/.
+    """
+    from pathlib import Path
+
+    from manthana.agent.skillminer import mine_personal, write_proposal
+
+    proposals = mine_personal(Store.open(), min_sessions=min_sessions)
+    for p in proposals:
+        prov = p.provenance
+        typer.echo(
+            f"{p.draft.name}  (sessions={prov.session_count}, cohesion={prov.confidence})"
+        )
+    if write and proposals:
+        dest = Path.home() / ".claude" / "skills" / "personal"
+        for p in proposals:
+            write_proposal(p, dest)
+        typer.echo(f"wrote {len(proposals)} skill(s) to {dest}")
+    else:
+        typer.echo(f"{len(proposals)} proposal(s); pass --write to draft them")
+
+
 def main() -> None:
     """Console-script entry point."""
     app()
