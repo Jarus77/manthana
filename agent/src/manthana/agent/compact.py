@@ -53,11 +53,15 @@ def compact_pending(
     *,
     provider: LLMProvider | None = None,
     limit: int | None = None,
+    summarized_only: bool = False,
 ) -> list[EngineeringCompaction]:
     """Compact Work-mode sessions that don't yet have a compaction.
 
     Personal-mode sessions are skipped (they never contribute to anything that
-    could be released).
+    could be released). With ``summarized_only`` set, only sessions that carry
+    Claude's own compaction summary are compacted (the cheap path used by the
+    auto-compact daemon). Each session is compacted via ``compact_session``, so the
+    summary is used as the input when present.
     """
     provider = provider or default_provider()
     existing = {c.session_id for c in store.list_compactions()}
@@ -65,9 +69,11 @@ def compact_pending(
     for session in store.list_sessions(limit=limit):
         if session.mode is Mode.personal or session.id in existing:
             continue
-        compaction = Compactor(provider).compact(session, store.get_turns(session.id))
-        store.upsert_compaction(compaction)
-        out.append(compaction)
+        if summarized_only and not session.has_compact_summary:
+            continue
+        compaction = compact_session(store, session.id, provider=provider)
+        if compaction is not None:
+            out.append(compaction)
     return out
 
 

@@ -117,13 +117,21 @@ def capture() -> None:
 
 
 @app.command()
-def watch(interval: float = 5.0, compact: bool = False, sync: bool = True) -> None:
+def watch(
+    interval: float = 5.0,
+    compact: bool = False,
+    compact_summarized: bool = True,
+    sync: bool = True,
+) -> None:
     """Continuously ingest new/changed Claude Code transcripts (Ctrl-C to stop).
 
-    Capture-only by default. When a server is configured, also auto-syncs released,
-    redacted, non-personal compactions each cycle (--no-sync to disable). --compact
-    also compacts pending Work sessions after each change (runs claude, costs tokens).
+    Capture-only for raw sessions. By default also auto-compacts sessions Claude
+    already summarized (cheap — uses that summary; --no-compact-summarized to
+    disable). --compact additionally compacts ALL pending Work sessions (full,
+    pricier). When a server is configured, auto-syncs released compactions
+    (--no-sync to disable).
     """
+    from manthana.agent.llm import default_provider
     from manthana.agent.sync_client import SyncClient
     from manthana.agent.watcher import watch as run_watch
 
@@ -137,14 +145,25 @@ def watch(interval: float = 5.0, compact: bool = False, sync: bool = True) -> No
         sync_state = "auto-sync on"
     else:
         sync_state = "auto-sync off (no server)" if sync else "auto-sync disabled"
-    compact_state = "on" if compact else "off"
+    # Don't auto-compact in the background without a real model (a Mock would
+    # write empty compactions).
+    if (compact or compact_summarized) and default_provider().name == "mock":
+        typer.echo("no claude/codex CLI found — disabling auto-compaction")
+        compact = compact_summarized = False
+    if compact:
+        compact_state = "compact ALL pending (costs tokens)"
+    elif compact_summarized:
+        compact_state = "auto-compact summarized only (cheap)"
+    else:
+        compact_state = "compact off"
     typer.echo(
         f"watching ~/.claude/projects every {interval}s "
-        f"(compact={compact_state}, {sync_state}) — Ctrl-C to stop"
+        f"({compact_state}, {sync_state}) — Ctrl-C to stop"
     )
     try:
         run_watch(
-            store, interval=interval, compact=compact, sync_fn=sync_fn, log=typer.echo
+            store, interval=interval, compact=compact, compact_summarized=compact_summarized,
+            sync_fn=sync_fn, log=typer.echo,
         )
     except KeyboardInterrupt:
         typer.echo("\nstopped")

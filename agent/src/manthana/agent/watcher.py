@@ -54,6 +54,7 @@ def watch(
     collector: ClaudeCodeCollector | None = None,
     interval: float = 5.0,
     compact: bool = False,
+    compact_summarized: bool = False,
     provider: LLMProvider | None = None,
     iterations: int | None = None,
     ingest: Callable[..., IngestResult] = ingest_file,
@@ -94,10 +95,13 @@ def watch(
                 ok += 1
                 seen[src] = current[src]  # remember only cleanly-ingested files
             emit(f"ingested {ok} files -> {sessions} sessions, {turns} turns")
-            if compact:
+            # compact=all-pending (expensive, opt-in); compact_summarized=only sessions
+            # Claude already summarized (cheap — uses the summary as input).
+            if compact or compact_summarized:
                 try:
-                    comps = compact_fn(store, provider=provider)
-                    emit(f"compacted {len(comps)} pending sessions")
+                    comps = compact_fn(store, provider=provider, summarized_only=not compact)
+                    if comps:
+                        emit(f"compacted {len(comps)} sessions")
                 except Exception:  # noqa: BLE001 - compaction failure must not kill the loop
                     _log.exception("watch: compaction failed")
         # Auto-sync released compactions (releases happen out-of-band in the

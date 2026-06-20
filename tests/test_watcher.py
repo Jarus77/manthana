@@ -145,10 +145,12 @@ def test_compact_flag_invokes_compact_fn(tmp_path: Path) -> None:
     proj = tmp_path / "projects"
     _touch(proj / "p1" / "s1.jsonl")
     _calls, ingest = _recorder()
-    compacted: list[bool] = []
+    calls: list[bool] = []
 
-    def fake_compact(_store: object, *, provider: object = None) -> list[object]:
-        compacted.append(True)
+    def fake_compact(
+        _store: object, *, provider: object = None, summarized_only: bool = False
+    ) -> list[object]:
+        calls.append(summarized_only)
         return []
 
     watch(
@@ -160,7 +162,31 @@ def test_compact_flag_invokes_compact_fn(tmp_path: Path) -> None:
         sleep=_noop_sleep,
         iterations=1,
     )
-    assert compacted == [True]
+    assert calls == [False]  # compact=all → summarized_only False
+
+
+def test_compact_summarized_uses_summarized_only(tmp_path: Path) -> None:
+    proj = tmp_path / "projects"
+    _touch(proj / "p1" / "s1.jsonl")
+    _calls, ingest = _recorder()
+    seen: list[bool] = []
+
+    def fake_compact(
+        _store: object, *, provider: object = None, summarized_only: bool = False
+    ) -> list[object]:
+        seen.append(summarized_only)
+        return []
+
+    watch(
+        Store.open_memory(),
+        collector=_collector(proj),
+        ingest=ingest,  # type: ignore[arg-type]
+        compact_summarized=True,
+        compact_fn=fake_compact,  # type: ignore[arg-type]
+        sleep=_noop_sleep,
+        iterations=1,
+    )
+    assert seen == [True]  # summarized-only auto-compaction
 
 
 def test_scan_survives_discover_error(tmp_path: Path) -> None:
