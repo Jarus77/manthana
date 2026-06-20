@@ -1,0 +1,14 @@
+# Production overlay: run the PUBLISHED image instead of building from source.
+# (Inherits postgres/minio/minio-setup + the server's env/ports/probes from
+# docker-compose.yml; only swaps the server's build for the pinned image.)
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Deploy a different release: MANTHANA_VERSION=0.3.0 docker compose ... up -d
+# Requires Docker Compose v2.24+ (for the !reset below).
+services:
+  server:
+    build: !reset null  # drop the source build — use the registry image
+    image: ghcr.io/suraj-gameramp/manthana-server:${MANTHANA_VERSION:-0.2.0}
+    pull_policy: always

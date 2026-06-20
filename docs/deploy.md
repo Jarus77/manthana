@@ -14,6 +14,17 @@ docker compose up -d          # builds the server image, starts everything
 docker compose ps             # server should become healthy (/readyz)
 ```
 
+**Deploy a pinned release** (no source build — pull the published image):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# a different tag: MANTHANA_VERSION=0.3.0 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+This runs `ghcr.io/suraj-gameramp/manthana-server:0.2.0` (overlay inherits
+Postgres/MinIO from the base file). Requires Docker Compose v2.24+.
+
 - Founder console: <http://localhost:8000/ui> (sign in with `MANTHANA_SERVER_ADMIN_TOKEN`)
 - API docs: <http://localhost:8000/docs> · health: `/healthz` (live), `/readyz` (DB ping)
 - MinIO console: <http://localhost:9001> (`manthana` / `manthana-secret`)

@@ -17,8 +17,8 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: server
-          # Pin a published tag (see .github/workflows/publish-image.yml).
-          image: ghcr.io/suraj-gameramp/manthana-server:latest
+          # Pinned to a published release tag (see .github/workflows/publish-image.yml).
+          image: ghcr.io/suraj-gameramp/manthana-server:0.2.0
           ports:
             - containerPort: 8000
           envFrom:
