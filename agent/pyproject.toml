@@ -22,6 +22,9 @@ vec = ["sqlite-vec>=0.1.3"]
 # Skill-miner semantic embeddings (bge-large). Lives on manthana-skills; install
 # with: uv sync --extra embeddings  (heavy: torch).
 embeddings = ["manthana-skills[embeddings]"]
+# headroom context-compression integration (`manthana optimize`). Optional; the
+# wrapper degrades to an install hint when absent. Install: uv sync --extra optimize.
+optimize = ["headroom-ai[proxy,mcp]>=0.26"]
 
 [project.scripts]
 manthana = "manthana.agent.cli:main"

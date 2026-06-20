@@ -327,6 +327,46 @@ def mine_skills(min_sessions: int = 3, threshold: float = 0.75, write: bool = Fa
         typer.echo(f"{len(proposals)} proposal(s); pass --write to draft them")
 
 
+@app.command()
+def optimize(action: str = typer.Argument("status"), port: int = 8787) -> None:
+    """Run Claude Code more efficiently via headroom (context compression).
+
+    actions: status | setup | proxy | mcp | stats | tune. Needs the optional
+    extra: pip install "headroom-ai[proxy,mcp]".
+    """
+    import json as _json
+
+    from manthana.agent import optimize as opt
+
+    if not opt.available():
+        typer.echo(opt.INSTALL_HINT)
+        raise typer.Exit(code=0 if action == "status" else 1)
+
+    if action == "status":
+        typer.echo("headroom installed ✓ — `manthana optimize setup` wires Claude Code")
+    elif action == "setup":
+        result = opt.setup()
+        typer.echo(result.get("output") or ("done" if result.get("ok") else "failed"))
+    elif action == "mcp":
+        result = opt.mcp_install()
+        typer.echo(result.get("output") or ("done" if result.get("ok") else "failed"))
+    elif action == "proxy":
+        typer.echo("start the proxy in a dedicated terminal:")
+        typer.echo("  " + " ".join(opt.proxy_cmd(port)))
+        env = " ".join(f"{k}={v}" for k, v in opt.claude_env(port).items())
+        typer.echo(f"then run Claude Code through it:\n  {env} claude")
+    elif action == "stats":
+        s = opt.stats()
+        typer.echo(
+            _json.dumps(s["data"], indent=2) if s.get("data") else (s.get("error") or str(s))
+        )
+    elif action == "tune":
+        result = opt.tune()
+        typer.echo(result.get("output") or ("tuned CLAUDE.md" if result.get("ok") else "failed"))
+    else:
+        raise typer.BadParameter("action: status | setup | proxy | mcp | stats | tune")
+
+
 _SERVICE_LABEL = "com.manthana.watch"
 
 

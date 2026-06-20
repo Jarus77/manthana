@@ -64,7 +64,8 @@ def _page(title: str, body: str, *, refresh: int = 0) -> str:
         "<h1>Manthana</h1>"
         "<nav><a href='/'>Sessions</a><a href='/ask'>Ask</a>"
         "<a href='/compactions'>Compactions</a><a href='/skills'>Skills</a>"
-        "<a href='/cost'>Cost</a><a href='/actions'>Actions</a></nav>"
+        "<a href='/optimize'>Optimize</a><a href='/cost'>Cost</a>"
+        "<a href='/actions'>Actions</a></nav>"
         f"{body}</body></html>"
     )
 
@@ -239,6 +240,45 @@ def create_app(
                 f"<h3>Answer{tag}</h3><pre>{_e(result.narrative)}</pre><p>sources: {cites}</p>"
             )
         return _page("Ask", panel + form + answer)
+
+    # ── Optimize (headroom context compression) ──────────────────────────
+    @app.get("/optimize", response_class=HTMLResponse)
+    def optimize_page() -> str:
+        from manthana.agent import optimize as opt
+
+        if not opt.available():
+            return _page(
+                "Optimize",
+                "<div class='bar warn'>headroom isn't installed. It compresses Claude "
+                "Code context (60–95% fewer tokens).<br>Install: "
+                '<code>pip install "headroom-ai[proxy,mcp]"</code> '
+                "(or <code>uv sync --extra optimize</code>), then reload.</div>",
+            )
+        proxy = " ".join(opt.proxy_cmd())
+        env = " ".join(f"{k}={v}" for k, v in opt.claude_env().items())
+        setup = (
+            "<div class='bar'><b>headroom installed ✓</b><br>"
+            "One-time durable setup: <code>manthana optimize setup</code><br>"
+            "Or run the proxy and point Claude Code at it:"
+            f"<pre>{_e(proxy)}\n{_e(env)} claude</pre>"
+            "<form method='post' action='/optimize/tune'>"
+            "<button>⛁ Tune CLAUDE.md from my history</button></form>"
+            "<small>headroom learn — mines past sessions into failure-avoidance "
+            "context</small></div>"
+        )
+        s = opt.stats()
+        if s.get("data"):
+            body = f"<h3>Savings</h3><pre>{_e(json.dumps(s['data'], indent=2)[:2000])}</pre>"
+        else:
+            body = f"<p class='muted'>{_e(s.get('error', 'run the proxy to collect stats'))}</p>"
+        return _page("Optimize", setup + body)
+
+    @app.post("/optimize/tune")
+    def optimize_tune() -> RedirectResponse:
+        from manthana.agent import optimize as opt
+
+        opt.tune()
+        return RedirectResponse(url="/optimize", status_code=303)
 
     @app.post("/capture")
     def capture() -> RedirectResponse:
