@@ -1,0 +1,14 @@
+# Non-secret server config. Postgres + object store are assumed EXTERNAL
+# (managed Postgres + S3/MinIO); point these at them. Secrets go in the Secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: manthana-server-config
+data:
+  MANTHANA_SERVER_DB_URL: "postgresql+psycopg://manthana:CHANGE_ME@postgres:5432/manthana"
+  MANTHANA_SERVER_OBJECT_STORE: "s3"
+  MANTHANA_SERVER_S3_BUCKET: "manthana-raw"
+  MANTHANA_SERVER_S3_ENDPOINT_URL: "http://minio:9000" # omit/empty for real AWS S3
+  MANTHANA_SERVER_K_ANON: "4"
+  MANTHANA_SERVER_LLM: "anthropic" # or "mock"
+  MANTHANA_SERVER_LLM_MODEL: "claude-sonnet-4-6"

@@ -71,8 +71,39 @@ just one person.
   expire after 365 days.
 - **Upgrade:** `git pull && docker compose up -d --build`.
 
+## Scaling beyond one host (published image + Kubernetes)
+
+The server image is published to **GHCR** on each version tag by
+`.github/workflows/publish-image.yml`:
+
+```
+ghcr.io/suraj-gameramp/manthana-server:<version>   # e.g. :0.1, :0.1.0
+```
+
+Example Kubernetes manifests live in `deploy/k8s/` (the server is stateless;
+**Postgres + S3/MinIO are external/managed** — point the ConfigMap at them):
+
+```bash
+kubectl apply -f deploy/k8s/configmap.yaml
+kubectl create secret generic manthana-server-secrets \
+  --from-literal=MANTHANA_SERVER_JWT_SECRET="$(openssl rand -hex 32)" \
+  --from-literal=MANTHANA_SERVER_ADMIN_TOKEN="$(openssl rand -hex 24)" \
+  --from-literal=ANTHROPIC_API_KEY="sk-ant-..."          # if LLM=anthropic
+kubectl apply -f deploy/k8s/deployment.yaml -f deploy/k8s/service.yaml
+```
+
+The Deployment runs **non-root** (uid 10001, caps dropped), with liveness
+`/healthz` and readiness `/readyz` probes; put an Ingress with TLS in front of
+the Service. The real Secret (`deploy/k8s/secret.yaml`) is gitignored — prefer
+the `kubectl create secret` form so secrets never touch a file.
+
+## Auditing founder access
+
+Every founder query (API + `/ui`) is recorded — `GET /v1/admin/audit?org_id=…`
+(admin token) lists who-asked-what, whether it was answered or withheld, and the
+citation count; the console shows a "Recent founder queries" panel.
+
 ## Scope (v1)
 
-Single-host Docker Compose, HTTP behind your own TLS proxy. Not yet built:
-published image / k8s manifests, in-app TLS, token refresh, founder-query audit
-log (tracked v1.5).
+Single-host Compose or k8s, HTTP behind your own TLS proxy/ingress. Not yet built:
+in-app TLS, token refresh/rotation beyond re-`onboard`.

@@ -1,0 +1,12 @@
+# ClusterIP — put an Ingress with TLS in front for public access (the server
+# speaks plain HTTP; terminate TLS at the ingress/LB).
+apiVersion: v1
+kind: Service
+metadata:
+  name: manthana-server
+spec:
+  selector: { app: manthana-server }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000

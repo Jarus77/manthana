@@ -33,3 +33,6 @@ data/
 
 # OS
 .DS_Store
+
+# k8s real secret (use secret.example.yaml as template)
+deploy/k8s/secret.yaml

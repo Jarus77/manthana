@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: manthana-server
+  labels: { app: manthana-server }
+spec:
+  replicas: 1 # stateless app; scale freely once Postgres/S3 are external
+  selector:
+    matchLabels: { app: manthana-server }
+  template:
+    metadata:
+      labels: { app: manthana-server }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: server
+          # Pin a published tag (see .github/workflows/publish-image.yml).
+          image: ghcr.io/suraj-gameramp/manthana-server:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef: { name: manthana-server-config }
+            - secretRef: { name: manthana-server-secrets }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8000 } # DB-ping gated
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits: { memory: "512Mi" }

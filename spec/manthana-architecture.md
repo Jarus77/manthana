@@ -944,3 +944,29 @@ employee only touches the dashboard.
 - **Deferred (noted):** server-side rate-limiting on auto-sync; rejecting dev-default
   secrets in prod; tighter SyncError text. The critic's ".env is tracked" flag is a
   false alarm — `.env` is gitignored (verified). **161 tests green.**
+
+## 27. v1.5 hardening (2026-06-20)
+
+Picked up the deferred items after Phase B:
+
+- **Dev-default secret rejection** (`config.py`): `ServerConfig` refuses to start
+  with the shipped placeholder `jwt_secret`/`admin_token` (`_DEV_*` constants) — a
+  deploy can't silently run with publicly-known secrets.
+- **Per-filter k-anonymity** (`founder.py`): the narrative's visible set is gated by
+  **both** the project AND outcome bucket surviving the floor, so it can never cite
+  a cohort that's sub-floor on either dimension.
+- **Auto-sync rate limiting** (`watcher.py`): `sync_min_interval` (default 60s,
+  injectable `clock`) throttles the daemon's auto-sync so a short poll interval
+  doesn't POST every cycle; `last_sync` set even on failure (no retry-spam).
+- **Founder-query audit log**: `FounderQueryAuditRow` + `record_founder_query`/
+  `list_founder_audit`; written on both `/v1/founder/query` and `/ui/query`; admin
+  `GET /v1/admin/audit`; a "Recent founder queries" console panel.
+- **Published image + k8s** (`.github/workflows/publish-image.yml` → GHCR on tags;
+  `deploy/k8s/` configmap/secret.example/deployment/service, non-root probes;
+  `docs/deploy.md` updated). Postgres + S3 assumed external/managed.
+
+**Headroom assessment** (Apache-2.0, cloned to `../headroom-upstream`): a different
+layer — LLM-call cost optimization (proxy + Rust compression + vector memory), not
+work-capture/intelligence. Call = **reference-only**, no clone-into-repo; at most
+borrow tiny Python primitives (an error-category enum) with attribution later. Not
+a dependency, no Rust forced on the agent. 166 tests green.
