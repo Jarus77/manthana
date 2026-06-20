@@ -1058,7 +1058,7 @@ In the user's data, ~5 sessions carry summaries (two compacted 5×, one boundary
 
 **Tests:** `test_compact_summary.py` (8), `test_watcher.py` (+summarized), insights
 source-filter, optimize setup. **196 tests.** Verified live: 5 real transcripts
-carry summaries (preTokens up to ~1M).
+carry summaries (preTokens up to ~1M). Adversarial review: 0 actionable bugs (10 positive confirmations).
 
 **Deferred:** auto-compacting non-summarized sessions; auto-periodic tune; a
 separate proxy launchd service (headroom's durable init covers persistence).
