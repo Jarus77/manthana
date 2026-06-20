@@ -66,7 +66,12 @@ def _compaction(
 
 
 def _build(tmp_path: Path) -> tuple[TestClient, Store]:
-    store = Store.open_memory()
+    # File-based store (not open_memory) so it matches production: the dashboard
+    # runs compaction in a background thread, and a file engine gives each thread
+    # its own pooled connection (check_same_thread=False + WAL). open_memory uses a
+    # single StaticPool connection shared across threads → "sqlite3.InterfaceError:
+    # bad parameter or other API misuse" under the concurrent access.
+    store = Store.open(tmp_path / "manthana.db")
     _session(store)
     client = TestClient(create_app(store, provider=MockProvider(_GOOD), skills_dir=tmp_path))
     return client, store
