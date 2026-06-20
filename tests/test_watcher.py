@@ -243,6 +243,48 @@ def test_reingest_preserves_compaction(tmp_path: Path) -> None:
     assert store.get_compaction("comp-s1") is None
 
 
+def test_auto_sync_runs_each_cycle(tmp_path: Path) -> None:
+    # Releases happen out-of-band (dashboard), so auto-sync runs every cycle,
+    # not only when files changed.
+    proj = tmp_path / "projects"
+    _touch(proj / "p1" / "s1.jsonl")
+    _calls, ingest = _recorder()
+    synced: list[int] = []
+
+    def fake_sync(_store: object) -> int:
+        synced.append(1)
+        return 2
+
+    watch(
+        Store.open_memory(),
+        collector=_collector(proj),
+        ingest=ingest,  # type: ignore[arg-type]
+        sync_fn=fake_sync,  # type: ignore[arg-type]
+        sleep=_noop_sleep,
+        iterations=2,
+    )
+    assert synced == [1, 1]  # called on both cycles (cycle 2 had no file changes)
+
+
+def test_auto_sync_error_does_not_kill_loop(tmp_path: Path) -> None:
+    proj = tmp_path / "projects"
+    _touch(proj / "p1" / "s1.jsonl")
+    calls, ingest = _recorder()
+
+    def boom_sync(_store: object) -> int:
+        raise RuntimeError("network down")
+
+    watch(  # must not raise
+        Store.open_memory(),
+        collector=_collector(proj),
+        ingest=ingest,  # type: ignore[arg-type]
+        sync_fn=boom_sync,  # type: ignore[arg-type]
+        sleep=_noop_sleep,
+        iterations=1,
+    )
+    assert calls == [str(proj / "p1" / "s1.jsonl")]  # capture still happened
+
+
 def test_no_compaction_by_default(tmp_path: Path) -> None:
     proj = tmp_path / "projects"
     _touch(proj / "p1" / "s1.jsonl")

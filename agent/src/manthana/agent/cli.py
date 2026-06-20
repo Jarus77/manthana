@@ -5,8 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import os
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 from manthana.agent.actions import tag_all
@@ -15,6 +18,31 @@ from manthana.agent.compact import compact_pending, compact_session
 from manthana.agent.datahome import db_path, resolve_data_home
 from manthana.agent.store import Store
 from manthana.schemas import Mode
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from manthana.agent.sync_client import SyncClient
+
+
+def _resolve_server() -> tuple[str | None, str | None]:
+    """Server URL + team token: env wins over [server] in manthana.toml."""
+    from manthana.agent.config import load_config
+
+    config = load_config()
+    base = os.environ.get("MANTHANA_SERVER_URL") or config.server_url
+    token = os.environ.get("MANTHANA_TEAM_TOKEN") or config.team_token
+    return base, token
+
+
+def _sync_pushed(client: SyncClient) -> Callable[[Store], int]:
+    """Adapt a SyncClient into the watcher's `sync_fn` (returns #pushed)."""
+
+    def _fn(store: Store) -> int:
+        return client.sync(store).pushed
+
+    return _fn
+
 
 app = typer.Typer(
     help="Manthana — local-first capture of AI coding interactions.",
@@ -40,6 +68,45 @@ def datahome() -> None:
 
 
 @app.command()
+def login(
+    server: str = typer.Option(..., help="org server URL, e.g. https://manthana.yourco.com"),
+    token: str = typer.Option(..., help="the team token from your admin (manthana-server onboard)"),
+    actor: str = typer.Option("", help="your contributor identity, e.g. you@yourco.com"),
+) -> None:
+    """One-time: connect this agent to the org server (writes manthana.toml + verifies)."""
+    import httpx
+    from manthana.agent.config import load_config, save_config
+
+    config = load_config()
+    config.server_url = server.rstrip("/")
+    config.team_token = token
+    if actor:
+        config.actor = actor
+    path = save_config(config)
+    typer.echo(f"wrote {path}")
+    try:
+        ok = httpx.get(f"{config.server_url}/healthz", timeout=5.0).status_code == 200
+    except httpx.HTTPError as exc:
+        typer.echo(f"saved, but {config.server_url} is not reachable yet: {exc}")
+        return
+    typer.echo(f"connected to {config.server_url} {'✓' if ok else '(unexpected response)'}")
+
+
+@app.command()
+def config() -> None:
+    """Show the resolved agent config (token masked)."""
+    from manthana.agent.config import config_path, load_config
+
+    cfg = load_config()
+    masked = (cfg.team_token[:8] + "…") if cfg.team_token else "(unset)"
+    typer.echo(f"config:     {config_path()}")
+    typer.echo(f"server_url: {cfg.server_url or '(unset)'}")
+    typer.echo(f"team_token: {masked}")
+    typer.echo(f"actor:      {cfg.actor or '(from MANTHANA_ACTOR / git / user)'}")
+    typer.echo(f"redact:     secrets={cfg.redact_secrets} pii={cfg.redact_pii}")
+
+
+@app.command()
 def capture() -> None:
     """Ingest all local Claude Code transcripts into the store."""
     store = Store.open()
@@ -50,24 +117,40 @@ def capture() -> None:
 
 
 @app.command()
-def watch(interval: float = 5.0, compact: bool = False) -> None:
+def watch(interval: float = 5.0, compact: bool = False, sync: bool = True) -> None:
     """Continuously ingest new/changed Claude Code transcripts (Ctrl-C to stop).
 
-    Capture-only by default. --compact also compacts pending Work sessions after
-    each change (runs claude, costs tokens).
+    Capture-only by default. When a server is configured, also auto-syncs released,
+    redacted, non-personal compactions each cycle (--no-sync to disable). --compact
+    also compacts pending Work sessions after each change (runs claude, costs tokens).
     """
+    from manthana.agent.sync_client import SyncClient
     from manthana.agent.watcher import watch as run_watch
 
     store = Store.open()
-    state = "on" if compact else "off"
+    base, token = _resolve_server()
+    client: SyncClient | None = None
+    sync_fn: Callable[[Store], int] | None = None
+    if sync and base and token:
+        client = SyncClient(base, token)
+        sync_fn = _sync_pushed(client)
+        sync_state = "auto-sync on"
+    else:
+        sync_state = "auto-sync off (no server)" if sync else "auto-sync disabled"
+    compact_state = "on" if compact else "off"
     typer.echo(
-        f"watching ~/.claude/projects every {interval}s (compact={state}) — Ctrl-C to stop"
+        f"watching ~/.claude/projects every {interval}s "
+        f"(compact={compact_state}, {sync_state}) — Ctrl-C to stop"
     )
     try:
-        run_watch(store, interval=interval, compact=compact, log=typer.echo)
+        run_watch(
+            store, interval=interval, compact=compact, sync_fn=sync_fn, log=typer.echo
+        )
     except KeyboardInterrupt:
         typer.echo("\nstopped")
     finally:
+        if client is not None:
+            client.close()
         store.close()  # dispose the SQLite engine pool on exit
 
 
@@ -141,23 +224,38 @@ def dashboard(host: str = "127.0.0.1", port: int = 8765) -> None:
 
 
 @app.command()
-def sync(raw: bool = False) -> None:
+def sync(raw: bool = False, check: bool = False) -> None:
     """Push released, non-personal compactions to the org server.
 
     Reads server URL + team token from MANTHANA_SERVER_URL / MANTHANA_TEAM_TOKEN
     (or the [server] section of manthana.toml). --raw also releases transcripts.
+    --check only verifies the server is reachable and the token is accepted (no push).
     """
-    import os
+    from manthana.agent.sync_client import SyncClient, SyncError
 
-    from manthana.agent.config import load_config
-    from manthana.agent.sync_client import SyncClient
-
-    config = load_config()
-    base = os.environ.get("MANTHANA_SERVER_URL") or config.server_url
-    token = os.environ.get("MANTHANA_TEAM_TOKEN") or config.team_token
+    base, token = _resolve_server()
     if not base or not token:
-        typer.echo("set MANTHANA_SERVER_URL and MANTHANA_TEAM_TOKEN (or [server] in manthana.toml)")
+        typer.echo("not configured — run `manthana login --server <url> --token <jwt>` first")
         raise typer.Exit(code=1)
+
+    if check:
+        import httpx
+
+        try:
+            reachable = httpx.get(f"{base}/healthz", timeout=5.0).status_code == 200
+        except httpx.HTTPError as exc:
+            typer.echo(f"server unreachable: {exc}")
+            raise typer.Exit(code=1) from exc
+        client = SyncClient(base, token)
+        try:
+            client.push_compactions([])  # authed no-op: 200 if the token is accepted
+        except SyncError as exc:
+            typer.echo(f"token rejected by {base}: {exc}")
+            raise typer.Exit(code=1) from exc
+        finally:
+            client.close()
+        typer.echo(f"ok — {base} reachable (healthz={reachable}) and token accepted")
+        return
 
     client = SyncClient(base, token)
     try:
@@ -178,8 +276,6 @@ def mine_skills(min_sessions: int = 3, threshold: float = 0.75, write: bool = Fa
     --write to draft them under ~/.claude/skills/personal/. Lower --threshold
     (e.g. 0.6) to cluster more loosely when using the offline embedder.
     """
-    from pathlib import Path
-
     from manthana.agent.skillminer import mine_personal, write_proposal
 
     proposals = mine_personal(Store.open(), min_sessions=min_sessions, threshold=threshold)
@@ -197,8 +293,96 @@ def mine_skills(min_sessions: int = 3, threshold: float = 0.75, write: bool = Fa
         typer.echo(f"{len(proposals)} proposal(s); pass --write to draft them")
 
 
+_SERVICE_LABEL = "com.manthana.watch"
+
+
+def _watch_plist(manthana_bin: str, actor: str | None) -> dict[str, object]:
+    """launchd plist for the capture daemon (factored out for testability)."""
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+    if actor:
+        env["MANTHANA_ACTOR"] = actor
+    log = str(Path.home() / "Library" / "Logs" / "manthana-watch.log")
+    return {
+        "Label": _SERVICE_LABEL,
+        "ProgramArguments": [manthana_bin, "watch", "--interval", "5"],
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "EnvironmentVariables": env,
+        "StandardOutPath": log,
+        "StandardErrorPath": log,
+    }
+
+
+@app.command()
+def service(action: str = typer.Argument("status")) -> None:
+    """Run the capture daemon at login (macOS launchd): install | uninstall | status."""
+    import platform
+    import plistlib
+    import shutil
+    import subprocess
+
+    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{_SERVICE_LABEL}.plist"
+
+    if platform.system() != "Darwin":
+        typer.echo(
+            "service is macOS-only. On Linux, create a `systemd --user` unit running "
+            "`manthana watch` (see docs/onboarding.md)."
+        )
+        raise typer.Exit(code=1)
+
+    if action == "status":
+        if not plist_path.exists():
+            typer.echo("not installed")
+            return
+        listed = subprocess.run(["launchctl", "list"], capture_output=True, text=True, check=False)
+        state = "running" if _SERVICE_LABEL in listed.stdout else "loaded (not running)"
+        typer.echo(f"installed at {plist_path} — {state}")
+        return
+
+    if action == "install":
+        from manthana.agent.config import load_config
+
+        manthana_bin = shutil.which("manthana")
+        if not manthana_bin:
+            typer.echo("could not find the `manthana` executable on PATH")
+            raise typer.Exit(code=1)
+        actor = load_config().actor or os.environ.get("MANTHANA_ACTOR")
+        plist_path.parent.mkdir(parents=True, exist_ok=True)
+        (Path.home() / "Library" / "Logs").mkdir(parents=True, exist_ok=True)
+        with plist_path.open("wb") as fh:
+            plistlib.dump(_watch_plist(manthana_bin, actor), fh)
+        subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True, check=False)
+        subprocess.run(["launchctl", "load", "-w", str(plist_path)], check=False)
+        typer.echo(f"installed + loaded {_SERVICE_LABEL} ({plist_path})")
+        typer.echo("capture now runs at login; logs: ~/Library/Logs/manthana-watch.log")
+        return
+
+    if action == "uninstall":
+        if not plist_path.exists():
+            typer.echo("not installed")
+            return
+        subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True, check=False)
+        plist_path.unlink()
+        typer.echo(f"uninstalled {_SERVICE_LABEL}")
+        return
+
+    raise typer.BadParameter("action must be install | uninstall | status")
+
+
+def _apply_identity_from_config() -> None:
+    """Honor the configured contributor identity for every command (resolve_actor
+    checks MANTHANA_ACTOR first), so capture/compact/sync attribute work correctly."""
+    if not os.environ.get("MANTHANA_ACTOR"):
+        from manthana.agent.config import load_config
+
+        actor = load_config().actor
+        if actor:
+            os.environ["MANTHANA_ACTOR"] = actor
+
+
 def main() -> None:
     """Console-script entry point."""
+    _apply_identity_from_config()
     app()
 
 

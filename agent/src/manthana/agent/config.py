@@ -26,6 +26,7 @@ class Config:
     redact_pii: bool = True
     server_url: str | None = None
     team_token: str | None = None
+    actor: str | None = None  # contributor identity ([identity].actor); overrides git/user
 
 
 def config_path() -> Path:
@@ -40,13 +41,47 @@ def load_config(path: Path | None = None) -> Config:
     embeddings = data.get("embeddings", {})
     redaction = data.get("redaction", {})
     server = data.get("server", {})
+    identity = data.get("identity", {})
     return Config(
         embeddings_model=embeddings.get("model", DEFAULT_EMBEDDINGS_MODEL),
         redact_secrets=bool(redaction.get("secrets", True)),
         redact_pii=bool(redaction.get("pii", True)),
         server_url=server.get("url"),
         team_token=server.get("token"),
+        actor=identity.get("actor"),
     )
+
+
+def _toml_str(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def save_config(config: Config, path: Path | None = None) -> Path:
+    """Serialize ``config`` to ``manthana.toml`` (managed by ``manthana login``;
+    the file stays hand-editable but comments are not round-tripped)."""
+    target = path or config_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Manthana agent config — managed by `manthana login`; also hand-editable.",
+        "",
+        "[embeddings]",
+        f"model = {_toml_str(config.embeddings_model)}",
+        "",
+        "[redaction]",
+        f"secrets = {str(config.redact_secrets).lower()}",
+        f"pii = {str(config.redact_pii).lower()}",
+    ]
+    if config.server_url or config.team_token:
+        lines.append("")
+        lines.append("[server]")
+        if config.server_url:
+            lines.append(f"url = {_toml_str(config.server_url)}")
+        if config.team_token:
+            lines.append(f"token = {_toml_str(config.team_token)}")
+    if config.actor:
+        lines += ["", "[identity]", f"actor = {_toml_str(config.actor)}"]
+    target.write_text("\n".join(lines) + "\n")
+    return target
 
 
 def build_redactor(config: Config | None = None):  # noqa: ANN201 - return type below
@@ -59,4 +94,11 @@ def build_redactor(config: Config | None = None):  # noqa: ANN201 - return type 
     )
 
 
-__all__ = ["Config", "load_config", "config_path", "build_redactor", "DEFAULT_EMBEDDINGS_MODEL"]
+__all__ = [
+    "Config",
+    "load_config",
+    "save_config",
+    "config_path",
+    "build_redactor",
+    "DEFAULT_EMBEDDINGS_MODEL",
+]

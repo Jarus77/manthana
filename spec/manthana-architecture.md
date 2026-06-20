@@ -889,3 +889,32 @@ server + Postgres + MinIO + bucket creation.
 - **Verified live:** `docker compose up` → server healthy; `/healthz`+`/readyz`+
   `/ui/login` 200; `onboard acme …` minted a token; console shows the persisted
   `actioneer` org + new `acme` (dockerized server reads the real Postgres).
+
+### Part 2 — one-time setup + hands-off operation (2026-06-20)
+
+The founder's vision: hand over a laptop, set it up once, then it runs itself; the
+employee only touches the dashboard.
+
+- **Onboarding CLI** (`agent/.../cli.py` + `config.py` write path): `manthana login
+  --server --token [--actor]` writes `manthana.toml` (`[server]`, `[identity]`) and
+  verifies `/healthz`; `manthana config` (token masked); `manthana sync --check`
+  (reachable + token accepted via an authed empty-batch no-op). `config.save_config`
+  is a dependency-free TOML writer; `_apply_identity_from_config()` in `main()` sets
+  `MANTHANA_ACTOR` from config so `resolve_actor` honors it everywhere.
+- **Daemon auto-sync** (`watcher.py` + `manthana watch`): when a server is
+  configured, each cycle also pushes released/redacted/non-personal compactions
+  (`sync_fn` = `SyncClient.sync(...).pushed`), run **every** cycle (releases happen
+  out-of-band in the dashboard). `--no-sync` disables; failures are logged, never
+  fatal. Compaction stays a deliberate, token-spending dashboard action.
+- **Auto-start** (`manthana service install|uninstall|status`): a macOS launchd
+  LaunchAgent (`com.manthana.watch`, RunAtLoad+KeepAlive, exports `MANTHANA_ACTOR`)
+  running `manthana watch`; plist factored into `_watch_plist` for testing; Linux
+  `systemd --user` documented.
+- **Docs:** `docs/onboarding.md` (admin provision + employee one-time setup +
+  daily dashboard-only use); README points at deploy + onboarding.
+- **Tests** `tests/test_agent_config.py` (6: save/load roundtrip, defaults,
+  empty-section omission, quote-escaping, plist content) + `test_watcher.py`
+  auto-sync (runs each cycle; errors don't kill the loop). **156 tests.**
+- **Verified live** against the dockerized server: `onboard bob@acme.com` → token;
+  `manthana login` wrote the toml + connected ✓; `config` masked the token;
+  `sync --check` → reachable + token accepted.

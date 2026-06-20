@@ -47,7 +47,16 @@ uv run manthana-schemas-export  # regenerate schemas/json/*.schema.json
 uv run manthana datahome        # show resolved MANTHANA_DATA_HOME + db path
 ```
 
-## Running the server
+## Deploying for a team
+
+Full team setup is two short guides:
+- **[docs/deploy.md](docs/deploy.md)** — admin: `docker compose up` runs the
+  server + Postgres + MinIO; provision engineers with `manthana-server onboard`.
+- **[docs/onboarding.md](docs/onboarding.md)** — employee: one-time `manthana
+  login` + `manthana service install`, then it runs itself (capture + auto-sync);
+  daily use is the dashboard only.
+
+## Running the server (single host / dev)
 
 Configuration comes from `MANTHANA_SERVER_*` environment variables. **Keep
 secrets in a `.env` file — never on the command line** (they leak into shell
@@ -56,7 +65,8 @@ committed template.
 
 ```bash
 cp .env.example .env            # then edit .env: set JWT secret, admin token, etc.
-./scripts/serve.sh --port 8000  # loads .env and starts the server
+docker compose up -d            # full stack (server + Postgres + MinIO), or:
+./scripts/serve.sh --port 8000  # just the server, loading .env, against your own DB
 ```
 
 `scripts/serve.sh` just sources `.env` and runs the server; the equivalent by

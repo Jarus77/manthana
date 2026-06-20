@@ -58,6 +58,7 @@ def watch(
     iterations: int | None = None,
     ingest: Callable[..., IngestResult] = ingest_file,
     compact_fn: Callable[..., list[Any]] = compact_pending,
+    sync_fn: Callable[[Store], int] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     log: Callable[[str], None] | None = None,
 ) -> dict[str, float]:
@@ -96,6 +97,16 @@ def watch(
                     emit(f"compacted {len(comps)} pending sessions")
                 except Exception:  # noqa: BLE001 - compaction failure must not kill the loop
                     _log.exception("watch: compaction failed")
+        # Auto-sync released compactions every cycle (releases happen out-of-band in
+        # the dashboard, so this isn't gated on `changed`). Cheap when nothing is
+        # fresh — it only POSTs newly released, redacted, non-personal compactions.
+        if sync_fn is not None:
+            try:
+                pushed = sync_fn(store)
+                if pushed:
+                    emit(f"synced {pushed} released compactions")
+            except Exception:  # noqa: BLE001 - a sync failure must not kill the loop
+                _log.exception("watch: auto-sync failed")
         # Forget files that disappeared so a recreated path re-ingests.
         seen = {path: mtime for path, mtime in seen.items() if path in current}
         cycle += 1
