@@ -166,6 +166,40 @@ def sessions(limit: int = 20) -> None:
 
 
 @app.command()
+def insights(since: str = "") -> None:
+    """Token-free rollups of your captured work (projects, outcomes, cost).
+
+    --since accepts 7d / 2w / 12h / an ISO date.
+    """
+    from manthana.agent.insights import structural_insights
+
+    s = structural_insights(Store.open(), since=since or None)
+    typer.echo(
+        f"sessions={s.session_count} compactions={s.compaction_count} "
+        f"est. API-equivalent cost ~${s.est_cost_usd}"
+    )
+    projects = ", ".join(f"{p}={n}" for p, n in list(s.by_project.items())[:10]) or "—"
+    typer.echo(f"by project: {projects}")
+    if s.by_outcome:
+        typer.echo("by outcome: " + ", ".join(f"{o}={n}" for o, n in s.by_outcome.items()))
+    if s.top_friction:
+        typer.echo("recent friction: " + " · ".join(s.top_friction[:3]))
+
+
+@app.command()
+def ask(question: str) -> None:
+    """Ask a grounded, cited question about your own compactions (uses your model)."""
+    from manthana.agent.insights import ask as run_ask
+
+    result = run_ask(Store.open(), question)
+    typer.echo(result.narrative)
+    if result.citations:
+        typer.echo("sources: " + ", ".join(result.citations))
+    elif result.grounded is False and result.narrative and "compact" not in result.narrative:
+        typer.echo("(ungrounded — no compaction matched a citation)")
+
+
+@app.command()
 def mode(session_id: str, value: str) -> None:
     """Set a session's mode: work | personal. Personal-mode sessions never sync."""
     try:

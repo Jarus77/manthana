@@ -86,6 +86,18 @@ def test_index_lists_sessions_with_capture_and_compact(tmp_path: Path) -> None:
     assert "compact" in body  # per-session compact button
 
 
+def test_ask_page_shows_structural_panel_and_answers(tmp_path: Path) -> None:
+    client, store = _build(tmp_path)
+    _compaction(store, "comp-s1", "s1", intent="fix the parser")
+    # structural panel renders with no question (token-free)
+    body = client.get("/ask").text
+    assert "Your work" in body and "demo" in body  # project from the seeded session
+    assert "ask about your sessions" in body  # the question form
+    # a question runs the grounded ask (MockProvider returns the canned compaction JSON)
+    answered = client.get("/ask", params={"question": "what did I do?"}).text
+    assert "Answer" in answered
+
+
 def test_compactions_and_skills_and_cost_and_actions_pages(tmp_path: Path) -> None:
     client, store = _build(tmp_path)
     _compaction(store, "comp-s1", "s1")

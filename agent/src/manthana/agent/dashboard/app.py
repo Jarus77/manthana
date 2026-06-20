@@ -62,8 +62,9 @@ def _page(title: str, body: str, *, refresh: int = 0) -> str:
         f"<!doctype html><html><head><meta charset='utf-8'><title>Manthana — {_e(title)}</title>"
         f"{refresh_tag}{_HTMX}{_STYLE}</head><body>"
         "<h1>Manthana</h1>"
-        "<nav><a href='/'>Sessions</a><a href='/compactions'>Compactions</a>"
-        "<a href='/skills'>Skills</a><a href='/cost'>Cost</a><a href='/actions'>Actions</a></nav>"
+        "<nav><a href='/'>Sessions</a><a href='/ask'>Ask</a>"
+        "<a href='/compactions'>Compactions</a><a href='/skills'>Skills</a>"
+        "<a href='/cost'>Cost</a><a href='/actions'>Actions</a></nav>"
         f"{body}</body></html>"
     )
 
@@ -203,6 +204,41 @@ def create_app(
         )
         # Poll every 4s only while something is compacting, then stop.
         return _page("Sessions", bar + table, refresh=4 if in_progress else 0)
+
+    # ── Ask & Insights (self-query) ──────────────────────────────────────
+    @app.get("/ask", response_class=HTMLResponse)
+    def ask_page(question: str = "", since: str = "") -> str:
+        # GET form (read-only query → no python-multipart). The structural panel
+        # is token-free; a question runs the grounded `ask` (uses your model).
+        from manthana.agent.insights import ask as run_ask
+        from manthana.agent.insights import structural_insights
+
+        s = structural_insights(store, since=since or None)
+        projects = ", ".join(f"{_e(p)}={n}" for p, n in list(s.by_project.items())[:12]) or "—"
+        outcomes = (
+            f"<br>outcomes: {_e(s.by_outcome)}" if s.by_outcome else ""
+        )
+        panel = (
+            f"<div class='bar'><b>Your work{(' · last ' + _e(since)) if since else ''}</b>: "
+            f"{s.session_count} sessions, {s.compaction_count} compactions · "
+            f"est. API-equivalent cost ~${s.est_cost_usd}<br>projects: {projects}{outcomes}</div>"
+        )
+        form = (
+            "<div class='bar'><form method='get' action='/ask'>"
+            f"<input name='question' size='64' value='{_e(question)}' "
+            "placeholder='ask about your sessions — e.g. what did I work on last week?'> "
+            "<button>Ask</button></form>"
+            "<small>grounded over your compactions; uses your model (claude)</small></div>"
+        )
+        answer = ""
+        if question:
+            result = run_ask(store, question, provider=provider)
+            cites = ", ".join(_e(c) for c in result.citations) or "—"
+            tag = "" if result.grounded else " <span class='warn'>(ungrounded)</span>"
+            answer = (
+                f"<h3>Answer{tag}</h3><pre>{_e(result.narrative)}</pre><p>sources: {cites}</p>"
+            )
+        return _page("Ask", panel + form + answer)
 
     @app.post("/capture")
     def capture() -> RedirectResponse:
