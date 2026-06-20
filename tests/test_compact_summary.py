@@ -115,6 +115,24 @@ def test_compact_full_path_tags_source_full() -> None:
     assert not c.prompt_version.endswith("-summary")
 
 
+def test_summary_compaction_redacts_on_release_but_keeps_source() -> None:
+    # A summary-based compaction is a normal compaction: it redacts on egress
+    # (secret scrubbed) but the `source` metadata is preserved for the org.
+    from manthana.agent.redaction import Redactor
+    from manthana.schemas import EngineeringCompaction, Outcome, Surface
+
+    comp = EngineeringCompaction(
+        id="comp-x", session_id="x", actor="e@x.com", surface=Surface.claude_code,
+        project="demo", started_at=datetime(2026, 6, 1, tzinfo=UTC),
+        ended_at=datetime(2026, 6, 1, tzinfo=UTC), duration_seconds=1.0,
+        task_intent="used key AKIAIOSFODNN7EXAMPLE to fetch data", approach="a",
+        outcome=Outcome.success, source="claude_summary",
+    )
+    red = Redactor().redact_compaction(comp)
+    assert red.source == "claude_summary"  # metadata kept
+    assert "AKIAIOSFODNN7EXAMPLE" not in red.task_intent  # secret scrubbed before egress
+
+
 def test_compact_session_uses_claude_summary(tmp_path: Path) -> None:
     f = tmp_path / "proj" / "sess.jsonl"
     _transcript(f)
