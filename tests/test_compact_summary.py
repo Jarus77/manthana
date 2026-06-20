@@ -1,0 +1,131 @@
+"""Reusing Claude Code's own compaction summaries.
+
+Covers: the collector captures the NEWEST summary + skips summary/boundary lines
+from turns; read_summary scans cheaply; the compactor uses the summary as a cheap
+input and tags source=claude_summary; compact_session reads it on demand.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
+from manthana.agent.compact import compact_session
+from manthana.agent.compactor import Compactor
+from manthana.agent.compactor.prompt import build_prompt
+from manthana.agent.llm import MockProvider
+from manthana.agent.store import Store
+from manthana.collectors import ClaudeCodeCollector
+from manthana.schemas import Role, Session, Surface, Turn
+
+_GOOD = json.dumps({"task_intent": "ship it", "approach": "patched", "outcome": "success"})
+
+
+def _line(**kw: object) -> str:
+    return json.dumps(kw)
+
+
+def _transcript(path: Path) -> None:
+    """A transcript with two Claude compaction summaries (newest = SUMMARY TWO)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        _line(type="user", uuid="u1", parentUuid=None, timestamp="2026-06-01T10:00:00Z",
+              cwd="/x", gitBranch="main", message={"role": "user", "content": "do thing"}),
+        _line(type="assistant", uuid="a1", parentUuid="u1", timestamp="2026-06-01T10:01:00Z",
+              message={"role": "assistant", "content": [{"type": "text", "text": "working"}],
+                       "model": "claude", "usage": {"input_tokens": 10, "output_tokens": 5}}),
+        _line(type="system", subtype="compact_boundary", uuid="b1",
+              timestamp="2026-06-01T10:02:00Z", content="Conversation compacted",
+              compactMetadata={"trigger": "auto", "preTokens": 255012}),
+        _line(type="user", uuid="s1", parentUuid=None, isCompactSummary=True,
+              isVisibleInTranscriptOnly=True, timestamp="2026-06-01T10:02:01Z",
+              message={"role": "user", "content": "SUMMARY ONE: did X"}),
+        _line(type="user", uuid="u2", parentUuid=None, timestamp="2026-06-01T10:03:00Z",
+              message={"role": "user", "content": "continue"}),
+        _line(type="user", uuid="s2", parentUuid=None, isCompactSummary=True,
+              isVisibleInTranscriptOnly=True, timestamp="2026-06-01T10:04:00Z",
+              message={"role": "user", "content": "SUMMARY TWO: did X and Y"}),
+    ]
+    path.write_text("\n".join(rows) + "\n")
+
+
+def test_collector_captures_newest_summary_and_skips_summary_turns(tmp_path: Path) -> None:
+    f = tmp_path / "proj" / "sess.jsonl"
+    _transcript(f)
+    turns, meta = ClaudeCodeCollector(actor="e@x.com").read(str(f))
+    # newest summary captured + boundary metadata
+    assert meta.compact_summary is not None
+    assert meta.compact_summary.text == "SUMMARY TWO: did X and Y"
+    assert meta.compact_summary.trigger == "auto"
+    assert meta.compact_summary.pre_tokens == 255012
+    # the summary text never leaks in as a (duplicate) turn
+    joined = " ".join((t.content or "") for t in turns)
+    assert "SUMMARY ONE" not in joined and "SUMMARY TWO" not in joined
+    assert "do thing" in joined and "continue" in joined  # real turns survive
+
+
+def test_read_summary_scans_cheaply(tmp_path: Path) -> None:
+    f = tmp_path / "proj" / "sess.jsonl"
+    _transcript(f)
+    s = ClaudeCodeCollector().read_summary(str(f))
+    assert s is not None and s.text == "SUMMARY TWO: did X and Y" and s.pre_tokens == 255012
+
+
+def test_read_summary_none_when_absent(tmp_path: Path) -> None:
+    f = tmp_path / "proj" / "plain.jsonl"
+    f.parent.mkdir(parents=True)
+    f.write_text(_line(type="user", uuid="u1", message={"role": "user", "content": "hi"}) + "\n")
+    assert ClaudeCodeCollector().read_summary(str(f)) is None
+
+
+# ── compactor uses the summary (cheap input) + tags source ───────────────────
+def _session(sid: str = "s1") -> Session:
+    return Session(
+        id=sid, actor="e@x.com", surface=Surface.claude_code, project="demo",
+        started_at=datetime(2026, 6, 1, tzinfo=UTC), turn_count=3,
+    )
+
+
+def _turns(sid: str = "s1", n: int = 60) -> list[Turn]:
+    return [
+        Turn(id=f"{sid}-{i}", session_id=sid, actor="e", seq=i, role=Role.user, content=f"t{i}")
+        for i in range(n)
+    ]
+
+
+def test_build_prompt_uses_summary_and_recent_turns_only() -> None:
+    prompt = build_prompt(_session(), _turns(n=60), claude_summary="PRIOR STATE")
+    assert "PRIOR_SUMMARY" in prompt and "PRIOR STATE" in prompt
+    assert "t59" in prompt  # recent turn included
+    assert "t0" not in prompt  # old turn dropped (tail only)
+
+
+def test_compact_tags_source_claude_summary() -> None:
+    c = Compactor(MockProvider(_GOOD)).compact(_session(), _turns(), claude_summary="PRIOR STATE")
+    assert c.source == "claude_summary"
+    assert c.prompt_version.endswith("-summary")
+
+
+def test_compact_full_path_tags_source_full() -> None:
+    c = Compactor(MockProvider(_GOOD)).compact(_session(), _turns())
+    assert c.source == "full"
+    assert not c.prompt_version.endswith("-summary")
+
+
+def test_compact_session_uses_claude_summary(tmp_path: Path) -> None:
+    f = tmp_path / "proj" / "sess.jsonl"
+    _transcript(f)
+    store = Store.open_memory()
+    store.upsert_session(
+        Session(
+            id="s1", actor="e@x.com", surface=Surface.claude_code, project="demo",
+            started_at=datetime(2026, 6, 1, tzinfo=UTC), turn_count=2,
+            source_path=str(f), has_compact_summary=True,
+        )
+    )
+    store.add_turns(_turns("s1", n=3))
+    c = compact_session(store, "s1", provider=MockProvider(_GOOD))
+    assert c is not None and c.source == "claude_summary"

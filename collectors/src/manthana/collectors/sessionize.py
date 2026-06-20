@@ -72,6 +72,7 @@ def sessionize(
     source_path: str | None,
     fallback_time: datetime,
     mode: Mode = Mode.work,
+    has_compact_summary: bool = False,
 ) -> list[tuple[Session, list[Turn]]]:
     """Group ordered turns into Sessions with their (re-sequenced) turns."""
     results: list[tuple[Session, list[Turn]]] = []
@@ -100,6 +101,7 @@ def sessionize(
             mode=mode,
             resumed_from=prev_id,
             source_path=source_path,
+            has_compact_summary=has_compact_summary,
         )
         results.append((session, seg_turns))
         prev_id = session_id

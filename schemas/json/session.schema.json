@@ -56,6 +56,12 @@
       "$ref": "#/$defs/SessionEndReason",
       "default": "open"
     },
+    "has_compact_summary": {
+      "default": false,
+      "description": "Transcript carries Claude's own compaction summary (cheap to compact)",
+      "title": "Has Compact Summary",
+      "type": "boolean"
+    },
     "id": {
       "description": "Stable session id (surface session UUID when available)",
       "title": "Id",

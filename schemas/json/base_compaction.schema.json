@@ -184,6 +184,15 @@
       "title": "Session Id",
       "type": "string"
     },
+    "source": {
+      "default": "full",
+      "enum": [
+        "full",
+        "claude_summary"
+      ],
+      "title": "Source",
+      "type": "string"
+    },
     "started_at": {
       "format": "date-time",
       "title": "Started At",

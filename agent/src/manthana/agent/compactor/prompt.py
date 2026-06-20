@@ -60,16 +60,29 @@ def _turn_repr(turn: Turn) -> dict[str, object]:
     return item
 
 
+_SUMMARY_TAIL_TURNS = 40  # when a Claude summary is present, only the recent turns
+
+
 def serialize_turns(turns: list[Turn]) -> str:
     sample = turns[:_MAX_TURNS]
     return json.dumps([_turn_repr(t) for t in sample], ensure_ascii=False)
 
 
-def build_prompt(session: Session, turns: list[Turn]) -> str:
+def build_prompt(session: Session, turns: list[Turn], *, claude_summary: str | None = None) -> str:
     header = (
         f"Session: project={session.project} surface={session.surface} "
         f"turns={session.turn_count}"
     )
+    if claude_summary:
+        # Cheap path: the session already has Claude's own running summary, so feed
+        # that + only the most recent turns instead of the whole (possibly 100k+
+        # token) transcript. Far fewer input tokens, same typed output.
+        tail = turns[-_SUMMARY_TAIL_TURNS:]
+        return (
+            f"{_INSTRUCTIONS}\n{header}\n\n"
+            f"PRIOR_SUMMARY (Claude's own compaction of the earlier conversation):\n"
+            f"{claude_summary}\n\nRECENT_TURNS:\n{serialize_turns(tail)}\n"
+        )
     return f"{_INSTRUCTIONS}\n{header}\n\nTURNS:\n{serialize_turns(turns)}\n"
 
 

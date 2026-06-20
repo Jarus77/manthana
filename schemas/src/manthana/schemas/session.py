@@ -41,6 +41,10 @@ class Session(BaseModel):
     source_path: str | None = Field(
         default=None, description="Transcript file path this session was parsed from"
     )
+    has_compact_summary: bool = Field(
+        default=False,
+        description="Transcript carries Claude's own compaction summary (cheap to compact)",
+    )
     tags: dict[str, str] = Field(
         default_factory=dict,
         description="Auto-tag action output (project/task_type/outcome/friction)",

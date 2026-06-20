@@ -62,6 +62,9 @@ class BaseCompaction(BaseModel):
     prompt_version: str = Field(default="v0", description="Compaction prompt template version")
     schema_version: int = 1
     created_at: datetime | None = None
+    # How this compaction was produced: "full" (from the raw turns) or
+    # "claude_summary" (cheaply, from Claude Code's own compaction summary).
+    source: Literal["full", "claude_summary"] = "full"
 
 
 class EngineeringCompaction(BaseCompaction):

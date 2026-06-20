@@ -114,10 +114,13 @@ class Compactor:
         self.provider = provider
         self.prompt_version = prompt_version
 
-    def compact(self, session: Session, turns: list[Turn]) -> EngineeringCompaction:
-        raw = self.provider.complete(build_prompt(session, turns))
+    def compact(
+        self, session: Session, turns: list[Turn], *, claude_summary: str | None = None
+    ) -> EngineeringCompaction:
+        raw = self.provider.complete(build_prompt(session, turns, claude_summary=claude_summary))
         data = _extract_json(raw)
         cost = estimate_cost(turns)
+        used_summary = bool(claude_summary)
         return EngineeringCompaction(
             id=f"comp-{session.id}",
             session_id=session.id,
@@ -135,7 +138,10 @@ class Compactor:
             reusable_pattern=bool(data.get("reusable_pattern", False)),
             tier_used=cost.tier,
             est_cost_usd=cost.usd,
-            prompt_version=self.prompt_version,
+            prompt_version=(
+                f"{self.prompt_version}-summary" if used_summary else self.prompt_version
+            ),
+            source="claude_summary" if used_summary else "full",
             files_touched=_str_list(data.get("files_touched")),
             prs_opened=_str_list(data.get("prs_opened")),
             tests_added=_str_list(data.get("tests_added")),

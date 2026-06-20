@@ -38,6 +38,7 @@ _COMPACTION_KEEP = frozenset(
         "outcome",
         "prompt_version",
         "action_triggers",
+        "source",
     }
 )
 

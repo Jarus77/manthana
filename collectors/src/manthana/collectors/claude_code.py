@@ -39,6 +39,15 @@ DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
 
 @dataclass(frozen=True)
+class ClaudeSummary:
+    """Claude Code's own auto-compaction summary for a transcript (newest one)."""
+
+    text: str
+    trigger: str | None = None  # "manual" | "auto"
+    pre_tokens: int | None = None  # conversation size at the compaction boundary
+
+
+@dataclass(frozen=True)
 class FileMeta:
     """Metadata about a parsed transcript file."""
 
@@ -46,6 +55,7 @@ class FileMeta:
     cwd: str | None
     git_branch: str | None
     mtime: datetime
+    compact_summary: ClaudeSummary | None = None  # Claude's newest summary, if any
 
 
 def _parse_ts(value: object) -> datetime | None:
@@ -129,6 +139,9 @@ class ClaudeCodeCollector:
         tool_names: dict[str, str] = {}
         cwd: str | None = None
         git_branch: str | None = None
+        summary_text: str | None = None  # Claude's compaction summary (newest wins)
+        summary_trigger: str | None = None
+        summary_pretokens: int | None = None
 
         for raw in path.read_text(errors="replace").splitlines():
             raw = raw.strip()
@@ -145,6 +158,21 @@ class ClaudeCodeCollector:
                 cwd = entry["cwd"]
             if git_branch is None and isinstance(entry.get("gitBranch"), str):
                 git_branch = entry["gitBranch"]
+
+            # Claude Code's own auto-compaction: capture the summary text (newest
+            # wins) and DON'T flatten it into a giant duplicate turn.
+            if entry.get("isCompactSummary"):
+                text = _stringify((entry.get("message") or {}).get("content"))
+                if text:
+                    summary_text = text
+                continue
+            if entry.get("subtype") == "compact_boundary":
+                meta = entry.get("compactMetadata")
+                if isinstance(meta, dict):
+                    summary_trigger = meta.get("trigger")
+                    pre = meta.get("preTokens")
+                    summary_pretokens = pre if isinstance(pre, int) else None
+                continue
 
             etype = entry.get("type")
             if etype not in ("user", "assistant"):
@@ -175,9 +203,45 @@ class ClaudeCodeCollector:
             turn.seq = index
             turn.id = f"{base_id}-{index:06d}"
 
-        return turns, FileMeta(
-            session_id=base_id, cwd=cwd, git_branch=git_branch, mtime=mtime
+        summary = (
+            ClaudeSummary(text=summary_text, trigger=summary_trigger, pre_tokens=summary_pretokens)
+            if summary_text
+            else None
         )
+        return turns, FileMeta(
+            session_id=base_id, cwd=cwd, git_branch=git_branch, mtime=mtime, compact_summary=summary
+        )
+
+    def read_summary(self, source: str) -> ClaudeSummary | None:
+        """Cheaply extract just Claude's newest compaction summary (+ boundary meta)
+        without flattening all turns — for on-demand use at compaction time."""
+        text: str | None = None
+        trigger: str | None = None
+        pre_tokens: int | None = None
+        try:
+            lines = Path(source).read_text(errors="replace").splitlines()
+        except OSError:
+            return None
+        for raw in lines:
+            if '"isCompactSummary"' not in raw and '"compact_boundary"' not in raw:
+                continue  # cheap pre-filter before json.loads
+            try:
+                entry = json.loads(raw.strip())
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("isCompactSummary"):
+                t = _stringify((entry.get("message") or {}).get("content"))
+                if t:
+                    text = t
+            elif entry.get("subtype") == "compact_boundary":
+                meta = entry.get("compactMetadata")
+                if isinstance(meta, dict):
+                    trigger = meta.get("trigger")
+                    pre = meta.get("preTokens")
+                    pre_tokens = pre if isinstance(pre, int) else None
+        return ClaudeSummary(text=text, trigger=trigger, pre_tokens=pre_tokens) if text else None
 
     def parse(self, source: str) -> Iterator[Turn]:
         """Collector-protocol entry point: yield normalized turns for one source."""
