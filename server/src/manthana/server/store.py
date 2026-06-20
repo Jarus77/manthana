@@ -29,6 +29,7 @@ from .db import create_db_engine, init_db
 from .tables import (
     ActionQueueRow,
     ActorRow,
+    FounderQueryAuditRow,
     OrgConsentRow,
     OrgRow,
     RawTranscriptRow,
@@ -272,6 +273,37 @@ class ServerStore:
                 select(ActionQueueRow)
                 .where(ActionQueueRow.org_id == org_id)
                 .where(ActionQueueRow.status == status)
+            )
+            return list(db.exec(stmt))
+
+    # ── founder-query audit ──────────────────────────────────────────────
+    def record_founder_query(
+        self, *, org_id: str, query: str, insufficient: bool, citations: list[str]
+    ) -> str:
+        """Append an audit row for a founder query (governance / transparency)."""
+        audit_id = f"fq-{uuid.uuid4().hex[:12]}"
+        with DBSession(self._engine) as db:
+            db.merge(
+                FounderQueryAuditRow(
+                    id=audit_id,
+                    org_id=org_id,
+                    query=query[:500],
+                    insufficient=insufficient,
+                    citation_count=len(citations),
+                    created_at=_now_iso(),
+                    data={"citations": citations},
+                )
+            )
+            db.commit()
+        return audit_id
+
+    def list_founder_audit(self, org_id: str, *, limit: int = 100) -> list[FounderQueryAuditRow]:
+        with DBSession(self._engine) as db:
+            stmt = (
+                select(FounderQueryAuditRow)
+                .where(FounderQueryAuditRow.org_id == org_id)
+                .order_by(FounderQueryAuditRow.created_at.desc())  # type: ignore[attr-defined]
+                .limit(limit)
             )
             return list(db.exec(stmt))
 

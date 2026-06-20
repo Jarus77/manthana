@@ -88,6 +88,20 @@ class OrgConsentRow(SQLModel, table=True):
     data: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
 
 
+class FounderQueryAuditRow(SQLModel, table=True):
+    """Audit trail of founder queries — who looked at what, and whether the
+    answer was grounded/k-anon-met. Governance + after-the-fact investigation."""
+
+    __tablename__ = "founder_query_audit"  # type: ignore[assignment]
+    id: str = Field(primary_key=True)
+    org_id: str = Field(index=True)
+    query: str  # the NL question (truncated)
+    insufficient: bool = Field(index=True)  # withheld (k-anon/grounding) vs answered
+    citation_count: int
+    created_at: str = Field(index=True)
+    data: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))  # cited ids, etc.
+
+
 SERVER_TABLES = [
     OrgRow,
     TeamRow,
@@ -96,6 +110,7 @@ SERVER_TABLES = [
     RawTranscriptRow,
     ActionQueueRow,
     OrgConsentRow,
+    FounderQueryAuditRow,
 ]
 
 __all__ = [
@@ -106,5 +121,6 @@ __all__ = [
     "RawTranscriptRow",
     "ActionQueueRow",
     "OrgConsentRow",
+    "FounderQueryAuditRow",
     "SERVER_TABLES",
 ]

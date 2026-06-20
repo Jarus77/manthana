@@ -160,12 +160,36 @@ def create_app(
         body: FounderQueryBody, _: Annotated[None, Depends(require_admin)]
     ) -> dict[str, Any]:
         result = run_query(store, config, org_id=body.org_id, query=body.query, provider=provider)
+        store.record_founder_query(
+            org_id=body.org_id,
+            query=body.query,
+            insufficient=result.insufficient_data,
+            citations=result.citations,
+        )
         return {
             "filter": result.filter.model_dump(),
             "rollup": result.rollup.__dict__ if result.rollup else None,
             "narrative": result.narrative,
             "citations": result.citations,
             "insufficient_data": result.insufficient_data,
+        }
+
+    @app.get("/v1/admin/audit")
+    def audit(
+        org_id: str, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        rows = store.list_founder_audit(org_id)
+        return {
+            "entries": [
+                {
+                    "id": r.id,
+                    "query": r.query,
+                    "insufficient": r.insufficient,
+                    "citation_count": r.citation_count,
+                    "created_at": r.created_at,
+                }
+                for r in rows
+            ]
         }
 
     @app.post("/v1/admin/mine-skills")

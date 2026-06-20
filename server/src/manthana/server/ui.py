@@ -124,7 +124,21 @@ def mount_ui(
             "<th>pending skills</th><th></th></tr>"
             f"{''.join(rows) or '<tr><td colspan=5>no orgs yet</td></tr>'}</table>"
         )
-        return HTMLResponse(_page("Console", query_form + table))
+        # Recent founder queries across orgs (governance / transparency).
+        audit_rows = []
+        for o in orgs:
+            for entry in store.list_founder_audit(o.id, limit=5):
+                state = "withheld" if entry.insufficient else f"{entry.citation_count} cites"
+                audit_rows.append(
+                    f"<tr><td class='muted'>{_e(entry.created_at)}</td><td>{_e(o.id)}</td>"
+                    f"<td>{_e(entry.query)}</td><td>{_e(state)}</td></tr>"
+                )
+        audit = (
+            "<h3>Recent founder queries</h3>"
+            "<table><tr><th>when</th><th>org</th><th>query</th><th>result</th></tr>"
+            f"{''.join(audit_rows) or '<tr><td colspan=4>none yet</td></tr>'}</table>"
+        )
+        return HTMLResponse(_page("Console", query_form + table + audit))
 
     @app.post("/ui/query", response_class=HTMLResponse)
     def ui_query(
@@ -135,6 +149,12 @@ def mount_ui(
         if not _authed(manthana_admin):
             return RedirectResponse(url="/ui/login", status_code=303)
         result = run_query(store, config, org_id=org_id, query=query, provider=provider)
+        store.record_founder_query(
+            org_id=org_id,
+            query=query,
+            insufficient=result.insufficient_data,
+            citations=result.citations,
+        )
         if result.rollup is None:
             roll = "<p class='warn'>insufficient data (k-anonymity floor not met)</p>"
         else:

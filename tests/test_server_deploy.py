@@ -90,3 +90,29 @@ def test_make_object_store_s3_requires_bucket() -> None:
     cfg = ServerConfig(jwt_secret="x" * 40, admin_token="adm", object_store="s3")
     with pytest.raises(ValueError):
         make_object_store(cfg)  # raises before any boto3 import
+
+
+# ── founder-query audit log ─────────────────────────────────────────────────
+def test_founder_queries_are_audited() -> None:
+    config = ServerConfig(jwt_secret="x" * 40, admin_token="adm")
+    store = ServerStore.open("sqlite://")
+    store.create_org("o1", "Acme")
+    client = TestClient(create_app(config, store, InMemoryObjectStore(), MockProvider("{}")))
+    admin = {"X-Admin-Token": "adm"}
+
+    client.post("/v1/founder/query", json={"org_id": "o1", "query": "what shipped?"}, headers=admin)
+    client.post("/v1/founder/query", json={"org_id": "o1", "query": "any blockers?"}, headers=admin)
+
+    resp = client.get("/v1/admin/audit", params={"org_id": "o1"}, headers=admin)
+    assert resp.status_code == 200
+    entries = resp.json()["entries"]
+    assert len(entries) == 2
+    assert {e["query"] for e in entries} == {"what shipped?", "any blockers?"}
+    assert all(e["insufficient"] for e in entries)  # no data seeded -> withheld, still audited
+
+
+def test_audit_requires_admin_token() -> None:
+    config = ServerConfig(jwt_secret="x" * 40, admin_token="adm")
+    store = ServerStore.open("sqlite://")
+    client = TestClient(create_app(config, store, InMemoryObjectStore(), MockProvider("{}")))
+    assert client.get("/v1/admin/audit", params={"org_id": "o1"}).status_code == 401
