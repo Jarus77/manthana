@@ -208,7 +208,7 @@ def create_app(
 
     # ── Ask & Insights (self-query) ──────────────────────────────────────
     @app.get("/ask", response_class=HTMLResponse)
-    def ask_page(question: str = "", since: str = "") -> str:
+    def ask_page(question: str = "", since: str = "", source: str = "") -> str:
         # GET form (read-only query → no python-multipart). The structural panel
         # is token-free; a question runs the grounded `ask` (uses your model).
         from manthana.agent.insights import ask as run_ask
@@ -226,16 +226,22 @@ def create_app(
             f"est. API-equivalent cost ~${s.est_cost_usd}{cost_note}"
             f"<br>projects: {projects}{outcomes}</div>"
         )
+        src_opts = "".join(
+            f"<option value='{v}'{' selected' if source == v else ''}>{label}</option>"
+            for v, label in (("", "all sources"), ("full", "full only"),
+                             ("claude_summary", "Claude summaries only"))
+        )
         form = (
             "<div class='bar'><form method='get' action='/ask'>"
-            f"<input name='question' size='64' value='{_e(question)}' "
+            f"<input name='question' size='56' value='{_e(question)}' "
             "placeholder='ask about your sessions — e.g. what did I work on last week?'> "
+            f"<select name='source'>{src_opts}</select> "
             "<button>Ask</button></form>"
             "<small>grounded over your compactions; uses your model (claude)</small></div>"
         )
         answer = ""
         if question:
-            result = run_ask(store, question, provider=provider)
+            result = run_ask(store, question, provider=provider, source=source or None)
             cites = ", ".join(_e(c) for c in result.citations) or "—"
             tag = "" if result.grounded else " <span class='warn'>(ungrounded)</span>"
             answer = (

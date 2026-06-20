@@ -104,7 +104,10 @@ def mount_ui(
         query_form = (
             "<div class='bar'><form method='post' action='/ui/query'>"
             f"<select name='org_id'>{options or '<option>—</option>'}</select> "
-            "<input name='query' size='50' placeholder='what has the team been working on?'> "
+            "<input name='query' size='44' placeholder='what has the team been working on?'> "
+            "<select name='source'><option value=''>all sources</option>"
+            "<option value='full'>full only</option>"
+            "<option value='claude_summary'>Claude summaries only</option></select> "
             "<button>Ask</button></form></div>"
         )
         rows = []
@@ -144,11 +147,14 @@ def mount_ui(
     def ui_query(
         org_id: Annotated[str, Form()],
         query: Annotated[str, Form()],
+        source: Annotated[str, Form()] = "",
         manthana_admin: Annotated[str, Cookie()] = "",
     ) -> Response:
         if not _authed(manthana_admin):
             return RedirectResponse(url="/ui/login", status_code=303)
-        result = run_query(store, config, org_id=org_id, query=query, provider=provider)
+        result = run_query(
+            store, config, org_id=org_id, query=query, provider=provider, source=source or None
+        )
         store.record_founder_query(
             org_id=org_id,
             query=query,

@@ -60,6 +60,7 @@ class RawBody(BaseModel):
 class FounderQueryBody(BaseModel):
     org_id: str
     query: str
+    source: str | None = None  # None=all (default), "full", or "claude_summary"
 
 
 class MineSkillsBody(BaseModel):
@@ -159,7 +160,10 @@ def create_app(
     def founder_query(
         body: FounderQueryBody, _: Annotated[None, Depends(require_admin)]
     ) -> dict[str, Any]:
-        result = run_query(store, config, org_id=body.org_id, query=body.query, provider=provider)
+        result = run_query(
+            store, config, org_id=body.org_id, query=body.query, provider=provider,
+            source=body.source,
+        )
         store.record_founder_query(
             org_id=body.org_id,
             query=body.query,

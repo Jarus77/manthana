@@ -165,8 +165,15 @@ def structural_insights(store: Store, *, since: str | None = None) -> Structural
     )
 
 
-def ask(store: Store, query: str, *, provider: LLMProvider | None = None) -> AskResult:
-    """Grounded, cited NL answer over your own compactions."""
+def ask(
+    store: Store, query: str, *, provider: LLMProvider | None = None, source: str | None = None
+) -> AskResult:
+    """Grounded, cited NL answer over your own compactions.
+
+    ``source`` filters by how the compaction was made: None = all (default, the
+    cheapest digests included), "full" = only full compactions, "claude_summary" =
+    only the cheap summary-derived ones.
+    """
     provider = provider or default_provider()
     # 1) light NL → filter (degrade to no filter on any provider error)
     spec: dict[str, Any] = {}
@@ -181,7 +188,10 @@ def ask(store: Store, query: str, *, provider: LLMProvider | None = None) -> Ask
 
     comps = store.list_compactions(project=project, outcome=outcome, limit=_MAX_SCAN)
     comps = [c for c in comps if _within(c.started_at, cutoff)]
-    filtered = {k: v for k, v in {"project": project, "outcome": outcome}.items() if v}
+    if source:
+        comps = [c for c in comps if getattr(c, "source", "full") == source]
+    active = {"project": project, "outcome": outcome, "source": source}
+    filtered = {k: v for k, v in active.items() if v}
 
     if not comps:
         return AskResult(narrative=INSUFFICIENT, citations=[], grounded=False, filtered_to=filtered)

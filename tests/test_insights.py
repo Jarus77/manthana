@@ -110,6 +110,25 @@ def test_ask_without_compactions_is_insufficient() -> None:
     assert result.grounded is False and result.citations == []
 
 
+def test_ask_source_filter_full_only() -> None:
+    store = Store.open_memory()
+    _session(store, "s1", "alpha", datetime(2026, 6, 1, tzinfo=UTC))
+    _session(store, "s2", "alpha", datetime(2026, 6, 1, tzinfo=UTC))
+    _comp(store, "comp-1", "s1", "alpha", "full work")  # source defaults to "full"
+    cheap = store.get_compaction("comp-1")  # build a claude_summary one for s2
+    assert cheap is not None
+    summary_comp = cheap.model_copy(
+        update={"id": "comp-2", "session_id": "s2", "source": "claude_summary"}
+    )
+    store.upsert_compaction(summary_comp)
+    # default (all sources) sees both; full-only excludes the summary-derived one
+    narr = MockProvider("see [comp-1] and [comp-2]")
+    all_src = ask(store, "what did I do?", provider=narr)
+    full_only = ask(store, "x", provider=MockProvider("see [comp-1] and [comp-2]"), source="full")
+    assert set(all_src.citations) == {"comp-1", "comp-2"}
+    assert full_only.citations == ["comp-1"]  # comp-2 (claude_summary) filtered out
+
+
 def test_ask_applies_parsed_project_filter() -> None:
     store = Store.open_memory()
     _session(store, "s1", "scribe", datetime(2026, 6, 1, tzinfo=UTC))

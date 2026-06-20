@@ -207,11 +207,15 @@ def insights(since: str = "") -> None:
 
 
 @app.command()
-def ask(question: str) -> None:
-    """Ask a grounded, cited question about your own compactions (uses your model)."""
+def ask(question: str, source: str = "") -> None:
+    """Ask a grounded, cited question about your own compactions (uses your model).
+
+    --source full restricts to full compactions (default includes the cheap
+    Claude-summary-derived ones).
+    """
     from manthana.agent.insights import ask as run_ask
 
-    result = run_ask(Store.open(), question)
+    result = run_ask(Store.open(), question, source=source or None)
     typer.echo(result.narrative)
     if result.citations:
         typer.echo("sources: " + ", ".join(result.citations))

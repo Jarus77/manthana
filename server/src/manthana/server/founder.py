@@ -184,6 +184,7 @@ def run_query(
     org_id: str,
     query: str,
     provider: LLMProvider,
+    source: str | None = None,
 ) -> FounderResult:
     spec = parse_filter(query, provider)
     compactions = store.query_compactions(
@@ -196,6 +197,10 @@ def run_query(
         since=spec.since,
         until=spec.until,
     )
+    # source filter: None = all (default, includes cheap summary-derived); "full"
+    # = full only; "claude_summary" = summary-derived only.
+    if source:
+        compactions = [c for c in compactions if getattr(c, "source", "full") == source]
     rollup, kept_projects, kept_outcomes = _rollup(compactions, config.k_anon_floor)
 
     # Global k-anonymity floor.
