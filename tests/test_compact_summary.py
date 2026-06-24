@@ -147,3 +147,48 @@ def test_compact_session_uses_claude_summary(tmp_path: Path) -> None:
     store.add_turns(_turns("s1", n=3))
     c = compact_session(store, "s1", provider=MockProvider(_GOOD))
     assert c is not None and c.source == "claude_summary"
+
+
+def test_summary_attaches_to_only_the_slice_with_the_boundary() -> None:
+    # The cumulative summary must NOT bleed onto every slice of a split file.
+    # Two work-blocks (a 45-min gap splits them); the newest summary boundary sits
+    # in the SECOND block, so only that slice may carry has_compact_summary.
+    from datetime import timedelta
+
+    from manthana.collectors import sessionize
+
+    base = datetime(2026, 6, 1, 10, 0, tzinfo=UTC)
+
+    def t(i: int, mins: int) -> Turn:
+        return Turn(
+            id=f"t{i}", session_id="s", actor="e", seq=i, role=Role.user,
+            content="x", timestamp=base + timedelta(minutes=mins),
+        )
+
+    turns = [t(0, 0), t(1, 5), t(2, 60), t(3, 65)]  # gap between idx 1 and 2 → split
+    out = sessionize(
+        turns, surface=Surface.claude_code, actor="e", project="p", repo_root=None,
+        base_session_id="s", source_path=None, fallback_time=base,
+        summary_at_index=3,  # boundary lives in the second slice
+    )
+    assert len(out) == 2
+    assert out[0][0].has_compact_summary is False  # first block must NOT inherit it
+    assert out[1][0].has_compact_summary is True  # only the slice with the boundary
+
+
+def test_no_summary_index_flags_no_slice() -> None:
+    from datetime import timedelta
+
+    from manthana.collectors import sessionize
+
+    base = datetime(2026, 6, 1, 10, 0, tzinfo=UTC)
+    turns = [
+        Turn(id=f"t{i}", session_id="s", actor="e", seq=i, role=Role.user, content="x",
+             timestamp=base + timedelta(minutes=i))
+        for i in range(3)
+    ]
+    out = sessionize(
+        turns, surface=Surface.claude_code, actor="e", project="p", repo_root=None,
+        base_session_id="s", source_path=None, fallback_time=base, summary_at_index=None,
+    )
+    assert all(s.has_compact_summary is False for s, _ in out)

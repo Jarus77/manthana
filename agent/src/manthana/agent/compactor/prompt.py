@@ -14,9 +14,11 @@ import json
 
 from manthana.schemas import Session, Turn
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 _MAX_TURNS = 400
+_HEAD_TURNS = 250
+_TAIL_TURNS = 150  # _HEAD_TURNS + _TAIL_TURNS == _MAX_TURNS; always keep the ENDING
 _MAX_CHARS = 600
 
 _INSTRUCTIONS = """\
@@ -37,8 +39,9 @@ single JSON object — no prose, no code fences — with EXACTLY these keys:
   friction_points: array of { "category": one of
       ["loop","tool_error","abandon","retry","deadend"], "description": string,
       "turn_refs": string[] }  (turn seq numbers as strings; [] if unknown)
-  files_touched: string[]  (files read OR written — include DATA files such as the
-      CSVs/datasets consulted, not only source code edited)
+  files_touched: string[]  (file PATHS read or written — source files AND data files
+      like CSVs/.db/.parquet consulted. Give the path or filename ONLY, e.g.
+      "data/train.csv"; NOT descriptions, sizes, or table names like "patents (5.4GB)")
   prs_opened: string[]
   tests_added: string[]
   dead_end_branches: string[]
@@ -64,8 +67,21 @@ _SUMMARY_TAIL_TURNS = 40  # when a Claude summary is present, only the recent tu
 
 
 def serialize_turns(turns: list[Turn]) -> str:
-    sample = turns[:_MAX_TURNS]
-    return json.dumps([_turn_repr(t) for t in sample], ensure_ascii=False)
+    if len(turns) <= _MAX_TURNS:
+        items = [_turn_repr(t) for t in turns]
+    else:
+        # Keep the HEAD and the TAIL — the ending carries the outcome and late
+        # friction, which a flat first-N window silently drops. Only the middle is
+        # elided; the token budget is unchanged (_HEAD + _TAIL == _MAX_TURNS).
+        head = [_turn_repr(t) for t in turns[:_HEAD_TURNS]]
+        tail = [_turn_repr(t) for t in turns[-_TAIL_TURNS:]]
+        elided = {
+            "seq": -1,
+            "role": "system",
+            "text": f"[… {len(turns) - _HEAD_TURNS - _TAIL_TURNS} middle turns elided …]",
+        }
+        items = [*head, elided, *tail]
+    return json.dumps(items, ensure_ascii=False)
 
 
 def build_prompt(session: Session, turns: list[Turn], *, claude_summary: str | None = None) -> str:

@@ -88,6 +88,20 @@ class OrgConsentRow(SQLModel, table=True):
     data: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
 
 
+class ReleasedCompactionVectorRow(SQLModel, table=True):
+    """Cached embedding for a released compaction (semantic retrieval). Org-scoped;
+    derived/regenerable. Only released compactions are ever embedded — the index can
+    never contain unreleased/personal content."""
+
+    __tablename__ = "released_compaction_vector"  # type: ignore[assignment]
+    id: str = Field(primary_key=True)  # org-namespaced: org::compaction_id
+    org_id: str = Field(index=True)
+    compaction_id: str = Field(index=True)
+    dim: int
+    text_hash: str = Field(index=True)
+    vec: list[float] = Field(sa_column=Column(JSON, nullable=False))
+
+
 class FounderQueryAuditRow(SQLModel, table=True):
     """Audit trail of founder queries — who looked at what, and whether the
     answer was grounded/k-anon-met. Governance + after-the-fact investigation."""
@@ -111,6 +125,7 @@ SERVER_TABLES = [
     ActionQueueRow,
     OrgConsentRow,
     FounderQueryAuditRow,
+    ReleasedCompactionVectorRow,
 ]
 
 __all__ = [
@@ -122,5 +137,6 @@ __all__ = [
     "ActionQueueRow",
     "OrgConsentRow",
     "FounderQueryAuditRow",
+    "ReleasedCompactionVectorRow",
     "SERVER_TABLES",
 ]

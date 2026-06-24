@@ -15,6 +15,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 import hmac
 import html
+import json
 import logging
 from typing import Annotated
 
@@ -23,13 +24,15 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from manthana.skills import mine_org
 
 from .config import ServerConfig
-from .founder import run_query
+from .founder import run_query, team_topics, thread
 from .llm import LLMProvider
+from .storage import ObjectStore
 from .store import ServerStore
 
 _log = logging.getLogger(__name__)
 
 COOKIE = "manthana_admin"
+MANAGER_COOKIE = "manthana_manager"
 
 _STYLE = (
     "<style>body{font:14px system-ui;margin:2rem;max-width:1000px}"
@@ -51,7 +54,7 @@ def _page(title: str, body: str) -> str:
         f"<!doctype html><html><head><meta charset='utf-8'>"
         f"<title>Manthana — {_e(title)}</title>"
         f"{_STYLE}</head><body><h1>Manthana — Founder Console</h1>"
-        "<nav><a href='/ui'>Console</a>"
+        "<nav><a href='/ui'>Console</a><a href='/ui/manager'>Manager</a>"
         "<form method='post' action='/ui/logout'><button>Log out</button></form> "
         "<a href='/docs'>API</a></nav>"
         f"{body}</body></html>"
@@ -69,7 +72,11 @@ def _login_page(error: bool = False) -> str:
 
 
 def mount_ui(
-    app: FastAPI, config: ServerConfig, store: ServerStore, provider: LLMProvider
+    app: FastAPI,
+    config: ServerConfig,
+    store: ServerStore,
+    provider: LLMProvider,
+    object_store: ObjectStore | None = None,
 ) -> None:
     def _authed(cookie: str) -> bool:
         return bool(cookie) and hmac.compare_digest(cookie, config.admin_token)
@@ -118,7 +125,8 @@ def mount_ui(
             rows.append(
                 f"<tr><td>{_e(o.name)} <span class='muted'>({_e(o.id)})</span></td>"
                 f"<td>{teams}</td><td>{comps}</td><td>{pending}</td>"
-                f"<td><form method='post' action='/ui/mine'>"
+                f"<td><a href='/ui/topics?org_id={_e(o.id)}'>Topics</a> · "
+                f"<form method='post' action='/ui/mine'>"
                 f"<input type='hidden' name='org_id' value='{_e(o.id)}'>"
                 "<button>Mine org skills</button></form></td></tr>"
             )
@@ -167,16 +175,222 @@ def mount_ui(
             r = result.rollup
             roll = (
                 f"<p>sessions={r.session_count} · contributors={r.distinct_contributors} · "
-                f"cost=${r.total_cost_usd:.4f}</p>"
+                f"tokens={r.total_tokens:,} · "
+                f"<span title='API list-price equivalent — NOT subscription spend'>"
+                f"~${r.total_cost_usd:,.2f} API-list-equiv</span></p>"
                 f"<p>by project: {_e(r.by_project)}<br>by outcome: {_e(r.by_outcome)}</p>"
             )
         cites = ", ".join(_e(c) for c in result.citations) or "—"
+        cov = f"<p class='muted'>{_e(result.coverage.note())}</p>" if result.coverage else ""
         body = (
-            f"<p class='muted'>query: {_e(query)} · org: {_e(org_id)}</p>{roll}"
+            f"<p class='muted'>query: {_e(query)} · org: {_e(org_id)}</p>{roll}{cov}"
             f"<h3>Narrative</h3><pre>{_e(result.narrative)}</pre>"
             f"<p>citations: {cites}</p><p><a href='/ui'>← back</a></p>"
         )
         return HTMLResponse(_page("Query", body))
+
+    # ── Manager view (per-individual, k-anon-bypassing, AUDITED) ──────────────
+    def _manager_authed(cookie: str) -> bool:
+        return (
+            bool(config.manager_token)
+            and bool(cookie)
+            and hmac.compare_digest(cookie, config.manager_token)
+        )
+
+    @app.get("/ui/manager", response_class=HTMLResponse)
+    def manager_console(manthana_manager: Annotated[str, Cookie()] = "") -> Response:
+        if not config.manager_token:
+            return HTMLResponse(
+                _page(
+                    "Manager",
+                    "<p class='warn'>Manager view is disabled — set "
+                    "MANTHANA_SERVER_MANAGER_TOKEN to enable per-individual queries.</p>",
+                )
+            )
+        if not _manager_authed(manthana_manager):
+            return HTMLResponse(
+                _page(
+                    "Manager login",
+                    "<form method='post' action='/ui/manager/login'>"
+                    "<p>Manager token: <input type='password' name='token' autofocus></p>"
+                    "<button>Sign in</button></form>",
+                )
+            )
+        orgs = store.list_orgs()
+        options = "".join(f"<option value='{_e(o.id)}'>{_e(o.name)}</option>" for o in orgs)
+        sel = f"<select name='org_id'>{options or '<option>—</option>'}</select> "
+        form = (
+            "<div class='bar'><b>Manager view</b> — can name individuals; every query "
+            "is <u>logged</u>.<br>"
+            f"<form method='post' action='/ui/manager/query'>{sel}"
+            "<input name='query' size='40' placeholder='what did Suraj work on this week?'> "
+            "<button>Ask (named)</button></form><br>"
+            f"<form method='get' action='/ui/manager/topics'>{sel}"
+            "<button>Named topics</button></form> "
+            f"<form method='post' action='/ui/manager/thread'>{sel}"
+            "<input name='session_id' size='28' placeholder='session id'> "
+            "<button>Thread (arc)</button></form><br>"
+            f"<form method='post' action='/ui/manager/drill'>{sel}"
+            "<input name='compaction_id' size='28' placeholder='compaction id'> "
+            "<button>Drill raw</button></form></div>"
+        )
+        return HTMLResponse(_page("Manager", form))
+
+    @app.post("/ui/manager/login")
+    def manager_login(token: Annotated[str, Form()] = "") -> Response:
+        if not config.manager_token or not hmac.compare_digest(token, config.manager_token):
+            return HTMLResponse(
+                _page("Manager login", "<p class='warn'>Invalid manager token.</p>"
+                      "<p><a href='/ui/manager'>← back</a></p>"),
+                status_code=401,
+            )
+        resp = RedirectResponse(url="/ui/manager", status_code=303)
+        resp.set_cookie(MANAGER_COOKIE, token, httponly=True, samesite="lax", path="/ui/manager")
+        return resp
+
+    @app.post("/ui/manager/query", response_class=HTMLResponse)
+    def manager_ui_query(
+        org_id: Annotated[str, Form()],
+        query: Annotated[str, Form()],
+        manthana_manager: Annotated[str, Cookie()] = "",
+    ) -> Response:
+        if not _manager_authed(manthana_manager):
+            return RedirectResponse(url="/ui/manager", status_code=303)
+        result = run_query(
+            store, config, org_id=org_id, query=query, provider=provider, allow_individual=True
+        )
+        store.record_founder_query(
+            org_id=org_id,
+            query=query,
+            insufficient=result.insufficient_data,
+            citations=result.citations,
+            individual=True,
+        )
+        if result.rollup is None:
+            roll = "<p class='warn'>insufficient data</p>"
+        else:
+            r = result.rollup
+            roll = (
+                f"<p>sessions={r.session_count} · contributors={r.distinct_contributors} · "
+                f"tokens={r.total_tokens:,}</p>"
+            )
+        cites = ", ".join(_e(c) for c in result.citations) or "—"
+        body = (
+            "<p class='warn'>⚠ named (manager) query — this lookup is logged.</p>"
+            f"<p class='muted'>query: {_e(query)} · org: {_e(org_id)}</p>{roll}"
+            f"<h3>Narrative</h3><pre>{_e(result.narrative)}</pre>"
+            f"<p>citations: {cites}</p><p><a href='/ui/manager'>← back</a></p>"
+        )
+        return HTMLResponse(_page("Manager query", body))
+
+    @app.get("/ui/manager/topics", response_class=HTMLResponse)
+    def manager_topics_page(
+        org_id: str, manthana_manager: Annotated[str, Cookie()] = ""
+    ) -> Response:
+        if not _manager_authed(manthana_manager):
+            return RedirectResponse(url="/ui/manager", status_code=303)
+        tops = team_topics(store, config, org_id, named=True)
+        store.record_founder_query(
+            org_id=org_id, query="[topics]", insufficient=False, citations=[], individual=True
+        )
+        rows = "".join(
+            f"<tr><td>{_e(t.label)}</td>"
+            f"<td>{_e(', '.join(sorted(a.split('@')[0] for a in t.contributors)))}</td>"
+            f"<td>{len(t.sessions)}</td></tr>"
+            for t in tops
+        )
+        body = (
+            "<p class='warn'>⚠ named (manager) topics — logged.</p>"
+            f"<p class='muted'>org: {_e(org_id)}</p>"
+            "<table><tr><th>topic</th><th>people</th><th>sessions</th></tr>"
+            f"{rows or '<tr><td colspan=3>no topics</td></tr>'}</table>"
+            "<p><a href='/ui/manager'>← back</a></p>"
+        )
+        return HTMLResponse(_page("Manager topics", body))
+
+    @app.post("/ui/manager/thread", response_class=HTMLResponse)
+    def manager_thread_page(
+        org_id: Annotated[str, Form()],
+        session_id: Annotated[str, Form()],
+        manthana_manager: Annotated[str, Cookie()] = "",
+    ) -> Response:
+        if not _manager_authed(manthana_manager):
+            return RedirectResponse(url="/ui/manager", status_code=303)
+        comps = thread(store, org_id, session_id)
+        store.record_founder_query(
+            org_id=org_id, query=f"[thread] {session_id}", insufficient=not comps,
+            citations=[c.id for c in comps], individual=True,
+        )
+        rows = "".join(
+            f"<tr><td class='muted'>{_e(str(c.started_at)[:16])}</td>"
+            f"<td>{_e(c.actor.split('@')[0])}</td><td>{_e(c.project)}</td>"
+            f"<td>{_e(c.task_intent[:70])}</td></tr>"
+            for c in comps
+        )
+        body = (
+            "<p class='warn'>⚠ named (manager) thread — logged.</p>"
+            f"<p class='muted'>arc of {_e(session_id)} · org: {_e(org_id)}</p>"
+            "<table><tr><th>when</th><th>who</th><th>project</th><th>intent</th></tr>"
+            f"{rows or '<tr><td colspan=4>no compactions in this thread</td></tr>'}</table>"
+            "<p><a href='/ui/manager'>← back</a></p>"
+        )
+        return HTMLResponse(_page("Manager thread", body))
+
+    @app.post("/ui/manager/drill", response_class=HTMLResponse)
+    def manager_drill_page(
+        org_id: Annotated[str, Form()],
+        compaction_id: Annotated[str, Form()],
+        manthana_manager: Annotated[str, Cookie()] = "",
+    ) -> Response:
+        if not _manager_authed(manthana_manager):
+            return RedirectResponse(url="/ui/manager", status_code=303)
+        turns: list[dict[str, object]] = []
+        key = store.get_raw_key(compaction_id, org_id)
+        if key and object_store is not None:
+            blob = object_store.get(key)
+            if blob:
+                turns = [
+                    json.loads(line) for line in blob.decode("utf-8").splitlines() if line.strip()
+                ]
+        store.record_founder_query(
+            org_id=org_id, query=f"[drill] {compaction_id}", insufficient=not turns,
+            citations=[compaction_id] if turns else [], individual=True,
+        )
+        rows = ""
+        for t in turns:
+            txt = str(t.get("content") or t.get("tool_output") or "")[:1500]
+            rows += (
+                f"<tr><td>{_e(t.get('seq'))}</td><td>{_e(t.get('role'))}</td>"
+                f"<td><pre>{_e(txt)}</pre></td></tr>"
+            )
+        body = (
+            "<p class='warn'>⚠ named (manager) raw drill — logged. Released+redacted raw only.</p>"
+            f"<p class='muted'>{_e(compaction_id)} · org: {_e(org_id)}</p>"
+            "<table><tr><th>seq</th><th>role</th><th>content (redacted)</th></tr>"
+            f"{rows or '<tr><td colspan=3>no released raw for this compaction</td></tr>'}</table>"
+            "<p><a href='/ui/manager'>← back</a></p>"
+        )
+        return HTMLResponse(_page("Manager drill", body))
+
+    @app.get("/ui/topics", response_class=HTMLResponse)
+    def ui_topics(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:
+        if not _authed(manthana_admin):
+            return RedirectResponse(url="/ui/login", status_code=303)
+        tops = team_topics(store, config, org_id)
+        rows = "".join(
+            f"<tr><td>{_e(t.label)}</td><td>{len(t.contributors)}</td>"
+            f"<td>{len(t.sessions)}</td>"
+            f"<td class='muted'>{_e('; '.join(t.sample_intents))}</td></tr>"
+            for t in tops
+        )
+        empty = "<tr><td colspan=4>no cross-cutting topics meet the k-anon floor yet</td></tr>"
+        body = (
+            f"<p class='muted'>org: {_e(org_id)} · de-identified, "
+            f"≥{config.k_anon_floor} contributors per topic</p>"
+            "<table><tr><th>topic</th><th>people</th><th>sessions</th><th>sample work</th></tr>"
+            f"{rows or empty}</table><p><a href='/ui'>← back</a></p>"
+        )
+        return HTMLResponse(_page("Team topics", body))
 
     @app.post("/ui/mine")
     def ui_mine(
@@ -204,4 +418,4 @@ def mount_ui(
         return RedirectResponse(url="/ui", status_code=303)
 
 
-__all__ = ["mount_ui", "COOKIE"]
+__all__ = ["mount_ui", "COOKIE", "MANAGER_COOKIE"]

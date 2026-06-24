@@ -1062,3 +1062,197 @@ carry summaries (preTokens up to ~1M). Adversarial review: 0 actionable bugs (10
 
 **Deferred:** auto-compacting non-summarized sessions; auto-periodic tune; a
 separate proxy launchd service (headroom's durable init covers persistence).
+
+## 30. Empirical content validation + fixes #1/#2 (2026-06-20)
+
+First real *content-quality* validation (not pipeline-executes tests): 10 real
+sessions across projects compacted via `claude -p` (Opus) + 2 real founder queries.
+Harness + writeup in `validation/{FINDINGS,worksheet,score_compactions,founder_check}`.
+
+**Verdict:** the LLM reasoning (intent/approach/friction descriptions) is genuinely
+high quality and design-partner-ready; four mechanical defects were not. Founder
+citation grounding is solid (5/5 valid) for "what is X doing", but "what went wrong"
+is unanswerable (parser collapses failure→`abandoned`; `friction_points` never
+queried/fed to the narrative brief).
+
+**Fix #1 — honest cost** (`cost/cost.py`, `schemas/compaction.py`, `compactor.py`,
+`server/founder.py`, `server/ui.py`): cost was priced at the **last-seen** model's
+rate (mixed-model sessions mispriced) and presented as if it were spend, while it's an
+**API list-price equivalent dominated by cumulative cache-reads** (scribe: 451M
+cache-read → $791; founder weekly rollup $1,521 for one engineer). Now: `estimate_cost`
+prices **per-turn** at each turn's own model; `CostBreakdown.total_tokens` +
+`BaseCompaction.total_tokens` surface real magnitude; `est_cost_usd` description and the
+founder UI relabel it "API-list-equiv (NOT subscription spend)"; `Rollup.total_tokens`
+added.
+
+**Fix #2 — slice-scoped summary** (`collectors/claude_code.py` + `sessionize.py`,
+`agent/capture.py`): `read_summary` is file-scoped (newest cumulative summary), so every
+sessionize slice of a summarized file inherited the whole-arc summary — one scribe file
+= **46 slices all flagged**, which would yield 46 duplicate whole-arc compactions.
+`read()` now records `compact_summary_at` (turn index of the newest boundary);
+`sessionize(summary_at_index=)` flags **only the one slice that contains it**. Verified
+on real data: scribe file **46/46 → 1** flagged; corpus-wide flagged sessions
+**196 → 5** (one per file that has a summary).
+
+**Fix #3 — deterministic `files_touched`** (`compactor/compactor.py` + prompt): the
+field was LLM-listed → starved on the summary path (recall 2/21, 1/7) and polluted with
+dataset *descriptions* ("patents (5.4GB)"). Now `files_from_turns()` extracts paths from
+the session's own Edit/Write/Read/MultiEdit/NotebookEdit tool calls (authoritative, full
+session — not just the prompt window); LLM-listed entries are merged only if they look
+like real paths (catching data files opened via Bash). Verified: scribe.11 2/21→21/21,
+harness.96 1/7→7/7, bird-bench.7 6/21→21/21.
+
+**Fix #4 — head+tail window** (`compactor/prompt.py`): `serialize_turns` took the first
+400 turns, silently dropping the ending of long sessions (data never saw its crash +
+recovery at turns 497–506). Now it keeps a 250-turn head + 150-turn tail with an elision
+marker (same 400-turn budget), so the outcome and late friction are always in view.
+`PROMPT_VERSION` bumped v1→v2. Verified on data (507t) and dab_clone (558t): last turn now
+present.
+
+**Founder friction path** (`server/founder.py`): "what went wrong?" was a dead-end —
+the parser collapsed failure wording → `outcome='abandoned'` (0 rows), and the narrative
+brief carried only `{id, project, intent, outcome}` while the narrative prompt never saw
+the question. Now: `_PARSE_PROMPT` instructs the model NOT to set `outcome` for
+wrong/failed/problem/blocker/friction wording (friction lives within sessions of any
+outcome); the brief includes each compaction's `friction_points` (category + redacted
+description); `_NARRATIVE_PROMPT` takes the `query` so it answers the actual question.
+Verified live: "what went wrong recently?" now returns a grounded, 3-citation failure
+summary (LFS budget, re-ingest bug, citation-grounding fix) instead of insufficient_data.
+
+**Tests:** +8 (per-turn mixed-model pricing, `total_tokens`, slice-scope attaches to the
+right slice only, no-summary flags none, deterministic files_touched, head+tail keeps the
+ending, friction+query reach the narrative, parse doesn't force an outcome). **204 tests,
+ruff+pyright clean.**
+
+**Engineer dashboard cost label** (`dashboard/app.py`): the `/cost` page and compactions
+table now show **tokens** + relabel the dollar figure "API-list-equiv" with a note that it
+is not subscription spend (mirrors the founder console).
+
+**All five validation defects are resolved** (#1 cost semantics, #2 slice-scope bleed,
+#3 files_touched, #4 head+tail, founder friction path) + the cost-label cleanup. The
+compactor's reasoning was already design-partner-grade; the mechanical/founder layers now
+match it.
+
+## 31. Demo: synthetic org + audited manager view (2026-06-20)
+
+For a believable founder demo we needed a multi-engineer org and had to resolve a fork:
+per-person founder questions ("what did Suraj work on?") collide with k-anonymity. Stance
+chosen: **privacy by default, accountable escalation** — the founder console stays
+k-anon-only; a separate, audited **manager view** can name individuals.
+
+- **Synthetic seed** (`validation/seed_demo_org.py`): deterministic, no-LLM, ~44
+  `EngineeringCompaction`s across 11 named engineers / 5 projects (≥4 contributors each,
+  so aggregates clear the floor-4), into an isolated `manthana-demo.db` (gitignored;
+  `@acme.demo` actors — never the real local store).
+- **Manager view** (`server/founder.py`, `app.py`, `config.py`, `store.py`, `ui.py`):
+  `run_query(allow_individual=True)` skips the k-anon global floor + per-bucket gating;
+  `_resolve_actor` maps an NL name ("Suraj") → actor id by unique substring;
+  `ServerConfig.manager_token` (distinct from admin; `None`=disabled) gates a
+  `require_manager` dep behind `POST /v1/manager/query` and the `/ui/manager` console
+  (separate `manthana_manager` cookie). **Every manager query is audited**
+  (`record_founder_query(individual=True)`, surfaced in `/v1/admin/audit`). The default
+  founder path (`/ui`, `/v1/founder/query`) is unchanged — per-person queries still
+  return insufficient_data.
+- **Demo runner** (`validation/demo_queries.py`): drives the real pipeline at floor-4 via
+  the `claude` CLI — founder aggregates (cited), founder per-person (refused), manager
+  per-person (grounded + logged). `docs/DEMO.md` updated with the full flow.
+
+**Tests:** +5 (manager bypass vs founder suppress, `_resolve_actor`, manager endpoint
+auth + individual audit, manager view disabled w/o token, empty `manager_token` rejected).
+**209 tests, ruff+pyright clean.**
+
+## 32. Query engine — Stage 1: semantic retrieval + coverage (2026-06-20)
+
+First slice of the indexed, two-tier, trust-gated query engine (full design + the
+locked variables — small-team scale · digests+raw-drill-down · up to cross-engineer
+relational — are in `.claude/plans/cheeky-noodling-cherny.md`). Replaces the old
+`filter → first-50 → stuff` with **structured prefilter + semantic rank + a coverage
+signal** ("complete or said-so"), on both engineer and founder/manager sides.
+
+- **Shared primitive** (`skills/retrieval.py`, Apache so both packages use it):
+  `rank(query, items, vectors, embedder, k) -> (top_k, Coverage)`; `Coverage(matched,
+  used).truncated/.note()`. Reuses `skills/embed.py` (bge-large if the `embeddings`
+  extra is installed, else the deterministic `HashingEmbedder`) + `cosine` — **no
+  vector DB** at small-team scale (in-process cosine over a cached vector per digest).
+- **Vector cache:** agent `CompactionVectorRow` (migration v4) + `vector_meta/upsert_
+  vector/get_vectors`; server `ReleasedCompactionVectorRow` (`released_compaction_
+  vector`) — **released-only by construction**, so the org index can never hold
+  unreleased/personal content. Lazy index-on-query, scoped to the structured-filter
+  candidates, re-embed on dim/content change (`text_hash`).
+- **Wired in:** `agent/insights.py::ask` and `server/founder.py::run_query` rank the
+  filtered/visible candidates → top-K (`_ANSWER_K=40`), attach `coverage` to
+  `AskResult`/`FounderResult`, feed it into the narrative prompt, and surface it in the
+  CLI / dashboard / founder console. k-anon + the manager view are unchanged (manager
+  ranks its full visible set).
+- **Verified on real data:** local "text-to-SQL RL" → bird-bench/trajectory_eval;
+  "Hindi ASR tokenizer" → TTS/hinglish; demo org "OmniSQL RL on Modal" → the 4
+  text-to-sql engineers, with the coverage note firing and a released-only index.
+
+**Tests:** +4 (`tests/test_retrieval.py`: rank ordering + truncation, ask coverage,
+founder coverage + released-only index). **213 tests, ruff+pyright clean.**
+
+**Next (per the plan):** Stage 2 (activate `resumed_from` threads + topic clustering →
+founder topic-relational) · Stage 3 (`drill_raw` + manager person-relational + MCP).
+
+## 33. Query engine — Stage 2: assembly (threads + topics) (2026-06-25)
+
+Adds the relational substrate on top of Stage-1 ranking, reusing the miner's clustering
+(no new ML, no schema change). Threads = an engineer's arc across the resumed slices of
+one transcript (`session_id` family — `<base>` + `<base>.N`); topics = emergent clusters
+spanning sessions AND engineers.
+
+- **Shared primitives** (`skills/assembly.py`, Apache): `thread_key` / `group_threads`;
+  `Topic` (+ `deidentified()`); `topics(compactions, embedder, min_contributors=)` wraps
+  `cluster_compactions` + `recurring` (the existing k-anon gate). Labels are deterministic
+  (a representative member's intent) — no LLM/token spend.
+- **Relational split by trust:** `team_topics(..., named=False)` gates to
+  `k_anon_floor` contributors → **founder** sees `deidentified()` (label + counts + sample
+  intents, no names); `named=True` → **manager** sees named members (audited);
+  **engineers** get their own (`min_contributors=1`).
+- **Surfaces:** server `GET /v1/founder/topics` (de-identified) · `GET /v1/manager/topics`
+  + `POST /v1/manager/thread` (named, **audited** `individual=True`) · founder console
+  `/ui/topics` (per-org link) · manager console named topics + thread forms · engineer
+  dashboard `/topics` (own clusters) + `insights.my_topics`/`thread`. A thread is one
+  contributor, so the founder path is correctly empty under k-anon.
+- **Verified live (demo org, no LLM):** founder sees **8 de-identified cross-engineer
+  topics** (ASR, text-to-SQL/GRPO, LFS-recovery, CI, Docker…), each ≥4 contributors;
+  manager sees 12 (incl. smaller clusters).
+
+**Tests:** +7 (`tests/test_assembly.py`: thread_key/group_threads, topics k-anon gate +
+dedup, deidentified drops names, founder de-identified vs manager named endpoints + audit,
+manager thread arc + audit). **220 tests, ruff+pyright clean.**
+
+**Next:** Stage 3 — `drill_raw` (engineer-self → org released+redacted+audited) + manager
+person-relational + the MCP surface.
+
+## 34. Query engine — Stage 3: drill-down + person-relational + MCP (2026-06-25)
+
+Closes the engine: Tier-2 raw depth behind the trust boundary, manager person-relational,
+and the MCP surface (the "lean on Claude Code" realization).
+
+- **drill_raw (two trust tiers):** engineer-self — `insights.drill_raw(store,
+  compaction_id, start, end)` → own local turns, unredacted (own data); dashboard
+  `/drill/{id}` + a "raw turns →" link on Compactions. Org — `ServerStore.get_raw_key`
+  → `object_store.get` → JSONL of **already-redacted** turns (redacted at sync), via
+  `POST /v1/manager/drill` (`require_manager`, **audited** `individual=True`) + a manager
+  console drill form. **No founder drill path** (404). `mount_ui` now takes `object_store`.
+- **Person-relational (manager):** `run_query` keeps `spec.actor` only if it resolves to a
+  *known* actor; an unresolved/multi-name ("Suraj vs Tarun") → `None`, so the narrative
+  sees both and compares (no collapse to a bogus single-actor filter).
+- **MCP surface (engineer-self):** new optional extra `mcp`; `agent/mcp_server.py` exposes
+  read-only tools (`insights`, `ask`, `topics`, `thread`, `drill_raw`) over the engineer's
+  OWN local store (no org, so no k-anon/redaction); `manthana mcp` launches the stdio
+  server and degrades to an install hint when the extra is absent. Tool bodies delegate to
+  the tested `insights` functions.
+- **Verified:** engineer drill pulled 23 real turns of a live compaction; `manthana mcp`
+  prints the install hint (extra absent); org drill unit-tested with a seeded in-memory
+  object store (token-gated, audited, redacted, founder-blocked).
+
+**Tests:** +5 (`tests/test_drill_mcp.py`: engineer drill slice, manager drill
+token+audit+redacted, no founder drill path, "A vs B" doesn't collapse, MCP tools +
+install hint). **225 tests, ruff+pyright clean.**
+
+**The query engine (Stages 1–3) is complete:** indexed semantic retrieval + coverage ·
+threads + topic-relational (founder de-identified / manager named) · two-tier digest→raw
+drill-down · all behind one trust boundary (released-only · redaction · k-anon · manager
+audit · no silent truncation), with an MCP surface for engineer-self.

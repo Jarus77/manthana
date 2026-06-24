@@ -63,6 +63,7 @@ def _page(title: str, body: str, *, refresh: int = 0) -> str:
         f"{refresh_tag}{_HTMX}{_STYLE}</head><body>"
         "<h1>Manthana</h1>"
         "<nav><a href='/'>Sessions</a><a href='/ask'>Ask</a>"
+        "<a href='/topics'>Topics</a>"
         "<a href='/compactions'>Compactions</a><a href='/skills'>Skills</a>"
         "<a href='/optimize'>Optimize</a><a href='/cost'>Cost</a>"
         "<a href='/actions'>Actions</a></nav>"
@@ -111,7 +112,8 @@ def _compaction_row(c: BaseCompaction) -> str:
     label = "unrelease" if c.released else "release"
     details = (
         f"<details><summary>{_e(c.task_intent[:80])}</summary>"
-        f"<b>intent:</b> {_e(c.task_intent)}<br><b>approach:</b> {_e(c.approach)}</details>"
+        f"<b>intent:</b> {_e(c.task_intent)}<br><b>approach:</b> {_e(c.approach)}<br>"
+        f"<a href='/drill/{_e(c.id)}'>raw turns →</a></details>"
     )
     cost = f"${c.est_cost_usd:.4f}" if c.est_cost_usd is not None else "—"
     return (
@@ -244,8 +246,14 @@ def create_app(
             result = run_ask(store, question, provider=provider, source=source or None)
             cites = ", ".join(_e(c) for c in result.citations) or "—"
             tag = "" if result.grounded else " <span class='warn'>(ungrounded)</span>"
+            cov = (
+                f"<p class='muted'>{_e(result.coverage.note())}</p>"
+                if result.coverage and result.coverage.truncated
+                else ""
+            )
             answer = (
-                f"<h3>Answer{tag}</h3><pre>{_e(result.narrative)}</pre><p>sources: {cites}</p>"
+                f"<h3>Answer{tag}</h3><pre>{_e(result.narrative)}</pre>"
+                f"{cov}<p>sources: {cites}</p>"
             )
         return _page("Ask", panel + form + answer)
 
@@ -358,7 +366,8 @@ def create_app(
         )
         table = (
             "<table><tr><th>id</th><th>project</th><th>outcome</th><th>tier</th>"
-            "<th>cost</th><th>state</th><th></th><th>summary</th></tr>"
+            "<th title='API list-price equivalent — NOT subscription spend'>API-list $</th>"
+            "<th>state</th><th></th><th>summary</th></tr>"
             f"{rows or '<tr><td colspan=8>no compactions — compact a session first</td></tr>'}"
             "</table>"
         )
@@ -427,21 +436,68 @@ def create_app(
             write_proposal(proposal, skills_path)
         return RedirectResponse(url="/skills", status_code=303)
 
+    # ── Raw drill-down (your own turns behind a compaction) ───────────────
+    @app.get("/drill/{compaction_id}", response_class=HTMLResponse)
+    def drill(compaction_id: str) -> str:
+        from manthana.agent.insights import drill_raw
+
+        turns = drill_raw(store, compaction_id)
+        rows = "".join(
+            f"<tr><td>{t.seq}</td><td>{_e(t.role)}</td>"
+            f"<td><pre>{_e((t.content or t.tool_output or '')[:1500])}</pre></td></tr>"
+            for t in turns
+        )
+        body = (
+            f"<div class='card'><b>Raw turns</b> — {_e(compaction_id)} "
+            "(your own data; the depth behind the digest)</div>"
+            "<table><tr><th>seq</th><th>role</th><th>content</th></tr>"
+            f"{rows or '<tr><td colspan=3>no turns (unknown compaction)</td></tr>'}</table>"
+        )
+        return _page("Drill", body)
+
+    # ── Topics (your own emergent clusters across sessions) ───────────────
+    @app.get("/topics", response_class=HTMLResponse)
+    def topics_page() -> str:
+        from manthana.agent.insights import my_topics
+
+        tops = my_topics(store)
+        rows = "".join(
+            f"<tr><td>{_e(t.label)}</td><td>{len(t.sessions)}</td>"
+            f"<td class='muted'>{_e('; '.join(t.sample_intents))}</td></tr>"
+            for t in tops
+        )
+        empty = "<tr><td colspan=3>no recurring topics yet — compact a few sessions</td></tr>"
+        body = (
+            "<div class='card'><b>Your topics</b> — emergent clusters across your own "
+            "sessions (no LLM; semantic clustering of your compactions)</div>"
+            "<table><tr><th>topic</th><th>sessions</th><th>sample work</th></tr>"
+            f"{rows or empty}</table>"
+        )
+        return _page("Topics", body)
+
     # ── Cost ─────────────────────────────────────────────────────────────
     @app.get("/cost", response_class=HTMLResponse)
     def cost() -> str:
         total = 0.0
+        total_tok = 0
         rows = []
         for s in store.list_sessions(limit=200):
             breakdown = estimate_cost(store.get_turns(s.id))
             total += breakdown.usd
+            total_tok += breakdown.total_tokens
             rows.append(
                 f"<tr><td>{_e(s.id)}</td><td>{_e(s.project)}</td>"
-                f"<td>{_e(breakdown.tier)}</td><td>${breakdown.usd:.4f}</td></tr>"
+                f"<td>{_e(breakdown.tier)}</td><td>{breakdown.total_tokens:,}</td>"
+                f"<td>${breakdown.usd:,.2f}</td></tr>"
             )
         table = (
-            "<table><tr><th>session</th><th>project</th><th>tier</th><th>est. cost</th></tr>"
-            f"{''.join(rows)}</table><p><b>Total: ${total:.4f}</b></p>"
+            "<table><tr><th>session</th><th>project</th><th>tier</th><th>tokens</th>"
+            "<th>API-list-equiv</th></tr>"
+            f"{''.join(rows)}</table>"
+            f"<p><b>Total: {total_tok:,} tokens · ~${total:,.2f} API-list-equiv</b></p>"
+            "<p><small>Cost is an API list-price equivalent (dominated by cache-reads); "
+            "it is NOT what a Claude subscription bills. Use tokens for real magnitude."
+            "</small></p>"
         )
         return _page("Cost", table)
 

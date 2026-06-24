@@ -34,6 +34,7 @@ from .tables import (
     OrgRow,
     RawTranscriptRow,
     ReleasedCompactionRow,
+    ReleasedCompactionVectorRow,
     TeamRow,
 )
 
@@ -130,6 +131,46 @@ class ServerStore:
     def list_teams(self, org_id: str) -> list[TeamRow]:
         with DBSession(self._engine) as db:
             return list(db.exec(select(TeamRow).where(TeamRow.org_id == org_id)))
+
+    def list_actors(self, org_id: str) -> list[ActorRow]:
+        with DBSession(self._engine) as db:
+            return list(db.exec(select(ActorRow).where(ActorRow.org_id == org_id)))
+
+    # ── compaction vectors (semantic retrieval cache; released-only) ──────
+    def vector_meta(self, org_id: str) -> dict[str, tuple[int, str]]:
+        with DBSession(self._engine) as db:
+            stmt = select(ReleasedCompactionVectorRow).where(
+                ReleasedCompactionVectorRow.org_id == org_id
+            )
+            return {r.compaction_id: (r.dim, r.text_hash) for r in db.exec(stmt)}
+
+    def upsert_vector(
+        self, org_id: str, compaction_id: str, *, dim: int, text_hash: str, vec: list[float]
+    ) -> None:
+        with DBSession(self._engine) as db:
+            db.merge(
+                ReleasedCompactionVectorRow(
+                    id=_pk(org_id, compaction_id),
+                    org_id=org_id,
+                    compaction_id=compaction_id,
+                    dim=dim,
+                    text_hash=text_hash,
+                    vec=vec,
+                )
+            )
+            db.commit()
+
+    def get_vectors(self, org_id: str, ids: list[str], *, dim: int) -> dict[str, list[float]]:
+        wanted = set(ids)
+        with DBSession(self._engine) as db:
+            stmt = select(ReleasedCompactionVectorRow).where(
+                ReleasedCompactionVectorRow.org_id == org_id
+            )
+            return {
+                r.compaction_id: r.vec
+                for r in db.exec(stmt)
+                if r.compaction_id in wanted and r.dim == dim
+            }
 
     def count_compactions(self, org_id: str) -> int:
         with DBSession(self._engine) as db:
@@ -228,6 +269,16 @@ class ServerStore:
             return [CompactionAdapter.validate_python(row.data) for row in db.exec(stmt)]
 
     # ── raw transcript release (org-namespaced; ownership enforced by caller) ─
+    def get_raw_key(self, compaction_id: str, org_id: str) -> str | None:
+        """Object-store key for a compaction's released raw transcript (org-scoped)."""
+        with DBSession(self._engine) as db:
+            row = db.exec(
+                select(RawTranscriptRow)
+                .where(RawTranscriptRow.compaction_id == compaction_id)
+                .where(RawTranscriptRow.org_id == org_id)
+            ).first()
+            return row.object_key if row else None
+
     def record_raw(self, compaction_id: str, org_id: str, object_key: str) -> None:
         with DBSession(self._engine) as db:
             db.merge(
@@ -278,9 +329,18 @@ class ServerStore:
 
     # ── founder-query audit ──────────────────────────────────────────────
     def record_founder_query(
-        self, *, org_id: str, query: str, insufficient: bool, citations: list[str]
+        self,
+        *,
+        org_id: str,
+        query: str,
+        insufficient: bool,
+        citations: list[str],
+        individual: bool = False,
     ) -> str:
-        """Append an audit row for a founder query (governance / transparency)."""
+        """Append an audit row for a founder query (governance / transparency).
+
+        ``individual=True`` marks a manager view query that could name a person —
+        the accountability record for the privacy escalation."""
         audit_id = f"fq-{uuid.uuid4().hex[:12]}"
         with DBSession(self._engine) as db:
             db.merge(
@@ -291,7 +351,7 @@ class ServerStore:
                     insufficient=insufficient,
                     citation_count=len(citations),
                     created_at=_now_iso(),
-                    data={"citations": citations},
+                    data={"citations": citations, "individual": individual},
                 )
             )
             db.commit()

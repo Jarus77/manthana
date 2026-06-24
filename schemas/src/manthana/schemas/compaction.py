@@ -47,7 +47,15 @@ class BaseCompaction(BaseModel):
     friction_points: list[FrictionPoint] = Field(default_factory=list)
 
     tier_used: str | None = Field(default=None, description="Dominant model tier")
-    est_cost_usd: float | None = None
+    est_cost_usd: float | None = Field(
+        default=None,
+        description="API list-price equivalent in USD — NOT subscription spend. "
+        "Dominated by cache-reads on long sessions; prefer total_tokens for magnitude.",
+    )
+    total_tokens: int | None = Field(
+        default=None,
+        description="Total tokens (input + output + cache write + cache read) for the session",
+    )
     reusable_pattern: bool = False
 
     # Trust contract: compactions flow up by default once released; raw

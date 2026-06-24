@@ -60,6 +60,11 @@ def _create_sync_state_table(conn: Connection) -> None:
     SQLModel.metadata.create_all(conn, tables=[tables.SyncStateRow.__table__])  # type: ignore[list-item]
 
 
+def _create_vector_table(conn: Connection) -> None:
+    """Cached compaction embeddings for semantic retrieval (added in v4)."""
+    SQLModel.metadata.create_all(conn, tables=[tables.CompactionVectorRow.__table__])  # type: ignore[list-item]
+
+
 # Each migration creates exactly the tables it introduces (create_all is
 # idempotent / checkfirst), so a database at an older version gains the new
 # tables when later migrations apply, and fresh databases get everything in order.
@@ -67,6 +72,7 @@ MIGRATIONS: list[Migration] = [
     Migration(version=1, name="001_initial", apply=_create_initial_tables),
     Migration(version=2, name="002_action_consent_tables", apply=_create_action_consent_tables),
     Migration(version=3, name="003_sync_state", apply=_create_sync_state_table),
+    Migration(version=4, name="004_compaction_vectors", apply=_create_vector_table),
 ]
 
 _SCHEMA_MIGRATIONS_DDL = text(

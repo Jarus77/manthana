@@ -72,14 +72,29 @@ def sessionize(
     source_path: str | None,
     fallback_time: datetime,
     mode: Mode = Mode.work,
-    has_compact_summary: bool = False,
+    summary_at_index: int | None = None,
 ) -> list[tuple[Session, list[Turn]]]:
-    """Group ordered turns into Sessions with their (re-sequenced) turns."""
+    """Group ordered turns into Sessions with their (re-sequenced) turns.
+
+    ``summary_at_index`` is the global turn index of Claude's newest compaction
+    summary (from ``FileMeta.compact_summary_at``). Only the ONE slice that
+    contains that index is flagged ``has_compact_summary`` — so a long file split
+    into many slices yields a single summary-based compaction (the whole-arc one)
+    rather than the same cumulative summary bleeding onto every slice.
+    """
     results: list[tuple[Session, list[Turn]]] = []
     prev_id: str | None = None
 
+    # Clamp a trailing summary (boundary after the last turn) to the final slice.
+    target = None
+    if summary_at_index is not None and turns:
+        target = min(summary_at_index, len(turns) - 1)
+
+    offset = 0
     for index, (segment, reason) in enumerate(_segment(turns)):
         session_id = base_session_id if index == 0 else f"{base_session_id}.{index + 1}"
+        has_compact_summary = target is not None and offset <= target < offset + len(segment)
+        offset += len(segment)
         seg_turns = [
             turn.model_copy(update={"session_id": session_id, "seq": seq})
             for seq, turn in enumerate(segment)

@@ -23,6 +23,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from manthana.skills.assembly import Topic, thread_key
+from manthana.skills.assembly import topics as _build_topics
+from manthana.skills.cluster import default_text_of
+from manthana.skills.embed import Embedder, default_embedder
+from manthana.skills.retrieval import Coverage, rank, text_hash
+
 from .cost import estimate_cost
 from .llm import LLMProvider, default_provider
 from .store import Store
@@ -30,8 +36,9 @@ from .store import Store
 INSUFFICIENT = "No compactions yet — run `manthana compact` first, then ask again."
 _CITE_RE = re.compile(r"\[([^\]]+)\]")
 _SINCE_RE = re.compile(r"^(\d+)\s*([dwh])$")  # 7d / 2w / 12h
-_MAX_SCAN = 5000  # cap store reads
+_MAX_SCAN = 5000  # cap store reads (the structured-filter candidate set)
 _COST_SCAN_CAP = 300  # cost reads turns per session; bound it (most-recent first)
+_ANSWER_K = 40  # how many ranked digests the narrative answers over
 
 
 @dataclass
@@ -52,6 +59,7 @@ class AskResult:
     citations: list[str]
     grounded: bool
     filtered_to: dict[str, str] = field(default_factory=dict)
+    coverage: Coverage | None = None  # how much of the matched set the answer saw
 
 
 _PARSE_PROMPT = (
@@ -61,10 +69,33 @@ _PARSE_PROMPT = (
     "Question: {query}"
 )
 _NARRATIVE_PROMPT = (
-    "Answer the engineer's question in 2-4 sentences based ONLY on this data. Cite "
-    "the specific compaction id in [square brackets] for EVERY claim; do not invent "
-    "facts.\nQuestion: {query}\nCompactions: {compactions}\n"
+    "Answer the engineer's question in 2-4 sentences based ONLY on this data "
+    "({coverage}). Cite the specific compaction id in [square brackets] for EVERY "
+    "claim; do not invent facts.\nQuestion: {query}\nCompactions: {compactions}\n"
 )
+
+
+def _index_and_rank(
+    store: Store, query: str, candidates: list[Any], embedder: Embedder, k: int
+) -> tuple[list[Any], Coverage]:
+    """Ensure each candidate has a current cached vector, then rank by relevance.
+
+    Indexing is scoped to the (already structured-filtered) candidates and cached,
+    so the first ask over a slice embeds only that slice and later asks are instant.
+    """
+    have = store.vector_meta()
+    todo: list[tuple[str, str, str]] = []
+    for c in candidates:
+        txt = default_text_of(c)
+        h = text_hash(txt)
+        if have.get(c.id) != (embedder.dim, h):
+            todo.append((c.id, txt, h))
+    if todo:
+        vecs = embedder.embed([t for _, t, _ in todo])
+        for (cid, _txt, h), v in zip(todo, vecs, strict=True):
+            store.upsert_vector(cid, dim=embedder.dim, text_hash=h, vec=v)
+    vectors = store.get_vectors([c.id for c in candidates], dim=embedder.dim)
+    return rank(query, candidates, vectors, embedder, k=k)
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -166,7 +197,12 @@ def structural_insights(store: Store, *, since: str | None = None) -> Structural
 
 
 def ask(
-    store: Store, query: str, *, provider: LLMProvider | None = None, source: str | None = None
+    store: Store,
+    query: str,
+    *,
+    provider: LLMProvider | None = None,
+    source: str | None = None,
+    embedder: Embedder | None = None,
 ) -> AskResult:
     """Grounded, cited NL answer over your own compactions.
 
@@ -196,23 +232,64 @@ def ask(
     if not comps:
         return AskResult(narrative=INSUFFICIENT, citations=[], grounded=False, filtered_to=filtered)
 
+    # 2) semantic rank the filtered candidates → top-K (+ coverage, no silent truncation)
+    top, coverage = _index_and_rank(store, query, comps, embedder or default_embedder(), _ANSWER_K)
     brief = [
         {"id": c.id, "project": c.project, "intent": c.task_intent, "outcome": str(c.outcome)}
-        for c in comps[:50]
+        for c in top
     ]
     try:
         narrative = provider.complete(
-            _NARRATIVE_PROMPT.format(query=query, compactions=json.dumps(brief))
+            _NARRATIVE_PROMPT.format(
+                query=query, compactions=json.dumps(brief), coverage=coverage.note()
+            )
         ).strip()
     except Exception:  # noqa: BLE001 - provider failure → no answer, never a crash
         return AskResult(
             narrative="Couldn't reach the model to answer.", citations=[], grounded=False,
-            filtered_to=filtered,
+            filtered_to=filtered, coverage=coverage,
         )
-    citations = _match_citations(narrative, [c.id for c in comps])
+    citations = _match_citations(narrative, [c.id for c in top])
     return AskResult(
-        narrative=narrative, citations=citations, grounded=bool(citations), filtered_to=filtered
+        narrative=narrative, citations=citations, grounded=bool(citations),
+        filtered_to=filtered, coverage=coverage,
     )
 
 
-__all__ = ["StructuralInsights", "AskResult", "structural_insights", "ask", "INSUFFICIENT"]
+def my_topics(store: Store, *, embedder: Embedder | None = None) -> list[Topic]:
+    """The engineer's own emergent topic clusters (own data → no k-anon)."""
+    comps = store.list_compactions(limit=_MAX_SCAN)
+    return _build_topics(comps, embedder or default_embedder(), min_contributors=1)
+
+
+def drill_raw(
+    store: Store, compaction_id: str, *, start: int = 0, end: int | None = None
+) -> list[Any]:
+    """The engineer's own raw turns behind a compaction (own data → unredacted).
+
+    Tier-2 depth when the digest is too lossy. Returns ``[]`` if unknown.
+    """
+    comp = store.get_compaction(compaction_id)
+    if comp is None:
+        return []
+    return store.get_turns(comp.session_id)[start:end]
+
+
+def thread(store: Store, session_id: str) -> list[Any]:
+    """The arc of one transcript — its resumed slices' compactions, in order."""
+    base = thread_key(session_id)
+    comps = [c for c in store.list_compactions(limit=_MAX_SCAN) if thread_key(c.session_id) == base]
+    comps.sort(key=lambda c: c.started_at)
+    return comps
+
+
+__all__ = [
+    "StructuralInsights",
+    "AskResult",
+    "structural_insights",
+    "ask",
+    "my_topics",
+    "thread",
+    "drill_raw",
+    "INSUFFICIENT",
+]

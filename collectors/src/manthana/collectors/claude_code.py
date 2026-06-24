@@ -56,6 +56,10 @@ class FileMeta:
     git_branch: str | None
     mtime: datetime
     compact_summary: ClaudeSummary | None = None  # Claude's newest summary, if any
+    # Global turn index where the newest summary boundary sits (turns before it are
+    # summarized; turns at/after are the "recent" tail). Lets sessionize attach the
+    # summary to ONLY the slice that contains the boundary, not every slice.
+    compact_summary_at: int | None = None
 
 
 def _parse_ts(value: object) -> datetime | None:
@@ -142,6 +146,7 @@ class ClaudeCodeCollector:
         summary_text: str | None = None  # Claude's compaction summary (newest wins)
         summary_trigger: str | None = None
         summary_pretokens: int | None = None
+        summary_at: int | None = None  # turn index where the newest summary sits
 
         for raw in path.read_text(errors="replace").splitlines():
             raw = raw.strip()
@@ -165,6 +170,7 @@ class ClaudeCodeCollector:
                 text = _stringify((entry.get("message") or {}).get("content"))
                 if text:
                     summary_text = text
+                    summary_at = len(turns)  # turns parsed so far precede this boundary
                 continue
             if entry.get("subtype") == "compact_boundary":
                 meta = entry.get("compactMetadata")
@@ -209,7 +215,12 @@ class ClaudeCodeCollector:
             else None
         )
         return turns, FileMeta(
-            session_id=base_id, cwd=cwd, git_branch=git_branch, mtime=mtime, compact_summary=summary
+            session_id=base_id,
+            cwd=cwd,
+            git_branch=git_branch,
+            mtime=mtime,
+            compact_summary=summary,
+            compact_summary_at=summary_at if summary_text else None,
         )
 
     def read_summary(self, source: str) -> ClaudeSummary | None:

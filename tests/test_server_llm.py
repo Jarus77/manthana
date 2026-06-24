@@ -248,3 +248,92 @@ def test_founder_query_grounded_with_anthropic_provider() -> None:
     assert result.insufficient_data is False
     assert result.citations == ["c0"]
     assert "[c0]" in result.narrative
+
+
+class _CapturingProvider:
+    """Records every prompt; returns a fixed citing reply (so parse → {} → all rows,
+    and the narrative call cites the compaction)."""
+
+    name = "capture"
+
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
+        self.prompts: list[str] = []
+
+    def complete(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return self.reply
+
+
+def test_what_went_wrong_feeds_friction_and_query_to_narrative() -> None:
+    # A SUCCESS session that nonetheless hit friction must still answer "what went
+    # wrong?" — the friction is fed to the narrative, and the question is too.
+    from manthana.schemas import FrictionCategory, FrictionPoint
+
+    config = _cfg(k_anon_floor=1)
+    store = ServerStore.open("sqlite://")
+    store.create_org("o1", "Acme")
+    comp = _comp("c0", "e@x.com").model_copy(
+        update={
+            "friction_points": [
+                FrictionPoint(
+                    category=FrictionCategory.tool_error,
+                    description="flaky DB timeout on the integration suite",
+                    turn_refs=["12"],
+                )
+            ]
+        }
+    )
+    store.ingest_compaction(comp, org_id="o1", team_id="t1")
+
+    provider = _CapturingProvider("A flaky DB timeout blocked the suite [c0].")
+    result = run_query(store, config, org_id="o1", query="what went wrong?", provider=provider)
+
+    assert result.insufficient_data is False  # NOT a dead-end anymore
+    assert result.citations == ["c0"]
+    # the narrative prompt (2nd call) must carry BOTH the question and the friction
+    narrative_prompt = provider.prompts[1]
+    assert "what went wrong?" in narrative_prompt
+    assert "flaky DB timeout on the integration suite" in narrative_prompt
+
+
+def test_parse_filter_does_not_force_outcome_on_failure_query() -> None:
+    # With a model that returns no outcome, the pipeline must not invent one.
+    from manthana.server.founder import parse_filter
+
+    spec = parse_filter("what went wrong this week?", MockProvider("{}"))
+    assert spec.outcome is None
+
+
+def test_manager_view_returns_individual_that_founder_suppresses() -> None:
+    # The core privacy assertion: the founder path suppresses a single-person query
+    # (k-anon), but the manager view (allow_individual=True) returns it.
+    config = _cfg(k_anon_floor=4)
+    store = ServerStore.open("sqlite://")
+    store.create_org("o1", "Acme")
+    for i in range(3):
+        store.ingest_compaction(_comp(f"s{i}", "suraj@acme.demo"), org_id="o1", team_id="t1")
+    citing = MockProvider("Suraj shipped the work [s0].")
+
+    founder = run_query(store, config, org_id="o1", query="what did suraj do?", provider=citing)
+    assert founder.insufficient_data is True  # single contributor < floor → suppressed
+
+    mgr = run_query(
+        store, config, org_id="o1", query="what did suraj do?",
+        provider=citing, allow_individual=True,
+    )
+    assert mgr.insufficient_data is False  # manager view bypasses the floor
+    assert mgr.citations == ["s0"]
+
+
+def test_resolve_actor_unique_ambiguous_none() -> None:
+    from manthana.server.founder import _resolve_actor
+
+    store = ServerStore.open("sqlite://")
+    store.create_org("o1", "Acme")
+    store.upsert_actor("suraj@acme.demo", "o1", "t1")
+    store.upsert_actor("tarun@acme.demo", "o1", "t1")
+    assert _resolve_actor(store, "o1", "Suraj") == "suraj@acme.demo"  # unique → resolved
+    assert _resolve_actor(store, "o1", "acme") == "acme"  # matches both → unchanged
+    assert _resolve_actor(store, "o1", "ghost") == "ghost"  # no match → unchanged
+    assert _resolve_actor(store, "o1", None) is None

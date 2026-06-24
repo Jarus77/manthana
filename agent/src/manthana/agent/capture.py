@@ -54,7 +54,7 @@ def ingest_file(
         source_path=source,
         fallback_time=meta.mtime,
         mode=mode,
-        has_compact_summary=meta.compact_summary is not None,
+        summary_at_index=meta.compact_summary_at,
     )
 
     # Idempotent re-ingest in ONE transaction: atomically drop any prior rows for

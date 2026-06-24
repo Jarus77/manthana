@@ -83,7 +83,7 @@ def test_compact_produces_engineering_compaction() -> None:
     assert comp.tier_used == "opus"
     assert comp.est_cost_usd == 15.0
     assert comp.duration_seconds == 300.0
-    assert comp.prompt_version == "v1"
+    assert comp.prompt_version == "v2"
     assert comp.id == "comp-s1"
 
 
@@ -115,3 +115,40 @@ def test_compact_session_persists_to_store() -> None:
 def test_compact_session_unknown_returns_none() -> None:
     store = Store.open_memory()
     assert compact_session(store, "ghost", provider=MockProvider(_GOOD)) is None
+
+
+# ── Fix #3: files_touched is deterministic from tool calls ───────────────────
+def test_files_touched_deterministic_from_tool_calls() -> None:
+    turns = [
+        Turn(id="t0", session_id="s1", actor="e", seq=0, role=Role.assistant,
+             tool_name="Edit", tool_input={"file_path": "/repo/src/app.py"}),
+        Turn(id="t1", session_id="s1", actor="e", seq=1, role=Role.assistant,
+             tool_name="Read", tool_input={"file_path": "/repo/data/train.csv"}),
+    ]
+    # LLM misses app.py, adds a real Bash-opened path + two dataset descriptions.
+    payload = json.dumps({
+        "task_intent": "x", "outcome": "success",
+        "files_touched": ["notes.md", "patents (5.4GB)", "Mongo: db (n=1)"],
+    })
+    comp = Compactor(MockProvider(payload)).compact(_session(), turns)
+    assert "/repo/src/app.py" in comp.files_touched  # tool-call file the LLM missed
+    assert "/repo/data/train.csv" in comp.files_touched
+    assert "notes.md" in comp.files_touched  # LLM-only but looks like a path
+    assert "patents (5.4GB)" not in comp.files_touched  # description filtered out
+    assert not any("Mongo" in f for f in comp.files_touched)  # description filtered out
+
+
+# ── Fix #4: long sessions keep the head AND the tail (the ending) ────────────
+def test_serialize_turns_keeps_head_and_tail_on_long_sessions() -> None:
+    from manthana.agent.compactor.prompt import serialize_turns
+
+    turns = [
+        Turn(id=f"t{i}", session_id="s", actor="e", seq=i, role=Role.user, content=f"turn-{i}")
+        for i in range(600)
+    ]
+    data = json.loads(serialize_turns(turns))
+    seqs = {d["seq"] for d in data}
+    assert 0 in seqs and 599 in seqs  # head AND the ending are present
+    assert -1 in seqs  # elision marker
+    assert 300 not in seqs  # a middle turn was elided
+    assert len(data) == 250 + 1 + 150

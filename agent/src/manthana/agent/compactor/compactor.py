@@ -12,6 +12,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from manthana.schemas import (
@@ -62,6 +63,49 @@ def _str_list(value: Any) -> list[str]:
             str(v) for v in value if isinstance(v, str | int | float) and not isinstance(v, bool)
         ]
     return []
+
+
+_FILE_TOOLS = frozenset({"Edit", "Write", "Read", "MultiEdit", "NotebookEdit"})
+_PATHISH = re.compile(r"\.[A-Za-z0-9]{1,8}$")  # ends in a short file extension
+
+
+def _basename(path: str) -> str:
+    return path.rsplit("/", 1)[-1]
+
+
+def files_from_turns(turns: list[Turn]) -> list[str]:
+    """File paths actually read/written, from the turns' own tool calls.
+
+    Authoritative and complete (covers the whole session, not just the prompt
+    window), so files_touched no longer starves on the summary path or drops the
+    tail on long sessions. Order-preserving, de-duplicated.
+    """
+    seen: dict[str, None] = {}
+    for turn in turns:
+        if turn.tool_name in _FILE_TOOLS and turn.tool_input:
+            fp = turn.tool_input.get("file_path") or turn.tool_input.get("notebook_path")
+            if isinstance(fp, str) and fp:
+                seen.setdefault(fp, None)
+    return list(seen)
+
+
+def _looks_like_path(value: str) -> bool:
+    """A heuristic gate for LLM-listed files: a real path/filename, not a dataset
+    description like "patents (5.4GB)" or "Mongo: articles_db (articles=127600)"."""
+    value = value.strip()
+    if not value or len(value) > 200 or any(c in value for c in " \t()=:"):
+        return False
+    return "/" in value or bool(_PATHISH.search(value))
+
+
+def _merge_files(turns: list[Turn], llm_files: list[str]) -> list[str]:
+    """Deterministic tool-call files first (authoritative); then add only LLM-listed
+    paths that look real and aren't already present (catches data files opened via
+    Bash/python that no file tool recorded)."""
+    deterministic = files_from_turns(turns)
+    bases = {_basename(f) for f in deterministic}
+    extra = [f for f in llm_files if _looks_like_path(f) and _basename(f) not in bases]
+    return deterministic + extra
 
 
 def _as_outcome(value: Any) -> Outcome:
@@ -138,11 +182,12 @@ class Compactor:
             reusable_pattern=bool(data.get("reusable_pattern", False)),
             tier_used=cost.tier,
             est_cost_usd=cost.usd,
+            total_tokens=cost.total_tokens,
             prompt_version=(
                 f"{self.prompt_version}-summary" if used_summary else self.prompt_version
             ),
             source="claude_summary" if used_summary else "full",
-            files_touched=_str_list(data.get("files_touched")),
+            files_touched=_merge_files(turns, _str_list(data.get("files_touched"))),
             prs_opened=_str_list(data.get("prs_opened")),
             tests_added=_str_list(data.get("tests_added")),
             dead_end_branches=_str_list(data.get("dead_end_branches")),

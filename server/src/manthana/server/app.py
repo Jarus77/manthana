@@ -16,6 +16,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 """
 
 import hmac
+import json
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response
@@ -25,7 +26,7 @@ from pydantic import BaseModel, ValidationError
 
 from .auth import AuthError, TeamClaims, issue_team_token, verify_team_token
 from .config import ServerConfig
-from .founder import run_query
+from .founder import run_query, team_topics, thread
 from .llm import LLMProvider, make_provider
 from .storage import ObjectStore, make_object_store
 from .store import ServerStore
@@ -67,6 +68,16 @@ class MineSkillsBody(BaseModel):
     org_id: str
 
 
+class ManagerThreadBody(BaseModel):
+    org_id: str
+    session_id: str
+
+
+class ManagerDrillBody(BaseModel):
+    org_id: str
+    compaction_id: str
+
+
 def create_app(
     config: ServerConfig,
     store: ServerStore,
@@ -79,6 +90,15 @@ def create_app(
         # constant-time comparison — admin token gates org/team/token mint + founder query
         if not hmac.compare_digest(x_admin_token, config.admin_token):
             raise HTTPException(status_code=401, detail="invalid admin token")
+
+    def require_manager(x_manager_token: Annotated[str, Header()] = "") -> None:
+        # The manager view (per-individual, k-anon-bypassing) is a privilege above
+        # the founder console. Disabled unless a manager_token is configured; then
+        # gated by constant-time comparison.
+        if not config.manager_token or not hmac.compare_digest(
+            x_manager_token, config.manager_token
+        ):
+            raise HTTPException(status_code=401, detail="invalid or disabled manager token")
 
     def require_team(authorization: Annotated[str, Header()] = "") -> TeamClaims:
         if not authorization.startswith("Bearer "):
@@ -176,7 +196,105 @@ def create_app(
             "narrative": result.narrative,
             "citations": result.citations,
             "insufficient_data": result.insufficient_data,
+            "coverage": result.coverage.__dict__ if result.coverage else None,
         }
+
+    @app.post("/v1/manager/query")
+    def manager_query(
+        body: FounderQueryBody, _: Annotated[None, Depends(require_manager)]
+    ) -> dict[str, Any]:
+        # Manager view: may resolve to a single named person (k-anon bypassed).
+        # ALWAYS audited as an individual query — the accountability record.
+        result = run_query(
+            store, config, org_id=body.org_id, query=body.query, provider=provider,
+            source=body.source, allow_individual=True,
+        )
+        store.record_founder_query(
+            org_id=body.org_id,
+            query=body.query,
+            insufficient=result.insufficient_data,
+            citations=result.citations,
+            individual=True,
+        )
+        return {
+            "filter": result.filter.model_dump(),
+            "rollup": result.rollup.__dict__ if result.rollup else None,
+            "narrative": result.narrative,
+            "citations": result.citations,
+            "insufficient_data": result.insufficient_data,
+            "coverage": result.coverage.__dict__ if result.coverage else None,
+        }
+
+    @app.get("/v1/founder/topics")
+    def founder_topics(
+        org_id: str, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        # Emergent topic clusters across the team, k-anon de-identified (>= floor
+        # contributors, names dropped) — cross-cutting visibility beyond project tags.
+        tops = team_topics(store, config, org_id)
+        return {"topics": [t.deidentified() for t in tops]}
+
+    @app.get("/v1/manager/topics")
+    def manager_topics(
+        org_id: str, _: Annotated[None, Depends(require_manager)]
+    ) -> dict[str, Any]:
+        tops = team_topics(store, config, org_id, named=True)
+        store.record_founder_query(
+            org_id=org_id, query="[topics]", insufficient=False, citations=[], individual=True
+        )
+        return {
+            "topics": [
+                {**t.deidentified(), "contributors": sorted(t.contributors), "members": t.members}
+                for t in tops
+            ]
+        }
+
+    @app.post("/v1/manager/thread")
+    def manager_thread(
+        body: ManagerThreadBody, _: Annotated[None, Depends(require_manager)]
+    ) -> dict[str, Any]:
+        comps = thread(store, body.org_id, body.session_id)
+        store.record_founder_query(
+            org_id=body.org_id,
+            query=f"[thread] {body.session_id}",
+            insufficient=not comps,
+            citations=[c.id for c in comps],
+            individual=True,
+        )
+        return {
+            "session_id": body.session_id,
+            "arc": [
+                {"id": c.id, "actor": c.actor, "project": c.project,
+                 "intent": c.task_intent, "outcome": str(c.outcome)}
+                for c in comps
+            ],
+        }
+
+    @app.post("/v1/manager/drill")
+    def manager_drill(
+        body: ManagerDrillBody, _: Annotated[None, Depends(require_manager)]
+    ) -> dict[str, Any]:
+        # Tier-2 raw drill-down, MANAGER-ONLY + audited. Returns the released raw
+        # transcript, which was already redacted at sync (redact_turn per turn).
+        # The founder has no drill path — raw never reaches the founder view.
+        key = store.get_raw_key(body.compaction_id, body.org_id)
+        turns: list[Any] = []
+        if key:
+            blob = object_store.get(key)
+            if blob:
+                turns = [
+                    json.loads(line)
+                    for line in blob.decode("utf-8").splitlines()
+                    if line.strip()
+                ]
+        store.record_founder_query(
+            org_id=body.org_id,
+            query=f"[drill] {body.compaction_id}",
+            insufficient=not turns,
+            citations=[body.compaction_id] if turns else [],
+            individual=True,
+        )
+        return {"compaction_id": body.compaction_id, "turns": turns}
 
     @app.get("/v1/admin/audit")
     def audit(
@@ -191,6 +309,7 @@ def create_app(
                     "insufficient": r.insufficient,
                     "citation_count": r.citation_count,
                     "created_at": r.created_at,
+                    "individual": bool(r.data.get("individual")),
                 }
                 for r in rows
             ]
@@ -229,7 +348,7 @@ def create_app(
             )
         return {"proposals": out, "queued": len(out)}
 
-    mount_ui(app, config, store, provider)
+    mount_ui(app, config, store, provider, object_store)
     return app
 
 

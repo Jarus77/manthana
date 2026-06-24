@@ -33,6 +33,7 @@ from .migrations import run_migrations
 from .tables import (
     ActionAuditRow,
     CompactionRow,
+    CompactionVectorRow,
     ConsentRow,
     SessionRow,
     SyncStateRow,
@@ -316,6 +317,31 @@ class Store:
             db.merge(_compaction_row(model))
             db.commit()
             return True
+
+    # ── compaction vectors (semantic retrieval cache) ────────────────────
+    def vector_meta(self) -> dict[str, tuple[int, str]]:
+        """{compaction_id: (dim, text_hash)} for deciding what needs (re)embedding."""
+        with DBSession(self._engine) as db:
+            return {r.id: (r.dim, r.text_hash) for r in db.exec(select(CompactionVectorRow))}
+
+    def upsert_vector(
+        self, compaction_id: str, *, dim: int, text_hash: str, vec: list[float]
+    ) -> None:
+        with DBSession(self._engine) as db:
+            db.merge(
+                CompactionVectorRow(id=compaction_id, dim=dim, text_hash=text_hash, vec=vec)
+            )
+            db.commit()
+
+    def get_vectors(self, ids: Iterable[str], *, dim: int) -> dict[str, list[float]]:
+        """Cached vectors for the given ids that match the active embedder ``dim``."""
+        wanted = set(ids)
+        with DBSession(self._engine) as db:
+            return {
+                r.id: r.vec
+                for r in db.exec(select(CompactionVectorRow))
+                if r.id in wanted and r.dim == dim
+            }
 
     # ── action audit log (seam) ──────────────────────────────────────────
     def add_audit(self, entry: ActionAuditEntry) -> None:

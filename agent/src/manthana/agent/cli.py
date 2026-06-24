@@ -231,6 +231,8 @@ def ask(question: str, source: str = "") -> None:
 
     result = run_ask(Store.open(), question, source=source or None)
     typer.echo(result.narrative)
+    if result.coverage and result.coverage.truncated:
+        typer.echo(f"({result.coverage.note()})")
     if result.citations:
         typer.echo("sources: " + ", ".join(result.citations))
     elif result.grounded is False and result.narrative and "compact" not in result.narrative:
@@ -503,6 +505,18 @@ def _apply_identity_from_config() -> None:
         actor = load_config().actor
         if actor:
             os.environ["MANTHANA_ACTOR"] = actor
+
+
+@app.command()
+def mcp() -> None:
+    """Serve Manthana's read-only query tools to Claude Code over MCP (your local data)."""
+    from manthana.agent import mcp_server
+
+    if not mcp_server.available():
+        typer.echo(mcp_server.INSTALL_HINT)
+        raise typer.Exit(code=1)
+    typer.echo("Manthana MCP server (stdio) — tools: " + ", ".join(mcp_server.TOOLS))
+    mcp_server.run()
 
 
 def main() -> None:

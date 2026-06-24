@@ -25,6 +25,9 @@ embeddings = ["manthana-skills[embeddings]"]
 # headroom context-compression integration (`manthana optimize`). Optional; the
 # wrapper degrades to an install hint when absent. Install: uv sync --extra optimize.
 optimize = ["headroom-ai[proxy,mcp]>=0.26"]
+# Expose Manthana's read-only query tools to Claude Code over MCP (`manthana mcp`).
+# Optional; degrades to an install hint when absent. Install: uv sync --extra mcp.
+mcp = ["mcp>=1.0"]
 
 [project.scripts]
 manthana = "manthana.agent.cli:main"

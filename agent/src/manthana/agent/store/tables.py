@@ -71,6 +71,20 @@ class CompactionRow(SQLModel, table=True):
     data: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
 
 
+class CompactionVectorRow(SQLModel, table=True):
+    """Cached embedding for a compaction (semantic retrieval). Derived/regenerable,
+    so it lives in its own table keyed by compaction id, not the compaction's data.
+    ``dim`` + ``text_hash`` let the indexer detect a model change or content change
+    and re-embed."""
+
+    __tablename__ = "compaction_vector"  # type: ignore[assignment]
+
+    id: str = Field(primary_key=True)  # compaction id
+    dim: int
+    text_hash: str = Field(index=True)
+    vec: list[float] = Field(sa_column=Column(JSON, nullable=False))
+
+
 class ActionAuditRow(SQLModel, table=True):
     """Persisted ``manthana.schemas.ActionAuditEntry`` — the action audit log."""
 
@@ -112,6 +126,7 @@ __all__ = [
     "SessionRow",
     "TurnRow",
     "CompactionRow",
+    "CompactionVectorRow",
     "ActionAuditRow",
     "ConsentRow",
     "SyncStateRow",

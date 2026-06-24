@@ -126,6 +126,7 @@
         }
       ],
       "default": null,
+      "description": "API list-price equivalent in USD \u2014 NOT subscription spend. Dominated by cache-reads on long sessions; prefer total_tokens for magnitude.",
       "title": "Est Cost Usd"
     },
     "files_touched": {
@@ -260,6 +261,19 @@
       "default": null,
       "description": "Dominant model tier",
       "title": "Tier Used"
+    },
+    "total_tokens": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Total tokens (input + output + cache write + cache read) for the session",
+      "title": "Total Tokens"
     }
   },
   "required": [

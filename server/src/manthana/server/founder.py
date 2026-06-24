@@ -19,6 +19,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from manthana.schemas import Surface
+from manthana.skills.assembly import Topic, thread_key
+from manthana.skills.assembly import topics as _build_topics
+from manthana.skills.cluster import default_text_of
+from manthana.skills.embed import Embedder, default_embedder
+from manthana.skills.retrieval import Coverage, rank, text_hash
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .config import ServerConfig
@@ -28,6 +33,7 @@ from .store import ServerStore
 _log = logging.getLogger(__name__)
 
 INSUFFICIENT = "insufficient data"
+_ANSWER_K = 40  # how many ranked digests the narrative answers over
 _VALID_OUTCOMES = {"success", "partial", "abandoned"}
 _VALID_SURFACES = {s.value for s in Surface}
 _CITE_RE = re.compile(r"\[([^\]]+)\]")
@@ -51,7 +57,8 @@ class Rollup:
     distinct_contributors: int
     by_project: dict[str, int]
     by_outcome: dict[str, int]
-    total_cost_usd: float
+    total_cost_usd: float  # API list-price equivalent, NOT subscription spend
+    total_tokens: int
 
 
 @dataclass
@@ -61,21 +68,51 @@ class FounderResult:
     narrative: str
     citations: list[str]
     insufficient_data: bool
+    coverage: Coverage | None = None  # how much of the visible set the answer saw
 
 
 _PARSE_PROMPT = (
     "Parse this founder question into a JSON filter with keys: team_id, project, "
     "outcome (success|partial|abandoned), actor, surface (claude_code|codex|cursor), "
     "since (ISO date), until (ISO date). Use null for anything unspecified. "
+    "IMPORTANT: do NOT set outcome just because the question mentions 'wrong', "
+    "'failed', 'failing', 'problems', 'blockers', or 'friction' — those ask about "
+    "friction WITHIN sessions of any outcome, so leave outcome null. Set outcome only "
+    "when the user explicitly restricts to successful / partial / abandoned sessions. "
     "Return ONLY the JSON object.\nQuestion: {query}"
 )
 
 _NARRATIVE_PROMPT = (
-    "Write a 2-4 sentence summary for a founder based ONLY on this data. Cite the "
-    "specific compaction id in [square brackets] for EVERY claim; do not invent "
-    "facts. If the data does not support a claim, omit it.\n"
-    "Rollup: {rollup}\nCompactions: {compactions}\n"
+    "Answer the founder's QUESTION in 2-4 sentences based ONLY on this data. Cite the "
+    "specific compaction id in [square brackets] for EVERY claim; do not invent facts. "
+    "If the data does not support a claim, omit it. Each compaction lists its `friction` "
+    "(problems/blockers hit during the session, with a category) — use that to answer "
+    "questions about what went wrong, what's failing, or where the team is blocked, even "
+    "for sessions whose overall outcome was success.\n"
+    "({coverage}.)\n"
+    "QUESTION: {query}\nRollup: {rollup}\nCompactions: {compactions}\n"
 )
+
+
+def _index_and_rank(
+    store: ServerStore, org_id: str, query: str, candidates: list[Any], embedder: Embedder, k: int
+) -> tuple[list[Any], Coverage]:
+    """Released-only semantic rank: ensure each visible compaction has a current
+    cached vector, then rank by relevance. The index only ever contains what
+    ``query_compactions`` returns (released), so it can't hold unreleased/personal."""
+    have = store.vector_meta(org_id)
+    todo: list[tuple[str, str, str]] = []
+    for c in candidates:
+        txt = default_text_of(c)
+        h = text_hash(txt)
+        if have.get(c.id) != (embedder.dim, h):
+            todo.append((c.id, txt, h))
+    if todo:
+        vecs = embedder.embed([t for _, t, _ in todo])
+        for (cid, _txt, h), v in zip(todo, vecs, strict=True):
+            store.upsert_vector(org_id, cid, dim=embedder.dim, text_hash=h, vec=v)
+    vectors = store.get_vectors(org_id, [c.id for c in candidates], dim=embedder.dim)
+    return rank(query, candidates, vectors, embedder, k=k)
 
 
 def _match_citations(narrative: str, visible: list[Any]) -> list[str]:
@@ -146,6 +183,24 @@ def parse_filter(query: str, provider: LLMProvider) -> FounderFilter:
     return spec
 
 
+def _resolve_actor(store: ServerStore, org_id: str, name: str | None) -> str | None:
+    """Map an NL name fragment ("Suraj") to a real actor id ("suraj@acme.demo").
+
+    Manager path only. Unique case-insensitive match against the org's known
+    actors (id or local-part or display name); ambiguous / no match → unchanged
+    (so the query simply finds nothing rather than guessing wrong).
+    """
+    if not name:
+        return name
+    nl = name.lower()
+    hits: list[str] = []
+    for a in store.list_actors(org_id):
+        hay = f"{a.id} {a.id.split('@')[0]} {a.display_name or ''}".lower()
+        if nl in hay:
+            hits.append(a.id)
+    return hits[0] if len(hits) == 1 else name
+
+
 def _rollup(compactions: list[Any], floor: int) -> tuple[Rollup, set[str], set[str]]:
     """Build the rollup, suppressing any project/outcome sub-bucket backed by
     fewer than ``floor`` distinct contributors. Returns the rollup plus the
@@ -157,6 +212,7 @@ def _rollup(compactions: list[Any], floor: int) -> tuple[Rollup, set[str], set[s
     out_contrib: dict[str, set[str]] = defaultdict(set)
     actors: set[str] = set()
     total = 0.0
+    tokens = 0
     for c in compactions:
         proj_count[c.project] += 1
         proj_contrib[c.project].add(c.actor)
@@ -164,6 +220,7 @@ def _rollup(compactions: list[Any], floor: int) -> tuple[Rollup, set[str], set[s
         out_contrib[str(c.outcome)].add(c.actor)
         actors.add(c.actor)
         total += c.est_cost_usd or 0.0
+        tokens += getattr(c, "total_tokens", 0) or 0
 
     by_project = {p: n for p, n in proj_count.items() if len(proj_contrib[p]) >= floor}
     by_outcome = {o: n for o, n in out_count.items() if len(out_contrib[o]) >= floor}
@@ -173,6 +230,7 @@ def _rollup(compactions: list[Any], floor: int) -> tuple[Rollup, set[str], set[s
         by_project=by_project,
         by_outcome=by_outcome,
         total_cost_usd=round(total, 6),
+        total_tokens=tokens,
     )
     return rollup, set(by_project), set(by_outcome)
 
@@ -185,8 +243,21 @@ def run_query(
     query: str,
     provider: LLMProvider,
     source: str | None = None,
+    allow_individual: bool = False,
+    embedder: Embedder | None = None,
 ) -> FounderResult:
+    """``allow_individual`` is the **manager view**: it skips the k-anonymity floor
+    so a query that resolves to a single named person returns results. It must only
+    be set behind manager auth, and every such call is audited by the caller. The
+    default (founder console) path is unchanged: per-person queries are suppressed."""
     spec = parse_filter(query, provider)
+    if allow_individual and spec.actor:
+        # Keep the actor filter ONLY if it resolves to a real person. A comparison
+        # ("Suraj vs Tarun") or an unresolved name → drop it, so the narrative sees
+        # everyone matched and can compare named individuals (person-relational).
+        resolved = _resolve_actor(store, org_id, spec.actor)
+        known = {a.id for a in store.list_actors(org_id)}
+        spec.actor = resolved if resolved in known else None
     compactions = store.query_compactions(
         org_id=org_id,
         team_id=spec.team_id,
@@ -203,40 +274,62 @@ def run_query(
         compactions = [c for c in compactions if getattr(c, "source", "full") == source]
     rollup, kept_projects, kept_outcomes = _rollup(compactions, config.k_anon_floor)
 
-    # Global k-anonymity floor.
-    if rollup.distinct_contributors < config.k_anon_floor:
+    # Global k-anonymity floor — SKIPPED only for the audited manager view.
+    if not allow_individual and rollup.distinct_contributors < config.k_anon_floor:
         return FounderResult(
             filter=spec, rollup=None, narrative=INSUFFICIENT, citations=[], insufficient_data=True
         )
 
-    # Per-filter k-anon: the narrative only sees compactions whose project AND
-    # outcome buckets both survived the floor, so it can never cite a cohort that
-    # is sub-floor on either dimension (e.g. a lone "abandoned" session whose
-    # project happened to clear).
-    visible = [
-        c for c in compactions if c.project in kept_projects and str(c.outcome) in kept_outcomes
-    ]
+    if allow_individual:
+        # Manager view: no per-bucket suppression — the manager may see individuals.
+        visible = list(compactions)
+    else:
+        # Per-filter k-anon: the narrative only sees compactions whose project AND
+        # outcome buckets both survived the floor, so it can never cite a cohort that
+        # is sub-floor on either dimension (e.g. a lone "abandoned" session whose
+        # project happened to clear).
+        visible = [
+            c for c in compactions if c.project in kept_projects and str(c.outcome) in kept_outcomes
+        ]
+    # Semantic rank the visible set → top-K (+ coverage; no silent truncation).
+    top, coverage = _index_and_rank(
+        store, org_id, query, visible, embedder or default_embedder(), _ANSWER_K
+    )
     brief = [
-        {"id": c.id, "project": c.project, "intent": c.task_intent, "outcome": str(c.outcome)}
-        for c in visible
+        {
+            "id": c.id,
+            "project": c.project,
+            "intent": c.task_intent,
+            "outcome": str(c.outcome),
+            "friction": [
+                {"category": str(fp.category), "issue": fp.description}
+                for fp in (getattr(c, "friction_points", None) or [])
+            ],
+        }
+        for c in top
     ]
     try:
         narrative = provider.complete(
             _NARRATIVE_PROMPT.format(
-                rollup=json.dumps(rollup.__dict__), compactions=json.dumps(brief)
+                query=query,
+                rollup=json.dumps(rollup.__dict__),
+                compactions=json.dumps(brief),
+                coverage=coverage.note(),
             )
         ).strip()
     except Exception:  # noqa: BLE001 - provider failure → withhold narrative, keep rollup
         _log.exception("founder narrative: provider call failed")
         return FounderResult(
-            filter=spec, rollup=rollup, narrative=INSUFFICIENT, citations=[], insufficient_data=True
+            filter=spec, rollup=rollup, narrative=INSUFFICIENT, citations=[],
+            insufficient_data=True, coverage=coverage,
         )
 
-    citations = _match_citations(narrative, visible)
+    citations = _match_citations(narrative, top)
     # Non-optional grounding: a narrative citing nothing is withheld (rollup kept).
     if not citations:
         return FounderResult(
-            filter=spec, rollup=rollup, narrative=INSUFFICIENT, citations=[], insufficient_data=True
+            filter=spec, rollup=rollup, narrative=INSUFFICIENT, citations=[],
+            insufficient_data=True, coverage=coverage,
         )
 
     return FounderResult(
@@ -245,7 +338,49 @@ def run_query(
         narrative=narrative,
         citations=citations,
         insufficient_data=False,
+        coverage=coverage,
     )
 
 
-__all__ = ["FounderFilter", "Rollup", "FounderResult", "parse_filter", "run_query", "INSUFFICIENT"]
+def team_topics(
+    store: ServerStore,
+    config: ServerConfig,
+    org_id: str,
+    *,
+    embedder: Embedder | None = None,
+    named: bool = False,
+) -> list[Topic]:
+    """Emergent topic clusters over released compactions.
+
+    ``named=False`` (founder) gates to >= k_anon_floor distinct contributors — the
+    caller renders the ``deidentified()`` view. ``named=True`` (manager) keeps
+    single-contributor topics with names, and must be audited by the caller.
+    """
+    comps = store.query_compactions(org_id=org_id, limit=100_000)
+    floor = 1 if named else config.k_anon_floor
+    return _build_topics(comps, embedder or default_embedder(), min_contributors=floor)
+
+
+def thread(store: ServerStore, org_id: str, session_id: str) -> list[Any]:
+    """The arc of one transcript across its released slices (manager view; a thread is
+    one contributor, so the founder path is correctly empty under k-anon)."""
+    base = thread_key(session_id)
+    comps = [
+        c
+        for c in store.query_compactions(org_id=org_id, limit=100_000)
+        if thread_key(c.session_id) == base
+    ]
+    comps.sort(key=lambda c: c.started_at)
+    return comps
+
+
+__all__ = [
+    "FounderFilter",
+    "Rollup",
+    "FounderResult",
+    "parse_filter",
+    "run_query",
+    "team_topics",
+    "thread",
+    "INSUFFICIENT",
+]
