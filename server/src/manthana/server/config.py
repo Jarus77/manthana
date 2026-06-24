@@ -38,6 +38,9 @@ class ServerConfig:
     llm_provider: str = "mock"  # "mock" | "anthropic"
     llm_model: str = "claude-sonnet-4-6"
     llm_max_tokens: int = 1024
+    # Hard ceiling on an uploaded raw transcript (bytes) — bounds memory on the
+    # privileged manager drill path. Default 25 MB.
+    max_raw_bytes: int = 25_000_000
 
     def __post_init__(self) -> None:
         # An empty admin token or JWT secret is an auth bypass: hmac.compare_digest
@@ -71,6 +74,8 @@ class ServerConfig:
             raise ValueError(f"k_anon_floor must be >= 1, got {self.k_anon_floor}")
         if not 1 <= self.llm_max_tokens <= 100_000:
             raise ValueError(f"llm_max_tokens must be 1..100000, got {self.llm_max_tokens}")
+        if self.max_raw_bytes < 1:
+            raise ValueError(f"max_raw_bytes must be >= 1, got {self.max_raw_bytes}")
 
     @classmethod
     def from_env(cls) -> ServerConfig:
@@ -89,6 +94,7 @@ class ServerConfig:
             llm_provider=env("MANTHANA_SERVER_LLM", cls.llm_provider),
             llm_model=env("MANTHANA_SERVER_LLM_MODEL", cls.llm_model),
             llm_max_tokens=int(env("MANTHANA_SERVER_LLM_MAX_TOKENS", str(cls.llm_max_tokens))),
+            max_raw_bytes=int(env("MANTHANA_SERVER_MAX_RAW_BYTES", str(cls.max_raw_bytes))),
         )
 
 

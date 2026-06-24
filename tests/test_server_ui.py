@@ -110,7 +110,7 @@ def test_query_renders_rollup_and_citation() -> None:
     _login(client)
     resp = client.post("/ui/query", data={"org_id": "o1", "query": "what shipped?"})
     assert resp.status_code == 200
-    assert "sessions=4" in resp.text
+    assert "compactions=4" in resp.text
     assert "c0" in resp.text  # the cited compaction surfaced
 
 

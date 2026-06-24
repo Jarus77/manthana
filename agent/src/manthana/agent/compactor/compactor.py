@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 from manthana.schemas import (
@@ -183,6 +184,7 @@ class Compactor:
             tier_used=cost.tier,
             est_cost_usd=cost.usd,
             total_tokens=cost.total_tokens,
+            created_at=datetime.now(UTC),  # when this digest was built (auto-release window)
             prompt_version=(
                 f"{self.prompt_version}-summary" if used_summary else self.prompt_version
             ),

@@ -81,22 +81,25 @@ def topics(
     an engineer's own topics or the manager's named view. Labels are deterministic (a
     representative member's intent) — no LLM, no token spend.
     """
-    kept = recurring(
-        cluster_compactions(compactions, embedder),
-        min_contributors=min_contributors,
-        min_sessions=min_sessions,
-    )
+    try:
+        clusters = cluster_compactions(compactions, embedder)
+    except Exception:  # noqa: BLE001 - an embedder failure degrades to "no topics", never a crash
+        return []
+    kept = recurring(clusters, min_contributors=min_contributors, min_sessions=min_sessions)
     out: list[Topic] = []
     for cluster in kept:
-        members = [c.id for c in cluster.compactions]
-        intents = [c.task_intent[:90] for c in cluster.compactions[:3]]
+        # Deterministic representative independent of DB row order (ties on started_at
+        # are broken by id), so the label + topic id are stable across runs.
+        members_sorted = sorted(cluster.compactions, key=lambda c: (c.started_at, c.id))
+        members = [c.id for c in members_sorted]
+        intents = [c.task_intent[:90] for c in members_sorted[:3]]
         tid = "topic-" + hashlib.blake2b(
             "|".join(sorted(members)).encode("utf-8"), digest_size=6
         ).hexdigest()
         out.append(
             Topic(
                 id=tid,
-                label=(cluster.compactions[0].task_intent[:90] if cluster.compactions else ""),
+                label=(members_sorted[0].task_intent[:90] if members_sorted else ""),
                 members=members,
                 contributors=set(cluster.contributors),
                 sessions=set(cluster.sessions),

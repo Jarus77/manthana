@@ -21,7 +21,7 @@ from typing import Any
 from manthana.schemas import Surface
 from manthana.skills.assembly import Topic, thread_key
 from manthana.skills.assembly import topics as _build_topics
-from manthana.skills.cluster import default_text_of
+from manthana.skills.cluster import DEFAULT_MAX_ITEMS, default_text_of
 from manthana.skills.embed import Embedder, default_embedder
 from manthana.skills.retrieval import Coverage, rank, text_hash
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -100,19 +100,23 @@ def _index_and_rank(
     """Released-only semantic rank: ensure each visible compaction has a current
     cached vector, then rank by relevance. The index only ever contains what
     ``query_compactions`` returns (released), so it can't hold unreleased/personal."""
-    have = store.vector_meta(org_id)
-    todo: list[tuple[str, str, str]] = []
-    for c in candidates:
-        txt = default_text_of(c)
-        h = text_hash(txt)
-        if have.get(c.id) != (embedder.dim, h):
-            todo.append((c.id, txt, h))
-    if todo:
-        vecs = embedder.embed([t for _, t, _ in todo])
-        for (cid, _txt, h), v in zip(todo, vecs, strict=True):
-            store.upsert_vector(org_id, cid, dim=embedder.dim, text_hash=h, vec=v)
-    vectors = store.get_vectors(org_id, [c.id for c in candidates], dim=embedder.dim)
-    return rank(query, candidates, vectors, embedder, k=k)
+    try:
+        have = store.vector_meta(org_id)
+        todo: list[tuple[str, str, str]] = []
+        for c in candidates:
+            txt = default_text_of(c)
+            h = text_hash(txt)
+            if have.get(c.id) != (embedder.dim, h):
+                todo.append((c.id, txt, h))
+        if todo:
+            vecs = embedder.embed([t for _, t, _ in todo])
+            for (cid, _txt, h), v in zip(todo, vecs, strict=True):
+                store.upsert_vector(org_id, cid, dim=embedder.dim, text_hash=h, vec=v)
+        vectors = store.get_vectors(org_id, [c.id for c in candidates], dim=embedder.dim)
+        return rank(query, candidates, vectors, embedder, k=k)
+    except Exception:  # noqa: BLE001 - embedder/index failure degrades to unranked, never 500s
+        _log.exception("founder retrieval: embedder/index failed, returning unranked")
+        return candidates[:k], Coverage(matched=len(candidates), used=min(k, len(candidates)))
 
 
 def _match_citations(narrative: str, visible: list[Any]) -> list[str]:
@@ -201,29 +205,71 @@ def _resolve_actor(store: ServerStore, org_id: str, name: str | None) -> str | N
     return hits[0] if len(hits) == 1 else name
 
 
-def _rollup(compactions: list[Any], floor: int) -> tuple[Rollup, set[str], set[str]]:
-    """Build the rollup, suppressing any project/outcome sub-bucket backed by
-    fewer than ``floor`` distinct contributors. Returns the rollup plus the
-    project AND outcome buckets that survived (both gate the narrative, so it can
-    never cite a cohort that's sub-floor on either dimension)."""
+def _tokens(s: str) -> list[str]:
+    """Lower-case alphanumeric word tokens (split on hyphen/underscore/space/punct)."""
+    return [t for t in re.split(r"[^a-z0-9]+", s.lower()) if t]
+
+
+def _resolve_project(store: ServerStore, org_id: str, name: str | None) -> str | None:
+    """Map a free-text project name ("LLM evaluation") to a real slug ("llm-eval").
+
+    The NL parser emits human phrasing while the stored value is a slug, so an exact
+    (even case-insensitive) match misses ``llm evaluation`` vs ``llm-eval``. Token-prefix
+    match: a known slug wins if every one of ITS tokens is a prefix of some query token
+    (``[llm, eval]`` ⊆-prefix ``[llm, evaluation]``). Exact (case-insensitive) hits take
+    priority. Unique winner → the slug; no / ambiguous match → unchanged (the
+    case-insensitive filter still handles a plain casing difference, and a genuinely
+    unknown project simply finds nothing rather than guessing wrong)."""
+    if not name:
+        return name
+    known = store.list_projects(org_id)
+    low = name.lower()
+    for p in known:  # exact (case-insensitive) — let the SQL filter handle it
+        if p.lower() == low:
+            return p
+    q = _tokens(name)
+    if not q:
+        return name
+    hits = [
+        p for p in known
+        if (pt := _tokens(p)) and all(any(qt.startswith(t) for qt in q) for t in pt)
+    ]
+    return hits[0] if len(hits) == 1 else name
+
+
+def _rollup(compactions: list[Any], floor: int) -> tuple[Rollup, set[tuple[str, str]]]:
+    """Build the rollup plus the set of (project, outcome) CELLS backed by >= ``floor``
+    distinct contributors.
+
+    The narrative is gated on the actual *cell*, NOT on the two dimensions
+    independently: gating project-membership and outcome-membership separately leaks a
+    k=1 (project ∩ outcome) cohort whenever each dimension happens to clear the floor via
+    *different* rows (e.g. a lone "abandoned" P1 session by one person, where "abandoned"
+    only cleared globally via an unrelated project P2). The displayed by_project /
+    by_outcome counts are per-dimension aggregates (each >= floor) and stay safe to show.
+    """
     proj_count: dict[str, int] = defaultdict(int)
     proj_contrib: dict[str, set[str]] = defaultdict(set)
     out_count: dict[str, int] = defaultdict(int)
     out_contrib: dict[str, set[str]] = defaultdict(set)
+    cell_contrib: dict[tuple[str, str], set[str]] = defaultdict(set)
     actors: set[str] = set()
     total = 0.0
     tokens = 0
     for c in compactions:
+        outcome = str(c.outcome)
         proj_count[c.project] += 1
         proj_contrib[c.project].add(c.actor)
-        out_count[str(c.outcome)] += 1
-        out_contrib[str(c.outcome)].add(c.actor)
+        out_count[outcome] += 1
+        out_contrib[outcome].add(c.actor)
+        cell_contrib[(c.project, outcome)].add(c.actor)
         actors.add(c.actor)
         total += c.est_cost_usd or 0.0
         tokens += getattr(c, "total_tokens", 0) or 0
 
     by_project = {p: n for p, n in proj_count.items() if len(proj_contrib[p]) >= floor}
     by_outcome = {o: n for o, n in out_count.items() if len(out_contrib[o]) >= floor}
+    kept_cells = {cell for cell, contrib in cell_contrib.items() if len(contrib) >= floor}
     rollup = Rollup(
         session_count=len(compactions),
         distinct_contributors=len(actors),
@@ -232,7 +278,7 @@ def _rollup(compactions: list[Any], floor: int) -> tuple[Rollup, set[str], set[s
         total_cost_usd=round(total, 6),
         total_tokens=tokens,
     )
-    return rollup, set(by_project), set(by_outcome)
+    return rollup, kept_cells
 
 
 def run_query(
@@ -251,6 +297,10 @@ def run_query(
     be set behind manager auth, and every such call is audited by the caller. The
     default (founder console) path is unchanged: per-person queries are suppressed."""
     spec = parse_filter(query, provider)
+    # Resolve a free-text project ("LLM evaluation") to a real slug ("llm-eval") so a
+    # phrasing mismatch doesn't silently return nothing (semantic retrieval still ranks
+    # within the resolved set). Safe on both paths — it only narrows to a known slug.
+    spec.project = _resolve_project(store, org_id, spec.project)
     if allow_individual and spec.actor:
         # Keep the actor filter ONLY if it resolves to a real person. A comparison
         # ("Suraj vs Tarun") or an unresolved name → drop it, so the narrative sees
@@ -272,7 +322,7 @@ def run_query(
     # = full only; "claude_summary" = summary-derived only.
     if source:
         compactions = [c for c in compactions if getattr(c, "source", "full") == source]
-    rollup, kept_projects, kept_outcomes = _rollup(compactions, config.k_anon_floor)
+    rollup, kept_cells = _rollup(compactions, config.k_anon_floor)
 
     # Global k-anonymity floor — SKIPPED only for the audited manager view.
     if not allow_individual and rollup.distinct_contributors < config.k_anon_floor:
@@ -281,16 +331,22 @@ def run_query(
         )
 
     if allow_individual:
-        # Manager view: no per-bucket suppression — the manager may see individuals.
+        # Manager view: no per-cell suppression — the manager may see individuals.
         visible = list(compactions)
     else:
-        # Per-filter k-anon: the narrative only sees compactions whose project AND
-        # outcome buckets both survived the floor, so it can never cite a cohort that
-        # is sub-floor on either dimension (e.g. a lone "abandoned" session whose
-        # project happened to clear).
-        visible = [
-            c for c in compactions if c.project in kept_projects and str(c.outcome) in kept_outcomes
-        ]
+        # Per-CELL k-anon: the narrative only sees compactions whose (project, outcome)
+        # cell itself has >= floor distinct contributors, so it can never cite a cohort
+        # that is sub-floor on the intersection (the two dimensions are NOT gated
+        # independently — that would leak a k=1 cell when each dimension clears via
+        # different rows).
+        visible = [c for c in compactions if (c.project, str(c.outcome)) in kept_cells]
+        # Cell-gating guarantees >= floor distinct contributors when visible is non-empty;
+        # if nothing clears, withhold (keep the safe aggregate rollup).
+        if len({c.actor for c in visible}) < config.k_anon_floor:
+            return FounderResult(
+                filter=spec, rollup=rollup, narrative=INSUFFICIENT, citations=[],
+                insufficient_data=True,
+            )
     # Semantic rank the visible set → top-K (+ coverage; no silent truncation).
     top, coverage = _index_and_rank(
         store, org_id, query, visible, embedder or default_embedder(), _ANSWER_K
@@ -349,16 +405,20 @@ def team_topics(
     *,
     embedder: Embedder | None = None,
     named: bool = False,
-) -> list[Topic]:
-    """Emergent topic clusters over released compactions.
+) -> tuple[list[Topic], Coverage]:
+    """Emergent topic clusters over released compactions, plus a coverage signal.
 
     ``named=False`` (founder) gates to >= k_anon_floor distinct contributors — the
     caller renders the ``deidentified()`` view. ``named=True`` (manager) keeps
-    single-contributor topics with names, and must be audited by the caller.
+    single-contributor topics with names, and must be audited by the caller. Clustering
+    caps at DEFAULT_MAX_ITEMS (O(n^2)); the returned Coverage flags that truncation so a
+    missing topic is never silently indistinguishable from "no topic" (no silent
+    truncation).
     """
     comps = store.query_compactions(org_id=org_id, limit=100_000)
     floor = 1 if named else config.k_anon_floor
-    return _build_topics(comps, embedder or default_embedder(), min_contributors=floor)
+    tops = _build_topics(comps, embedder or default_embedder(), min_contributors=floor)
+    return tops, Coverage(matched=len(comps), used=min(len(comps), DEFAULT_MAX_ITEMS))
 
 
 def thread(store: ServerStore, org_id: str, session_id: str) -> list[Any]:

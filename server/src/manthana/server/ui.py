@@ -49,6 +49,12 @@ def _e(value: object) -> str:
     return html.escape(str(value))
 
 
+def _ct_eq(a: str, b: str) -> bool:
+    """Constant-time compare on UTF-8 bytes — hmac.compare_digest raises TypeError on a
+    non-ASCII str, which must yield a failed-auth (401/redirect), never a 500."""
+    return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
 def _page(title: str, body: str) -> str:
     return (
         f"<!doctype html><html><head><meta charset='utf-8'>"
@@ -79,7 +85,7 @@ def mount_ui(
     object_store: ObjectStore | None = None,
 ) -> None:
     def _authed(cookie: str) -> bool:
-        return bool(cookie) and hmac.compare_digest(cookie, config.admin_token)
+        return bool(cookie) and _ct_eq(cookie, config.admin_token)
 
     @app.get("/ui/login", response_class=HTMLResponse)
     def login_form() -> str:
@@ -87,7 +93,7 @@ def mount_ui(
 
     @app.post("/ui/login")
     def login(token: Annotated[str, Form()] = "") -> Response:
-        if not hmac.compare_digest(token, config.admin_token):
+        if not _ct_eq(token, config.admin_token):
             return HTMLResponse(_login_page(error=True), status_code=401)
         resp = RedirectResponse(url="/ui", status_code=303)
         # Scope the cookie to the console routes; httponly keeps it out of JS.
@@ -100,6 +106,7 @@ def mount_ui(
         # by a GET (link prefetch / cross-site image).
         resp = RedirectResponse(url="/ui/login", status_code=303)
         resp.delete_cookie(COOKIE, path="/ui")  # path must match set_cookie to clear
+        resp.delete_cookie(MANAGER_COOKIE, path="/ui/manager")  # also end any manager session
         return resp
 
     @app.get("/ui", response_class=HTMLResponse)
@@ -174,7 +181,7 @@ def mount_ui(
         else:
             r = result.rollup
             roll = (
-                f"<p>sessions={r.session_count} · contributors={r.distinct_contributors} · "
+                f"<p>compactions={r.session_count} · contributors={r.distinct_contributors} · "
                 f"tokens={r.total_tokens:,} · "
                 f"<span title='API list-price equivalent — NOT subscription spend'>"
                 f"~${r.total_cost_usd:,.2f} API-list-equiv</span></p>"
@@ -194,7 +201,7 @@ def mount_ui(
         return (
             bool(config.manager_token)
             and bool(cookie)
-            and hmac.compare_digest(cookie, config.manager_token)
+            and _ct_eq(cookie, config.manager_token)
         )
 
     @app.get("/ui/manager", response_class=HTMLResponse)
@@ -238,7 +245,7 @@ def mount_ui(
 
     @app.post("/ui/manager/login")
     def manager_login(token: Annotated[str, Form()] = "") -> Response:
-        if not config.manager_token or not hmac.compare_digest(token, config.manager_token):
+        if not config.manager_token or not _ct_eq(token, config.manager_token):
             return HTMLResponse(
                 _page("Manager login", "<p class='warn'>Invalid manager token.</p>"
                       "<p><a href='/ui/manager'>← back</a></p>"),
@@ -271,7 +278,7 @@ def mount_ui(
         else:
             r = result.rollup
             roll = (
-                f"<p>sessions={r.session_count} · contributors={r.distinct_contributors} · "
+                f"<p>compactions={r.session_count} · contributors={r.distinct_contributors} · "
                 f"tokens={r.total_tokens:,}</p>"
             )
         cites = ", ".join(_e(c) for c in result.citations) or "—"
@@ -289,7 +296,7 @@ def mount_ui(
     ) -> Response:
         if not _manager_authed(manthana_manager):
             return RedirectResponse(url="/ui/manager", status_code=303)
-        tops = team_topics(store, config, org_id, named=True)
+        tops, _cov = team_topics(store, config, org_id, named=True)
         store.record_founder_query(
             org_id=org_id, query="[topics]", insufficient=False, citations=[], individual=True
         )
@@ -349,16 +356,20 @@ def mount_ui(
         if key and object_store is not None:
             blob = object_store.get(key)
             if blob:
-                turns = [
-                    json.loads(line) for line in blob.decode("utf-8").splitlines() if line.strip()
-                ]
+                for line in blob.decode("utf-8", "replace").splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        turns.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
         store.record_founder_query(
             org_id=org_id, query=f"[drill] {compaction_id}", insufficient=not turns,
             citations=[compaction_id] if turns else [], individual=True,
         )
         rows = ""
         for t in turns:
-            txt = str(t.get("content") or t.get("tool_output") or "")[:1500]
+            txt = str(t.get("content") or t.get("tool_output") or "")[:2000]
             rows += (
                 f"<tr><td>{_e(t.get('seq'))}</td><td>{_e(t.get('role'))}</td>"
                 f"<td><pre>{_e(txt)}</pre></td></tr>"
@@ -376,7 +387,7 @@ def mount_ui(
     def ui_topics(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:
         if not _authed(manthana_admin):
             return RedirectResponse(url="/ui/login", status_code=303)
-        tops = team_topics(store, config, org_id)
+        tops, cov = team_topics(store, config, org_id)
         rows = "".join(
             f"<tr><td>{_e(t.label)}</td><td>{len(t.contributors)}</td>"
             f"<td>{len(t.sessions)}</td>"
@@ -384,9 +395,15 @@ def mount_ui(
             for t in tops
         )
         empty = "<tr><td colspan=4>no cross-cutting topics meet the k-anon floor yet</td></tr>"
+        trunc = (
+            f"<p class='warn'>clustered over the {cov.used} most recent of {cov.matched} "
+            "compactions — older work not shown</p>"
+            if cov.truncated
+            else ""
+        )
         body = (
             f"<p class='muted'>org: {_e(org_id)} · de-identified, "
-            f"≥{config.k_anon_floor} contributors per topic</p>"
+            f"≥{config.k_anon_floor} contributors per topic</p>{trunc}"
             "<table><tr><th>topic</th><th>people</th><th>sessions</th><th>sample work</th></tr>"
             f"{rows or empty}</table><p><a href='/ui'>← back</a></p>"
         )

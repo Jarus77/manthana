@@ -115,9 +115,10 @@ def test_raw_release_stores_object_and_404s_unknown() -> None:
     store.create_org("o1", "O")
     store.ingest_compaction(_comp("c1", "e@x.com"), org_id="o1", team_id="t1")
     auth = _team_auth()
-    resp = client.post("/v1/compactions/c1/raw", json={"content": "l1\nl2"}, headers=auth)
+    content = '{"seq": 0, "role": "assistant"}\n{"seq": 1, "role": "user"}'  # raw is JSONL
+    resp = client.post("/v1/compactions/c1/raw", json={"content": content}, headers=auth)
     key = resp.json()["object_key"]
-    assert obj.get(key) == b"l1\nl2"
+    assert obj.get(key) == content.encode("utf-8")
     ghost = client.post("/v1/compactions/ghost/raw", json={"content": "x"}, headers=auth)
     assert ghost.status_code == 404
 

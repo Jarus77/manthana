@@ -116,6 +116,40 @@ def test_until_date_includes_whole_boundary_day() -> None:
     assert len(same_day) == 3  # all three same-day rows, not []
 
 
+def test_project_outcome_surface_filters_are_case_insensitive() -> None:
+    # The founder NL parser emits human casing ("ASR", "Success", "Claude_Code");
+    # the stored slug/enum is lower-cased. Exact-match would silently return [], which
+    # reads as "no data". Filters must match regardless of case.
+    store = _store()
+    store.ingest_compaction(
+        _comp("asr1", "e@x.com", project="asr"), org_id="orgA", team_id="tA"
+    )
+    assert len(store.query_compactions(org_id="orgA", project="ASR")) == 1  # 'ASR' ~ 'asr'
+    assert len(store.query_compactions(org_id="orgA", project="Asr")) == 1
+    assert len(store.query_compactions(org_id="orgA", outcome="SUCCESS")) == 1
+    assert len(store.query_compactions(org_id="orgA", surface="Claude_Code")) == 1
+    assert len(store.query_compactions(org_id="orgA", project="nope")) == 0  # still filters
+
+
+def test_resolve_project_maps_free_text_to_slug() -> None:
+    # The NL parser emits "LLM evaluation" but the stored slug is "llm-eval"; a
+    # token-prefix resolve maps it so the query doesn't silently return nothing.
+    from manthana.server.founder import _resolve_project
+
+    store = _store()
+    for i, proj in enumerate(["llm-eval", "text-to-sql", "asr", "data-pipeline"]):
+        store.ingest_compaction(
+            _comp(f"p{i}", f"e{i}@x.com", project=proj), org_id="orgA", team_id="tA"
+        )
+    assert _resolve_project(store, "orgA", "LLM evaluation") == "llm-eval"  # phrase → slug
+    assert _resolve_project(store, "orgA", "text to sql") == "text-to-sql"  # spaces → hyphens
+    assert _resolve_project(store, "orgA", "ASR") == "asr"  # exact (case) hit
+    assert _resolve_project(store, "orgA", "data pipeline curation") == "data-pipeline"
+    # unknown / ambiguous → unchanged (don't guess); empty → unchanged
+    assert _resolve_project(store, "orgA", "marketing") == "marketing"
+    assert _resolve_project(store, "orgA", None) is None
+
+
 # ── Finding 6: per-bucket k-anonymity ──────────────────────────────────────
 def test_per_bucket_k_anon_suppresses_single_contributor_project() -> None:
     config = Cfg(k_anon_floor=4, jwt_secret="x" * 40, admin_token="adm")

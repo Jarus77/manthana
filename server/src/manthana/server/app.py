@@ -78,6 +78,16 @@ class ManagerDrillBody(BaseModel):
     compaction_id: str
 
 
+def _ct_eq(a: str, b: str) -> bool:
+    """Constant-time string compare that won't crash on non-ASCII input.
+
+    ``hmac.compare_digest`` raises TypeError when given a str with non-ASCII chars; a
+    bad token must yield 401, never a 500. Comparing the UTF-8 bytes is safe + still
+    constant-time over equal-length inputs.
+    """
+    return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
 def create_app(
     config: ServerConfig,
     store: ServerStore,
@@ -88,16 +98,14 @@ def create_app(
 
     def require_admin(x_admin_token: Annotated[str, Header()] = "") -> None:
         # constant-time comparison — admin token gates org/team/token mint + founder query
-        if not hmac.compare_digest(x_admin_token, config.admin_token):
+        if not _ct_eq(x_admin_token, config.admin_token):
             raise HTTPException(status_code=401, detail="invalid admin token")
 
     def require_manager(x_manager_token: Annotated[str, Header()] = "") -> None:
         # The manager view (per-individual, k-anon-bypassing) is a privilege above
         # the founder console. Disabled unless a manager_token is configured; then
         # gated by constant-time comparison.
-        if not config.manager_token or not hmac.compare_digest(
-            x_manager_token, config.manager_token
-        ):
+        if not config.manager_token or not _ct_eq(x_manager_token, config.manager_token):
             raise HTTPException(status_code=401, detail="invalid or disabled manager token")
 
     def require_team(authorization: Annotated[str, Header()] = "") -> TeamClaims:
@@ -171,8 +179,21 @@ def create_app(
         # existence is not disclosed.
         if store.get_owned_compaction(compaction_id, claims.org_id, claims.team_id) is None:
             raise HTTPException(status_code=404, detail="unknown compaction")
+        encoded = body.content.encode("utf-8")
+        if len(encoded) > config.max_raw_bytes:
+            raise HTTPException(status_code=413, detail="raw transcript too large")
+        # Validate JSONL on the way in so the object store never holds un-parseable raw
+        # (the manager drill path then never trips on a malformed line).
+        for line in body.content.splitlines():
+            if not line.strip():
+                continue
+            try:
+                if not isinstance(json.loads(line), dict):
+                    raise ValueError("each raw line must be a JSON object")
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=f"raw must be JSONL: {exc}") from exc
         key = f"{claims.org_id}/{claims.team_id}/{compaction_id}.jsonl"
-        object_store.put(key, body.content.encode("utf-8"))
+        object_store.put(key, encoded)
         store.record_raw(compaction_id, claims.org_id, key)
         return {"object_key": key}
 
@@ -231,14 +252,17 @@ def create_app(
     ) -> dict[str, Any]:
         # Emergent topic clusters across the team, k-anon de-identified (>= floor
         # contributors, names dropped) — cross-cutting visibility beyond project tags.
-        tops = team_topics(store, config, org_id)
-        return {"topics": [t.deidentified() for t in tops]}
+        tops, cov = team_topics(store, config, org_id)
+        return {
+            "topics": [t.deidentified() for t in tops],
+            "coverage": {"matched": cov.matched, "used": cov.used, "truncated": cov.truncated},
+        }
 
     @app.get("/v1/manager/topics")
     def manager_topics(
         org_id: str, _: Annotated[None, Depends(require_manager)]
     ) -> dict[str, Any]:
-        tops = team_topics(store, config, org_id, named=True)
+        tops, cov = team_topics(store, config, org_id, named=True)
         store.record_founder_query(
             org_id=org_id, query="[topics]", insufficient=False, citations=[], individual=True
         )
@@ -246,7 +270,8 @@ def create_app(
             "topics": [
                 {**t.deidentified(), "contributors": sorted(t.contributors), "members": t.members}
                 for t in tops
-            ]
+            ],
+            "coverage": {"matched": cov.matched, "used": cov.used, "truncated": cov.truncated},
         }
 
     @app.post("/v1/manager/thread")
@@ -282,11 +307,13 @@ def create_app(
         if key:
             blob = object_store.get(key)
             if blob:
-                turns = [
-                    json.loads(line)
-                    for line in blob.decode("utf-8").splitlines()
-                    if line.strip()
-                ]
+                for line in blob.decode("utf-8", "replace").splitlines():
+                    if not line.strip():
+                        continue
+                    try:  # tolerate a malformed line rather than 500 the manager
+                        turns.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
         store.record_founder_query(
             org_id=body.org_id,
             query=f"[drill] {body.compaction_id}",

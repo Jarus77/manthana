@@ -54,9 +54,10 @@ def tool_ask(store: Store, query: str) -> dict[str, Any]:
 
 
 def tool_topics(store: Store) -> list[dict[str, Any]]:
+    tops, _cov = _ins.my_topics(store)
     return [
         {"label": t.label, "sessions": len(t.sessions), "sample_intents": t.sample_intents}
-        for t in _ins.my_topics(store)
+        for t in tops
     ]
 
 

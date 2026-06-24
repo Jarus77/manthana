@@ -56,12 +56,18 @@ class BaseCompaction(BaseModel):
         default=None,
         description="Total tokens (input + output + cache write + cache read) for the session",
     )
+    # Actual cost of the compaction LLM call that produced this digest (CLI-reported),
+    # vs est_cost_usd which is the list-price equivalent of the ORIGINAL session.
+    call_cost_usd: float | None = None
     reusable_pattern: bool = False
 
     # Trust contract: compactions flow up by default once released; raw
     # transcripts upload only when released is set true.
     released: bool = False
     released_at: datetime | None = None
+    # Local opt-out for auto-release: when the engineer "holds" a compaction within the
+    # grace window, the daemon must never auto-release it. Local-only (the server ignores it).
+    hold: bool = False
 
     # Architectural seam: action ids this compaction should fire on next sync.
     action_triggers: list[str] = Field(default_factory=list)

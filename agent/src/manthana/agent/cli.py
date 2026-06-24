@@ -133,17 +133,22 @@ def capture() -> None:
 @app.command()
 def watch(
     interval: float = 5.0,
-    compact: bool = False,
-    compact_summarized: bool = True,
+    auto_compact: bool = True,
+    summarized_only: bool = False,
+    settle_min: float = 10.0,
+    max_per_cycle: int = 5,
+    auto_release: bool = True,
+    release_min: float = 10.0,
     sync: bool = True,
 ) -> None:
     """Continuously ingest new/changed Claude Code transcripts (Ctrl-C to stop).
 
-    Capture-only for raw sessions. By default also auto-compacts sessions Claude
-    already summarized (cheap — uses that summary; --no-compact-summarized to
-    disable). --compact additionally compacts ALL pending Work sessions (full,
-    pricier). When a server is configured, auto-syncs released compactions
-    (--no-sync to disable).
+    Auto-compacts Work sessions whose transcript has been quiet for --settle-min minutes
+    (re-compacting after a resume); --summarized-only restricts to sessions Claude already
+    summarized; --no-auto-compact disables. Auto-releases each compaction --release-min
+    minutes after it's built UNLESS you marked the session personal or held it (personal
+    never leaves); --no-auto-release disables. With a server configured, auto-syncs
+    released compactions (--no-sync to disable).
     """
     from manthana.agent.llm import default_provider
     from manthana.agent.sync_client import SyncClient
@@ -159,25 +164,37 @@ def watch(
         sync_state = "auto-sync on"
     else:
         sync_state = "auto-sync off (no server)" if sync else "auto-sync disabled"
-    # Don't auto-compact in the background without a real model (a Mock would
-    # write empty compactions).
-    if (compact or compact_summarized) and default_provider().name == "mock":
+    # Don't auto-compact in the background without a real model (a Mock would write
+    # empty compactions).
+    if auto_compact and default_provider().name == "mock":
         typer.echo("no claude/codex CLI found — disabling auto-compaction")
-        compact = compact_summarized = False
-    if compact:
-        compact_state = "compact ALL pending (costs tokens)"
-    elif compact_summarized:
-        compact_state = "auto-compact summarized only (cheap)"
-    else:
+        auto_compact = False
+    if not auto_compact:
         compact_state = "compact off"
+    else:
+        scope = "summarized-only" if summarized_only else "all settled (raw too)"
+        compact_state = (
+            f"auto-compact {scope} after {settle_min}m quiet, up to {max_per_cycle}/cycle"
+        )
+    release_state = (
+        f"auto-release after {release_min}m (opt-out)" if auto_release else "release manual"
+    )
     typer.echo(
         f"watching ~/.claude/projects every {interval}s "
-        f"({compact_state}, {sync_state}) — Ctrl-C to stop"
+        f"({compact_state}; {release_state}; {sync_state}) — Ctrl-C to stop"
     )
     try:
         run_watch(
-            store, interval=interval, compact=compact, compact_summarized=compact_summarized,
-            sync_fn=sync_fn, log=typer.echo,
+            store,
+            interval=interval,
+            auto_compact=auto_compact,
+            summarized_only=summarized_only,
+            settle_seconds=settle_min * 60.0,
+            max_per_cycle=max_per_cycle,
+            auto_release=auto_release,
+            release_window=release_min * 60.0,
+            sync_fn=sync_fn,
+            log=typer.echo,
         )
     except KeyboardInterrupt:
         typer.echo("\nstopped")

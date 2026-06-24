@@ -125,16 +125,17 @@ def fmt(n: int) -> str:
 def section(project: str, sid: str, comp: dict | None, t: Truth) -> str:
     lines: list[str] = []
     src = (comp or {}).get("source", "—")
-    tail_dropped = t.max_seq > MAX_TURNS_PROMPT and src != "claude_summary"
+    mid_elided = t.max_seq > MAX_TURNS_PROMPT and src != "claude_summary"
     lines.append(f"## {project} — `{sid[:24]}`")
     lines.append("")
     if comp is None:
         lines.append("> **NO COMPACTION FOUND** (compaction step did not produce a row).")
         lines.append("")
         return "\n".join(lines)
+    # head+tail window (250+150): the ENDING is always kept; only the middle is elided.
     tail_note = (
-        "**⚠ TAIL DROPPED** (compactor saw only first 400 turns)"
-        if tail_dropped
+        f"head+tail kept, ~{t.max_seq - MAX_TURNS_PROMPT} middle turns elided (ending intact)"
+        if mid_elided
         else "full fidelity to compactor"
     )
     lines.append(
@@ -208,15 +209,22 @@ def section(project: str, sid: str, comp: dict | None, t: Truth) -> str:
     lines.append("- **real frustrations captured? (you):** ☐")
     lines.append("")
 
-    # cost
+    # cost — three distinct numbers; don't conflate them
     r = rates_for(t.model)
-    lines.append("### est_cost_usd (deterministic)")
+    call = comp.get("call_cost_usd")
+    call_str = f"${call:.4f}" if call is not None else "—"
+    lines.append("### cost (three distinct numbers)")
     lines.append(
-        f"- **compaction:** ${comp.get('est_cost_usd')} · tier "
+        f"- **call_cost_usd (REAL spend of THIS compaction call):** {call_str}"
+    )
+    lines.append(
+        f"- **est_cost_usd (API list-price *equivalent* of the ORIGINAL session, "
+        f"cache-read dominated — NOT real spend):** ${comp.get('est_cost_usd')} · tier "
         f"`{comp.get('tier_used')}` · model `{t.model}`"
     )
     lines.append(
-        f"- **independent token sum:** in={fmt(t.tokens_in)} out={fmt(t.tokens_out)} "
+        f"- **total_tokens (magnitude):** {fmt(comp.get('total_tokens') or 0)} "
+        f"(digest) · independent transcript sum: in={fmt(t.tokens_in)} out={fmt(t.tokens_out)} "
         f"cache_w={fmt(t.cache_w)} cache_r={fmt(t.cache_r)}"
     )
     if r:
@@ -231,8 +239,9 @@ def main() -> None:
     con = sqlite3.connect(DB)
     out: list[str] = ["# Compaction validation worksheet", "", f"_db: {DB}_", ""]
     summary: list[str] = [
-        "| project | turns | path | tail? | files recall | friction | outcome | cost |",
-        "|---|---|---|---|---|---|---|---|",
+        "| project | turns | path | window | files recall | friction | outcome "
+        "| call cost | est (list-equiv) |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for project, sid in SLATE:
         t = load_turns(con, sid)
@@ -240,17 +249,22 @@ def main() -> None:
         out.append(section(project, sid, comp, t))
         if comp:
             src = comp.get("source", "—")
-            tail = "⚠" if (t.max_seq > MAX_TURNS_PROMPT and src != "claude_summary") else "ok"
+            elided = t.max_seq > MAX_TURNS_PROMPT and src != "claude_summary"
+            window = "head+tail" if elided else "full"
             real_base = {_base(f) for f in t.files}
             listed_base = {_base(f) for f in comp.get("files_touched", [])}
             rec = f"{len(listed_base & real_base)}/{len(real_base)}" if real_base else "n/a"
+            call = comp.get("call_cost_usd")
+            call_s = f"${call:.4f}" if call is not None else "—"
             summary.append(
-                f"| {project} | {t.turn_count} | {src} | {tail} | {rec} | "
+                f"| {project} | {t.turn_count} | {src} | {window} | {rec} | "
                 f"{len(comp.get('friction_points', []))} | {comp.get('outcome')} | "
-                f"${comp.get('est_cost_usd')} |"
+                f"{call_s} | ${comp.get('est_cost_usd')} |"
             )
         else:
-            summary.append(f"| {project} | {t.turn_count} | — | — | — | NO COMPACTION | — | — |")
+            summary.append(
+                f"| {project} | {t.turn_count} | — | — | — | NO COMPACTION | — | — | — |"
+            )
     final = "\n".join(out[:4] + summary + ["", ""] + out[4:])
     Path("validation/worksheet.md").write_text(final)
     print(final)

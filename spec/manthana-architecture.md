@@ -1256,3 +1256,115 @@ install hint). **225 tests, ruff+pyright clean.**
 threads + topic-relational (founder de-identified / manager named) · two-tier digest→raw
 drill-down · all behind one trust boundary (released-only · redaction · k-anon · manager
 audit · no silent truncation), with an MCP surface for engineer-self.
+
+## 35. Query engine — adversarial pressure-test + fixes (2026-06-25)
+
+Multi-agent adversarial review of Stages 1-3 (6 dimensions × find→refute-verify→synthesize,
+24 agents): **15 raw confirmed → 12 deduped defects, all fixed** (231 tests, ruff+pyright
+clean). Highlights:
+
+- **HIGH — k-anon (project, outcome) cell leak** (`server/founder.py`): `_rollup` gated the
+  project and outcome dimensions *independently*, so a k=1 (project ∩ outcome) cohort leaked
+  into the founder narrative whenever the outcome cleared the floor via a *different* project.
+  Now gated on the actual cell (`kept_cells = {(project, outcome): >= floor contributors}`)
+  with a post-narrow floor re-check. Regression test reproduces the exact leak.
+- **HIGH — non-ASCII token → 500** (`app.py`, `ui.py`): `hmac.compare_digest` raises
+  TypeError on a non-ASCII str (reachable via the UTF-8 login form). Added `_ct_eq` comparing
+  UTF-8 bytes → clean 401, never 500.
+- **MED — embedder failure** crashed every query path: `_index_and_rank` (both sides) +
+  `assembly.topics` now degrade (unranked / no-topics) instead of CLI-crash / server-500.
+- **MED — manager raw drill**: tolerate malformed JSONL on read (skip bad lines) + validate
+  JSONL on upload (422) + a `max_raw_bytes` cap (413) to bound the privileged drill path.
+- **MED — topic clustering** silently truncated at 2000; `team_topics`/`my_topics` now return
+  a `Coverage` surfaced in the console/dashboard (no silent truncation).
+- **LOW** — dashboard `/sync` catches SyncError/httpx (no 500); manager logout clears the
+  manager cookie; `get_vectors` filters in SQL (chunked IN); "sessions"→"compactions" labels;
+  deterministic topic labels (tie-break on id); aligned drill display truncation.
+
+**Tests:** +6 (`tests/test_pressure_fixes.py`: cell-leak suppression, non-ASCII login 401,
+embedder degrade, malformed-drill tolerance, raw cap+validate, topics coverage). Existing
+raw-upload + UI tests updated for JSONL validation + the relabel. **231 tests.**
+
+## 36. Hands-off automation: settle-window compaction + 10-min opt-out release + cost (2026-06-25)
+
+The engineer wanted capture→compact→release to run itself, with the per-compaction cost
+recorded. Built three pieces (engineer laptop only; the server auto-does nothing):
+
+- **Per-compaction cost capture** (`agent/llm/provider.py`): `ClaudeCLIProvider.complete()`
+  now parses the `claude -p --output-format json` envelope's `total_cost_usd` + `usage` into
+  `last_cost_usd` / `last_usage` (the real spend of *that* call). `compact_session` persists it
+  to the new `BaseCompaction.call_cost_usd` (lives in the `data` JSON — no migration). This is
+  distinct from `est_cost_usd` (API list-price equivalent of the *original* session, dominated
+  by cache-reads) and `total_tokens` (magnitude).
+- **Settle-window + resume-aware auto-compaction** (`compact.py::compact_settled`): each cycle
+  compacts **Work, non-personal** sessions whose transcript has been quiet ≥ `settle_seconds`
+  (default 10 min) AND lack an up-to-date digest — *missing*, OR **stale because the file's
+  mtime is newer than the digest's `created_at`** (a resume). mtime>created_at is the staleness
+  signal (robust even when `ended_at` is None). `max_per_cycle` (default 5) bounds the first-run
+  backlog so ~500 settled sessions don't fire an unbounded burst of paid CLI calls — the rest
+  ride later cycles. One failed/timed-out CLI call (`LLMError`) is logged and skipped, not fatal.
+- **10-min opt-out auto-release** (`release.py::auto_release`): releases every compaction where
+  `not released and not hold and session.mode != personal and now - created_at >= window`
+  (default 10 min). **Personal-mode never auto-releases** and a missing/personal session fails
+  *closed* (skipped). New `BaseCompaction.hold` is the local opt-out; `Store.set_hold` toggles
+  it; the dashboard shows state (`auto-releases in ~N min` / `held` / `released`) with a
+  hold/unhold button so the engineer can stop a release inside the grace window.
+
+**Resume re-compaction preserves trust state** (`compact_session`): on re-compaction it carries
+over `hold` / `released` / `released_at` from the previous digest (a held digest must stay held
+across a resume — else it would leak) and calls `Store.clear_synced(id)` so the *changed* content
+actually re-syncs (sync dedups by id).
+
+**Watcher wiring** (`watcher.py`): compaction + release run on a `auto_min_interval` (30 s)
+throttle, **independent of file changes** (so a session that just *went* quiet is still picked
+up), emitting per-cycle call cost. `cli.py watch` defaults: `--auto-compact`, `--settle-min 10`,
+`--max-per-cycle 5`, `--auto-release`, `--release-min 10`, `--sync` (auto-compact disabled when
+no real CLI is present so a Mock never silently writes empty digests).
+
+**Adversarial review** (find→refute-verify→synthesize): 9 raw → 7 confirmed defects, all fixed —
+backlog cost-bomb (→ `max_per_cycle`), re-compaction wiping `hold`/`released` (→ carry-over),
+re-compaction never re-syncing (→ `clear_synced`), `ended_at`-None staleness (→ mtime signal),
+mid-batch `LLMError` aborting the cycle (→ per-item try/except), call cost not persisted (→
+`call_cost_usd`), full re-scan every 5 s cycle (→ throttle).
+
+**Tests:** +8 (`tests/test_automation.py`: settle gate, personal-never, resume/stale re-compact,
+`max_per_cycle` cap, hold/released carry-over + forced resync, auto-release window/hold/personal,
+cost-envelope parse) + `test_watcher.py` updated for the new `compact_fn` signature. **239 tests,
+ruff + pyright clean.**
+
+## 37. Empirical validation Run 2 + founder case-insensitive filter (2026-06-25)
+
+Re-ran the full pipeline on the same 10 real sessions with the **post-fix compactor**,
+cost-tracked, + a 10-query founder/manager + cross-engineer test. Artifacts:
+`validation/{recompact_ten.py,founder_queries.py,FINDINGS.md(Run-2 at top),worksheet.md,
+founder_scoring_sheet.md}`.
+
+- **Engineer side:** all four Run-1 defects hold fixed on real data — **files recall 100% on
+  every session** (was 2/21–6/21 on the old summary path), all `source=full` (no slice-scope
+  bleed), head+tail keeps the ending. **Real per-compaction cost (CLI `total_cost_usd`):
+  avg $0.21, total $2.08/10**; persisted to `call_cost_usd`, kept distinct from `est_cost_usd`
+  (list-equiv, cache-dominated — e.g. scribe $792) and `total_tokens` (magnitude). The 1–5
+  fidelity column is the user's to hand-score.
+- **Founder/manager side:** self/manager (real, k-anon 1) 3/3 filter + citations; cross-engineer
+  aggregates (synthetic 11-engineer org @ k-anon 4) grounded + cited (e.g. "what kept failing"
+  → 15 valid citations). **Privacy contrast confirmed live:** founder "what has Suraj worked
+  on?" → refused by k-anon; the audited manager view (`allow_individual`) on the same question
+  → 4 valid citations + named narrative. k-anon also correctly refuses the abandoned cohort
+  (< 4 distinct contributors).
+
+**NEW defect (found by Run 2) → FIXED:** `ServerStore.query_compactions` matched
+`project`/`outcome`/`surface` with case-sensitive `==`, so a founder typing "ASR" (stored slug
+`asr`) got an empty result that reads as "no data" rather than a filter miss. Now matched via
+`func.lower(col) == value.lower()` (actor stays exact — it's a resolved id on the manager path).
+Regression: `test_project_outcome_surface_filters_are_case_insensitive`. Post-fix the ASR query
+returns 6 valid citations.
+
+**2nd defect (also Run 2) → FIXED:** the NL parser emits a human *phrase* ("LLM evaluation")
+not the slug (`llm-eval`), which case-insensitivity can't bridge (`llm evaluation` ≠ `llm-eval`)
+→ the team-LLM-eval query returned nothing. Added `_resolve_project` (`server/founder.py`) +
+`ServerStore.list_projects`: a token-prefix match maps the phrase to a real slug from the org's
+known projects (exact hits first; ambiguous/unknown → unchanged, never guesses), applied in
+`run_query` on both founder and manager paths. Confirmed live: the query now returns 10 sessions
+/ 5 contributors / 6 valid citations. Regression `test_resolve_project_maps_free_text_to_slug`.
+**241 tests, ruff + pyright clean.** Remaining known limit (not a defect): "this week" resolves
+against the real clock, missing synthetic fixtures dated 2026-06-20.

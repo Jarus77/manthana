@@ -87,6 +87,18 @@
       "title": "Artifacts",
       "type": "array"
     },
+    "call_cost_usd": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Call Cost Usd"
+    },
     "created_at": {
       "anyOf": [
         {
@@ -149,6 +161,11 @@
       },
       "title": "Friction Points",
       "type": "array"
+    },
+    "hold": {
+      "default": false,
+      "title": "Hold",
+      "type": "boolean"
     },
     "id": {
       "description": "Stable compaction id",

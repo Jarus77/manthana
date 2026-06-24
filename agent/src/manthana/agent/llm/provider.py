@@ -43,11 +43,18 @@ class ClaudeCLIProvider:
     def __init__(self, binary: str = "claude", timeout: int = 180) -> None:
         self.binary = binary
         self.timeout = timeout
+        # Cost/usage reported by the CLI for the LAST complete() call — the real
+        # token spend of that invocation (e.g. a compaction). None until a call runs
+        # or if the envelope omits them.
+        self.last_cost_usd: float | None = None
+        self.last_usage: dict[str, int] | None = None
 
     def available(self) -> bool:
         return shutil.which(self.binary) is not None
 
     def complete(self, prompt: str) -> str:
+        self.last_cost_usd = None
+        self.last_usage = None
         try:
             out = subprocess.run(
                 [self.binary, "-p", prompt, "--output-format", "json"],
@@ -60,13 +67,21 @@ class ClaudeCLIProvider:
             raise LLMError(f"claude CLI invocation failed: {exc}") from exc
         if out.returncode != 0:
             raise LLMError(f"claude CLI exited {out.returncode}: {out.stderr.strip()[:500]}")
-        # `claude -p --output-format json` returns an envelope with a `result` field.
+        # `claude -p --output-format json` returns an envelope with a `result` field
+        # plus `total_cost_usd` + `usage` — capture those for cost tracking.
         try:
             envelope = json.loads(out.stdout)
-            if isinstance(envelope, dict) and "result" in envelope:
-                return str(envelope["result"])
         except json.JSONDecodeError:
-            pass
+            return out.stdout
+        if isinstance(envelope, dict):
+            cost = envelope.get("total_cost_usd")
+            if isinstance(cost, int | float):
+                self.last_cost_usd = float(cost)
+            usage = envelope.get("usage")
+            if isinstance(usage, dict):
+                self.last_usage = {k: int(v) for k, v in usage.items() if isinstance(v, int)}
+            if "result" in envelope:
+                return str(envelope["result"])
         return out.stdout
 
 

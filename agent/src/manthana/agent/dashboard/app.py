@@ -110,6 +110,15 @@ def _compaction_row(c: BaseCompaction) -> str:
         else "<span class='badge unrel'>local</span>"
     )
     label = "unrelease" if c.released else "release"
+    held = getattr(c, "hold", False)
+    # State: released / held (auto-release opted out) / local-pending (will auto-release).
+    if c.released:
+        state = "<span class='badge rel'>released</span>"
+    elif held:
+        state = "<span class='badge unrel'>held</span>"
+    else:
+        state = "<span class='badge unrel'>pending → auto-release</span>"
+    hold_label = "unhold" if held else "hold"
     details = (
         f"<details><summary>{_e(c.task_intent[:80])}</summary>"
         f"<b>intent:</b> {_e(c.task_intent)}<br><b>approach:</b> {_e(c.approach)}<br>"
@@ -118,9 +127,11 @@ def _compaction_row(c: BaseCompaction) -> str:
     cost = f"${c.est_cost_usd:.4f}" if c.est_cost_usd is not None else "—"
     return (
         f"<tr><td>{_e(c.id)}</td><td>{_e(c.project)}</td><td>{_e(c.outcome)}</td>"
-        f"<td>{_e(c.tier_used)}</td><td>{cost}</td><td>{badge}</td>"
+        f"<td>{_e(c.tier_used)}</td><td>{cost}</td><td>{badge}{state}</td>"
         f"<td><form method='post' action='/compaction/{_e(c.id)}/release'>"
-        f"<button>{label}</button></form></td><td>{details}</td></tr>"
+        f"<button>{label}</button></form> "
+        f"<form method='post' action='/compaction/{_e(c.id)}/hold'>"
+        f"<button>{hold_label}</button></form></td><td>{details}</td></tr>"
     )
 
 
@@ -385,6 +396,14 @@ def create_app(
             )
         return RedirectResponse(url="/compactions", status_code=303)
 
+    @app.post("/compaction/{compaction_id}/hold")
+    def hold(compaction_id: str) -> RedirectResponse:
+        # Toggle the auto-release opt-out (the engineer's escape hatch in the window).
+        comp = store.get_compaction(compaction_id)
+        if comp is not None:
+            store.set_hold(compaction_id, hold=not getattr(comp, "hold", False))
+        return RedirectResponse(url="/compactions", status_code=303)
+
     @app.post("/sync")
     def sync() -> Response:
         import os
@@ -405,9 +424,21 @@ def create_app(
                     "<a href='/compactions'>← back</a>",
                 )
             )
+        import httpx
+        from manthana.agent.sync_client import SyncError
+
         client = SyncClient(base, token)
         try:
             client.sync(store)
+        except (SyncError, httpx.HTTPError, OSError) as exc:
+            return HTMLResponse(
+                _page(
+                    "Sync",
+                    f"<div class='bar warn'>Sync failed: {_e(exc)} — check the server URL / "
+                    "team token / reachability, then retry.</div>"
+                    "<a href='/compactions'>← back</a>",
+                )
+            )
         finally:
             client.close()
         return RedirectResponse(url="/compactions", status_code=303)
@@ -444,7 +475,7 @@ def create_app(
         turns = drill_raw(store, compaction_id)
         rows = "".join(
             f"<tr><td>{t.seq}</td><td>{_e(t.role)}</td>"
-            f"<td><pre>{_e((t.content or t.tool_output or '')[:1500])}</pre></td></tr>"
+            f"<td><pre>{_e((t.content or t.tool_output or '')[:2000])}</pre></td></tr>"
             for t in turns
         )
         body = (
@@ -460,17 +491,23 @@ def create_app(
     def topics_page() -> str:
         from manthana.agent.insights import my_topics
 
-        tops = my_topics(store)
+        tops, cov = my_topics(store)
         rows = "".join(
             f"<tr><td>{_e(t.label)}</td><td>{len(t.sessions)}</td>"
             f"<td class='muted'>{_e('; '.join(t.sample_intents))}</td></tr>"
             for t in tops
         )
         empty = "<tr><td colspan=3>no recurring topics yet — compact a few sessions</td></tr>"
+        trunc = (
+            f"<p class='muted'>clustered over the {cov.used} most recent of {cov.matched} "
+            "compactions</p>"
+            if cov.truncated
+            else ""
+        )
         body = (
             "<div class='card'><b>Your topics</b> — emergent clusters across your own "
             "sessions (no LLM; semantic clustering of your compactions)</div>"
-            "<table><tr><th>topic</th><th>sessions</th><th>sample work</th></tr>"
+            f"{trunc}<table><tr><th>topic</th><th>sessions</th><th>sample work</th></tr>"
             f"{rows or empty}</table>"
         )
         return _page("Topics", body)

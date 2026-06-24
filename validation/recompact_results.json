@@ -1,0 +1,217 @@
+{
+  "sessions": 10,
+  "total_call_cost_usd": 2.0808,
+  "avg_call_cost_usd": 0.2081,
+  "rows": [
+    {
+      "label": "scribe",
+      "session_id": "59896ed2-495e-4661-a0a5-ec85c8318ed9.11",
+      "project": "scribe",
+      "turns": 1384,
+      "source": "full",
+      "outcome": "partial",
+      "est_cost_usd": 791.637784,
+      "total_tokens": 453914619,
+      "tier_used": "opus",
+      "call_cost_usd": 0.260023,
+      "call_seconds": 38.7,
+      "files_touched": 30,
+      "friction_points": 6,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 38272,
+        "cache_read_input_tokens": 15934,
+        "output_tokens": 1707
+      }
+    },
+    {
+      "label": "manthana",
+      "session_id": "138db3b9-4762-4d01-8633-2764c60b197c.2",
+      "project": "project",
+      "turns": 902,
+      "source": "full",
+      "outcome": "success",
+      "est_cost_usd": 431.627365,
+      "total_tokens": 207158263,
+      "tier_used": "opus",
+      "call_cost_usd": 0.247378,
+      "call_seconds": 40.7,
+      "files_touched": 110,
+      "friction_points": 4,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 34477,
+        "cache_read_input_tokens": 15934,
+        "output_tokens": 2382
+      }
+    },
+    {
+      "label": "bird-bench",
+      "session_id": "1782ce84-8cc9-44c7-9f70-c17a85fb1111.7",
+      "project": "bird-bench",
+      "turns": 634,
+      "source": "full",
+      "outcome": "partial",
+      "est_cost_usd": 641.582223,
+      "total_tokens": 334723192,
+      "tier_used": "opus",
+      "call_cost_usd": 0.274189,
+      "call_seconds": 46.1,
+      "files_touched": 27,
+      "friction_points": 5,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 39688,
+        "cache_read_input_tokens": 15934,
+        "output_tokens": 2085
+      }
+    },
+    {
+      "label": "dab_clone",
+      "session_id": "7f09f08c-a4c3-4360-ab62-6063864bdce9",
+      "project": "dab_clone",
+      "turns": 558,
+      "source": "full",
+      "outcome": "partial",
+      "est_cost_usd": 441.141002,
+      "total_tokens": 147907343,
+      "tier_used": "opus",
+      "call_cost_usd": 0.287701,
+      "call_seconds": 56.5,
+      "files_touched": 77,
+      "friction_points": 5,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 38975,
+        "cache_read_input_tokens": 15934,
+        "output_tokens": 3271
+      }
+    },
+    {
+      "label": "data",
+      "session_id": "10375d20-b5a4-4e08-8d51-198705175757",
+      "project": "data",
+      "turns": 507,
+      "source": "full",
+      "outcome": "partial",
+      "est_cost_usd": 135.856874,
+      "total_tokens": 55789907,
+      "tier_used": "opus",
+      "call_cost_usd": 0.279505,
+      "call_seconds": 45.4,
+      "files_touched": 32,
+      "friction_points": 5,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 40174,
+        "cache_read_input_tokens": 15934,
+        "output_tokens": 2245
+      }
+    },
+    {
+      "label": "harness",
+      "session_id": "b636d78d-c0c8-4e94-a7c7-52f8d0a8dfa3.96",
+      "project": "harness",
+      "turns": 355,
+      "source": "full",
+      "outcome": "success",
+      "est_cost_usd": 266.288516,
+      "total_tokens": 143414670,
+      "tier_used": "opus",
+      "call_cost_usd": 0.245263,
+      "call_seconds": 38.4,
+      "files_touched": 23,
+      "friction_points": 5,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 35172,
+        "cache_read_input_tokens": 15934,
+        "output_tokens": 1963
+      }
+    },
+    {
+      "label": "hinglish",
+      "session_id": "2eddfe69-cd5e-46c8-bfae-a3b77eefe20f.7",
+      "project": "hinglish_finetuning",
+      "turns": 316,
+      "source": "full",
+      "outcome": "success",
+      "est_cost_usd": 253.476985,
+      "total_tokens": 120951710,
+      "tier_used": "opus",
+      "call_cost_usd": 0.227122,
+      "call_seconds": 30.1,
+      "files_touched": 15,
+      "friction_points": 5,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 33466,
+        "cache_read_input_tokens": 15934,
+        "output_tokens": 1436
+      }
+    },
+    {
+      "label": "tts",
+      "session_id": "a8aeb113-5f21-41cd-8e7d-3a9ecb6d8cf7.12",
+      "project": "TTS",
+      "turns": 67,
+      "source": "full",
+      "outcome": "partial",
+      "est_cost_usd": 43.498337,
+      "total_tokens": 12876770,
+      "tier_used": "opus",
+      "call_cost_usd": 0.098749,
+      "call_seconds": 16.3,
+      "files_touched": 3,
+      "friction_points": 1,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 14113,
+        "cache_read_input_tokens": 15934,
+        "output_tokens": 619
+      }
+    },
+    {
+      "label": "grafting",
+      "session_id": "4811a97d-8461-4c22-b9b1-d4951bd853ab",
+      "project": "grafting_v2",
+      "turns": 32,
+      "source": "full",
+      "outcome": "success",
+      "est_cost_usd": 3.921068,
+      "total_tokens": 837688,
+      "tier_used": "opus",
+      "call_cost_usd": 0.083581,
+      "call_seconds": 16.3,
+      "files_touched": 7,
+      "friction_points": 1,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 11735,
+        "cache_read_input_tokens": 15934,
+        "output_tokens": 559
+      }
+    },
+    {
+      "label": "trajectory",
+      "session_id": "2647d07f-646e-444d-b3a6-c16c94f67b70",
+      "project": "trajectory_eval",
+      "turns": 23,
+      "source": "full",
+      "outcome": "success",
+      "est_cost_usd": 3.577186,
+      "total_tokens": 458845,
+      "tier_used": "opus",
+      "call_cost_usd": 0.07726,
+      "call_seconds": 9.6,
+      "files_touched": 12,
+      "friction_points": 0,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 11204,
+        "cache_read_input_tokens": 15934,
+        "output_tokens": 350
+      }
+    }
+  ]
+}

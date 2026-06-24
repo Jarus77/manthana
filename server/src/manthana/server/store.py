@@ -20,7 +20,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from manthana.schemas import BaseCompaction, CompactionAdapter
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.engine import Engine
 from sqlmodel import Session as DBSession
 from sqlmodel import col, select
@@ -136,6 +136,18 @@ class ServerStore:
         with DBSession(self._engine) as db:
             return list(db.exec(select(ActorRow).where(ActorRow.org_id == org_id)))
 
+    def list_projects(self, org_id: str) -> list[str]:
+        """Distinct project slugs that have at least one released compaction in this org.
+        Used by the founder pipeline to resolve a free-text project name to a real slug."""
+        with DBSession(self._engine) as db:
+            stmt = (
+                select(ReleasedCompactionRow.project)
+                .where(ReleasedCompactionRow.org_id == org_id)
+                .where(ReleasedCompactionRow.released == True)  # noqa: E712 - SQL boolean column
+                .distinct()
+            )
+            return sorted({p for p in db.exec(stmt) if p})
+
     # ── compaction vectors (semantic retrieval cache; released-only) ──────
     def vector_meta(self, org_id: str) -> dict[str, tuple[int, str]]:
         with DBSession(self._engine) as db:
@@ -161,16 +173,22 @@ class ServerStore:
             db.commit()
 
     def get_vectors(self, org_id: str, ids: list[str], *, dim: int) -> dict[str, list[float]]:
-        wanted = set(ids)
+        """Cached vectors for the given org's compaction ids at the active dim. Filters
+        in SQL (org + id IN + dim), chunked under SQLite's 999-variable limit."""
+        wanted = list(dict.fromkeys(ids))
+        out: dict[str, list[float]] = {}
         with DBSession(self._engine) as db:
-            stmt = select(ReleasedCompactionVectorRow).where(
-                ReleasedCompactionVectorRow.org_id == org_id
-            )
-            return {
-                r.compaction_id: r.vec
-                for r in db.exec(stmt)
-                if r.compaction_id in wanted and r.dim == dim
-            }
+            for i in range(0, len(wanted), 900):
+                chunk = wanted[i : i + 900]
+                stmt = (
+                    select(ReleasedCompactionVectorRow)
+                    .where(ReleasedCompactionVectorRow.org_id == org_id)
+                    .where(col(ReleasedCompactionVectorRow.compaction_id).in_(chunk))
+                    .where(ReleasedCompactionVectorRow.dim == dim)
+                )
+                for r in db.exec(stmt):
+                    out[r.compaction_id] = r.vec
+        return out
 
     def count_compactions(self, org_id: str) -> int:
         with DBSession(self._engine) as db:
@@ -247,14 +265,19 @@ class ServerStore:
             )
             if team_id is not None:
                 stmt = stmt.where(ReleasedCompactionRow.team_id == team_id)
+            # project / outcome / surface are matched case-INSENSITIVELY: the founder
+            # NL parser emits human casing ("ASR", "BIRD", "Success") while the stored
+            # slug is lower/enum-cased, so an exact `==` silently returns nothing — which
+            # reads as "no data" rather than a filter miss. actor stays exact (it's a
+            # resolved id on the manager path; the founder path suppresses per-person).
             if project is not None:
-                stmt = stmt.where(ReleasedCompactionRow.project == project)
+                stmt = stmt.where(func.lower(ReleasedCompactionRow.project) == project.lower())
             if outcome is not None:
-                stmt = stmt.where(ReleasedCompactionRow.outcome == outcome)
+                stmt = stmt.where(func.lower(ReleasedCompactionRow.outcome) == outcome.lower())
             if actor is not None:
                 stmt = stmt.where(ReleasedCompactionRow.actor == actor)
             if surface is not None:
-                stmt = stmt.where(ReleasedCompactionRow.surface == surface)
+                stmt = stmt.where(func.lower(ReleasedCompactionRow.surface) == surface.lower())
             since_norm = _normalize_since(since)
             if since_norm is not None:
                 stmt = stmt.where(col(ReleasedCompactionRow.started_at) >= since_norm)

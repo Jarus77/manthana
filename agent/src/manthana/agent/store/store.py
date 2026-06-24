@@ -334,14 +334,35 @@ class Store:
             db.commit()
 
     def get_vectors(self, ids: Iterable[str], *, dim: int) -> dict[str, list[float]]:
-        """Cached vectors for the given ids that match the active embedder ``dim``."""
-        wanted = set(ids)
+        """Cached vectors for the given ids that match the active embedder ``dim``.
+
+        Filters in SQL (id IN + dim), chunked under SQLite's 999-variable limit, so a
+        large store isn't fully loaded on every query."""
+        wanted = list(dict.fromkeys(ids))
+        out: dict[str, list[float]] = {}
         with DBSession(self._engine) as db:
-            return {
-                r.id: r.vec
-                for r in db.exec(select(CompactionVectorRow))
-                if r.id in wanted and r.dim == dim
-            }
+            for i in range(0, len(wanted), 900):
+                chunk = wanted[i : i + 900]
+                stmt = (
+                    select(CompactionVectorRow)
+                    .where(col(CompactionVectorRow.id).in_(chunk))
+                    .where(CompactionVectorRow.dim == dim)
+                )
+                for r in db.exec(stmt):
+                    out[r.id] = r.vec
+        return out
+
+    def set_hold(self, compaction_id: str, *, hold: bool = True) -> bool:
+        """Set the local auto-release opt-out flag on a compaction."""
+        with DBSession(self._engine) as db:
+            row = db.get(CompactionRow, compaction_id)
+            if row is None:
+                return False
+            model = CompactionAdapter.validate_python(row.data)
+            model.hold = hold
+            db.merge(_compaction_row(model))
+            db.commit()
+            return True
 
     # ── action audit log (seam) ──────────────────────────────────────────
     def add_audit(self, entry: ActionAuditEntry) -> None:
@@ -433,6 +454,16 @@ class Store:
             row.raw_synced_at = when.isoformat()
             db.merge(row)
             db.commit()
+
+    def clear_synced(self, compaction_id: str) -> None:
+        """Forget a compaction's sync watermark so re-compacted (resumed) content
+        re-syncs to the server (sync dedups by id, so a changed digest must be re-marked
+        dirty or the server keeps the stale version)."""
+        with DBSession(self._engine) as db:
+            row = db.get(SyncStateRow, compaction_id)
+            if row is not None:
+                db.delete(row)
+                db.commit()
 
     def synced_ids(self) -> set[str]:
         with DBSession(self._engine) as db:

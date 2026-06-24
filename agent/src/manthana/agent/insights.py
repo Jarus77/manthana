@@ -25,7 +25,7 @@ from typing import Any
 
 from manthana.skills.assembly import Topic, thread_key
 from manthana.skills.assembly import topics as _build_topics
-from manthana.skills.cluster import default_text_of
+from manthana.skills.cluster import DEFAULT_MAX_ITEMS, default_text_of
 from manthana.skills.embed import Embedder, default_embedder
 from manthana.skills.retrieval import Coverage, rank, text_hash
 
@@ -83,19 +83,22 @@ def _index_and_rank(
     Indexing is scoped to the (already structured-filtered) candidates and cached,
     so the first ask over a slice embeds only that slice and later asks are instant.
     """
-    have = store.vector_meta()
-    todo: list[tuple[str, str, str]] = []
-    for c in candidates:
-        txt = default_text_of(c)
-        h = text_hash(txt)
-        if have.get(c.id) != (embedder.dim, h):
-            todo.append((c.id, txt, h))
-    if todo:
-        vecs = embedder.embed([t for _, t, _ in todo])
-        for (cid, _txt, h), v in zip(todo, vecs, strict=True):
-            store.upsert_vector(cid, dim=embedder.dim, text_hash=h, vec=v)
-    vectors = store.get_vectors([c.id for c in candidates], dim=embedder.dim)
-    return rank(query, candidates, vectors, embedder, k=k)
+    try:
+        have = store.vector_meta()
+        todo: list[tuple[str, str, str]] = []
+        for c in candidates:
+            txt = default_text_of(c)
+            h = text_hash(txt)
+            if have.get(c.id) != (embedder.dim, h):
+                todo.append((c.id, txt, h))
+        if todo:
+            vecs = embedder.embed([t for _, t, _ in todo])
+            for (cid, _txt, h), v in zip(todo, vecs, strict=True):
+                store.upsert_vector(cid, dim=embedder.dim, text_hash=h, vec=v)
+        vectors = store.get_vectors([c.id for c in candidates], dim=embedder.dim)
+        return rank(query, candidates, vectors, embedder, k=k)
+    except Exception:  # noqa: BLE001 - embedder/index failure degrades to unranked, never crashes
+        return candidates[:k], Coverage(matched=len(candidates), used=min(k, len(candidates)))
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -256,10 +259,12 @@ def ask(
     )
 
 
-def my_topics(store: Store, *, embedder: Embedder | None = None) -> list[Topic]:
-    """The engineer's own emergent topic clusters (own data → no k-anon)."""
+def my_topics(store: Store, *, embedder: Embedder | None = None) -> tuple[list[Topic], Coverage]:
+    """The engineer's own emergent topic clusters (own data → no k-anon), plus a
+    coverage signal (clustering caps at DEFAULT_MAX_ITEMS — surfaced, not silent)."""
     comps = store.list_compactions(limit=_MAX_SCAN)
-    return _build_topics(comps, embedder or default_embedder(), min_contributors=1)
+    tops = _build_topics(comps, embedder or default_embedder(), min_contributors=1)
+    return tops, Coverage(matched=len(comps), used=min(len(comps), DEFAULT_MAX_ITEMS))
 
 
 def drill_raw(

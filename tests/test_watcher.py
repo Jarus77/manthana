@@ -141,14 +141,16 @@ def test_ingest_error_isolated_and_retried(tmp_path: Path) -> None:
     assert str(f2) in seen
 
 
-def test_compact_flag_invokes_compact_fn(tmp_path: Path) -> None:
+def test_auto_compact_all_settled(tmp_path: Path) -> None:
     proj = tmp_path / "projects"
     _touch(proj / "p1" / "s1.jsonl")
     _calls, ingest = _recorder()
     calls: list[bool] = []
 
     def fake_compact(
-        _store: object, *, provider: object = None, summarized_only: bool = False
+        _store: object, *, provider: object = None, now: float = 0.0,
+        settle_seconds: float = 600.0, summarized_only: bool = False,
+        max_per_cycle: int | None = None,
     ) -> list[object]:
         calls.append(summarized_only)
         return []
@@ -157,22 +159,24 @@ def test_compact_flag_invokes_compact_fn(tmp_path: Path) -> None:
         Store.open_memory(),
         collector=_collector(proj),
         ingest=ingest,  # type: ignore[arg-type]
-        compact=True,
+        auto_compact=True,
         compact_fn=fake_compact,  # type: ignore[arg-type]
         sleep=_noop_sleep,
         iterations=1,
     )
-    assert calls == [False]  # compact=all → summarized_only False
+    assert calls == [False]  # default = all settled (summarized_only False)
 
 
-def test_compact_summarized_uses_summarized_only(tmp_path: Path) -> None:
+def test_auto_compact_summarized_only(tmp_path: Path) -> None:
     proj = tmp_path / "projects"
     _touch(proj / "p1" / "s1.jsonl")
     _calls, ingest = _recorder()
     seen: list[bool] = []
 
     def fake_compact(
-        _store: object, *, provider: object = None, summarized_only: bool = False
+        _store: object, *, provider: object = None, now: float = 0.0,
+        settle_seconds: float = 600.0, summarized_only: bool = False,
+        max_per_cycle: int | None = None,
     ) -> list[object]:
         seen.append(summarized_only)
         return []
@@ -181,7 +185,8 @@ def test_compact_summarized_uses_summarized_only(tmp_path: Path) -> None:
         Store.open_memory(),
         collector=_collector(proj),
         ingest=ingest,  # type: ignore[arg-type]
-        compact_summarized=True,
+        auto_compact=True,
+        summarized_only=True,
         compact_fn=fake_compact,  # type: ignore[arg-type]
         sleep=_noop_sleep,
         iterations=1,

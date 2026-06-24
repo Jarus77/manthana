@@ -40,9 +40,9 @@ class Coverage:
     def note(self) -> str:
         return (
             f"answered over the {self.used} most relevant of {self.matched} matching "
-            "sessions — narrow the question to cover more"
+            "compactions — narrow the question to cover more"
             if self.truncated
-            else f"answered over all {self.matched} matching sessions"
+            else f"answered over all {self.matched} matching compactions"
         )
 
 
