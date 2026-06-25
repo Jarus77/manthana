@@ -1368,3 +1368,21 @@ known projects (exact hits first; ambiguous/unknown → unchanged, never guesses
 / 5 contributors / 6 valid citations. Regression `test_resolve_project_maps_free_text_to_slug`.
 **241 tests, ruff + pyright clean.** Remaining known limit (not a defect): "this week" resolves
 against the real clock, missing synthetic fixtures dated 2026-06-20.
+
+## 38. Founder-query temporal resolution → release v0.2.1 (2026-06-25)
+
+The last founder-query gap: `_PARSE_PROMPT` never told the model what "today" is, so relative
+dates ("this week", "last 30 days") were resolved against the model's training cutoff. Fixed two
+ways in `server/founder.py`:
+- **Date-anchored prompt:** `_PARSE_PROMPT` now leads with "Today is {today} (UTC). Resolve any
+  relative dates against THAT date."
+- **Deterministic override:** `_resolve_temporal(query, spec, now)` resolves common phrases in
+  *code* — today / yesterday / "last N days" / this week (rolling 7d) / last week / this month /
+  last month / recently (30d) — to concrete `since`/`until`, overriding the LLM for those cases.
+  `now` is injectable (`parse_filter(..., now=)` threaded from `run_query`) so it's
+  test-deterministic; default = `datetime.now(UTC)`. Phrases it doesn't recognize fall through to
+  the (now date-anchored) LLM. Regression `test_temporal_phrases_resolve_against_injected_now`.
+
+**Shipped as v0.2.1** (the two founder-filter fixes from §37 — case-insensitive +
+free-text-project→slug — plus this temporal fix): all five workspace packages bumped
+`0.2.0 → 0.2.1`; tag `v0.2.1`. **242 tests, ruff + pyright clean.**

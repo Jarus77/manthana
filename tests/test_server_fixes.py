@@ -150,6 +150,35 @@ def test_resolve_project_maps_free_text_to_slug() -> None:
     assert _resolve_project(store, "orgA", None) is None
 
 
+def test_temporal_phrases_resolve_against_injected_now() -> None:
+    # The LLM used to resolve "this week" against its own training cutoff. Now the
+    # parse prompt is date-anchored AND common relative phrases are resolved in code
+    # against an injectable `now`, so temporal filters are deterministic.
+    from manthana.server.founder import parse_filter
+
+    now = datetime(2026, 6, 25, 12, 0, tzinfo=UTC)
+
+    def parse(q: str):  # provider returns {} → only the deterministic resolver fires
+        return parse_filter(q, ScriptedProvider(["{}"]), now=now)
+
+    assert (parse("what shipped today?").since, parse("x today").until) == (
+        "2026-06-25", "2026-06-25")
+    y = parse("what happened yesterday?")
+    assert (y.since, y.until) == ("2026-06-24", "2026-06-24")
+    wk = parse("what did the team do this week?")
+    assert (wk.since, wk.until) == ("2026-06-18", "2026-06-25")  # rolling 7 days
+    d30 = parse("what kept failing in the last 30 days?")
+    assert (d30.since, d30.until) == ("2026-05-26", "2026-06-25")
+    tm = parse("what shipped this month?")
+    assert (tm.since, tm.until) == ("2026-06-01", "2026-06-25")
+    lm = parse("what shipped last month?")
+    assert (lm.since, lm.until) == ("2026-05-01", "2026-05-31")
+    rec = parse("what has the team been working on recently?")
+    assert (rec.since, rec.until) == ("2026-05-26", "2026-06-25")
+    # no temporal phrase → leaves LLM's (here empty) since/until untouched
+    assert parse("what is the team building in text-to-sql?").since is None
+
+
 # ── Finding 6: per-bucket k-anonymity ──────────────────────────────────────
 def test_per_bucket_k_anon_suppresses_single_contributor_project() -> None:
     config = Cfg(k_anon_floor=4, jwt_secret="x" * 40, admin_token="adm")

@@ -16,6 +16,7 @@ import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from manthana.schemas import Surface
@@ -72,6 +73,8 @@ class FounderResult:
 
 
 _PARSE_PROMPT = (
+    "Today is {today} (UTC). Resolve any relative dates ('this week', 'last 30 days', "
+    "'yesterday', 'recently') against THAT date, not your training cutoff.\n"
     "Parse this founder question into a JSON filter with keys: team_id, project, "
     "outcome (success|partial|abandoned), actor, surface (claude_code|codex|cursor), "
     "since (ISO date), until (ISO date). Use null for anything unspecified. "
@@ -164,26 +167,67 @@ def _extract_json(raw: str) -> dict[str, Any]:
     return {}
 
 
-def parse_filter(query: str, provider: LLMProvider) -> FounderFilter:
+def _resolve_temporal(query: str, spec: FounderFilter, now: datetime) -> None:
+    """Deterministically resolve common relative date phrases in the QUERY to concrete
+    since/until (YYYY-MM-DD), overriding the LLM for these cases so 'this week' / 'last 30
+    days' anchor to the actual clock (``now``), not the model's training cutoff. Phrases not
+    matched here are left to the LLM (whose prompt is now date-anchored). Mutates ``spec``."""
+    q = query.lower()
+    today = now.date()
+
+    def setw(since: date, until: date) -> None:
+        spec.since = since.isoformat()
+        spec.until = until.isoformat()
+
+    m = re.search(r"\b(?:last|past|previous|in the last)\s+(\d{1,4})\s+days?\b", q)
+    if m:
+        setw(today - timedelta(days=int(m.group(1))), today)
+        return
+    if re.search(r"\btoday\b", q):
+        setw(today, today)
+    elif re.search(r"\byesterday\b", q):
+        setw(today - timedelta(days=1), today - timedelta(days=1))
+    elif re.search(r"\b(this week|past week|this past week|last 7 days|last seven days)\b", q):
+        setw(today - timedelta(days=7), today)
+    elif re.search(r"\blast week\b", q):
+        setw(today - timedelta(days=14), today - timedelta(days=7))
+    elif re.search(r"\bthis month\b", q):
+        setw(today.replace(day=1), today)
+    elif re.search(r"\blast month\b", q):
+        last_prev = today.replace(day=1) - timedelta(days=1)  # last day of previous month
+        setw(last_prev.replace(day=1), last_prev)
+    elif re.search(r"\b(recently|lately|past month|last 30 days|last thirty days)\b", q):
+        setw(today - timedelta(days=30), today)
+
+
+def parse_filter(
+    query: str, provider: LLMProvider, *, now: datetime | None = None
+) -> FounderFilter:
+    now = now or datetime.now(UTC)
     # A real provider (Anthropic) can raise (rate limit / network / auth); degrade
     # to an empty filter (match all) rather than 500 — and never let the raw SDK
     # exception reach the client.
     try:
-        raw = provider.complete(_PARSE_PROMPT.format(query=query))
+        raw = provider.complete(_PARSE_PROMPT.format(query=query, today=now.date().isoformat()))
     except Exception:  # noqa: BLE001 - any provider failure degrades gracefully
         _log.exception("founder filter parse: provider call failed")
-        return FounderFilter()
+        spec = FounderFilter()
+        _resolve_temporal(query, spec, now)  # still anchor relative dates deterministically
+        return spec
     data = _extract_json(raw)
     try:
         spec = FounderFilter.model_validate(data)
     except ValidationError:
-        return FounderFilter()
+        spec = FounderFilter()
     # Null out values that aren't valid enum members (else they silently match
     # zero rows and the founder gets a spurious "insufficient data").
     if spec.outcome is not None and spec.outcome not in _VALID_OUTCOMES:
         spec.outcome = None
     if spec.surface is not None and spec.surface not in _VALID_SURFACES:
         spec.surface = None
+    # Deterministically anchor common relative-date phrases to `now` (overrides the LLM
+    # for these), so temporal filters never depend on the model's notion of "today".
+    _resolve_temporal(query, spec, now)
     return spec
 
 
@@ -291,12 +335,14 @@ def run_query(
     source: str | None = None,
     allow_individual: bool = False,
     embedder: Embedder | None = None,
+    now: datetime | None = None,
 ) -> FounderResult:
     """``allow_individual`` is the **manager view**: it skips the k-anonymity floor
     so a query that resolves to a single named person returns results. It must only
     be set behind manager auth, and every such call is audited by the caller. The
-    default (founder console) path is unchanged: per-person queries are suppressed."""
-    spec = parse_filter(query, provider)
+    default (founder console) path is unchanged: per-person queries are suppressed.
+    ``now`` anchors relative-date parsing (defaults to the wall clock; injectable for tests)."""
+    spec = parse_filter(query, provider, now=now)
     # Resolve a free-text project ("LLM evaluation") to a real slug ("llm-eval") so a
     # phrasing mismatch doesn't silently return nothing (semantic retrieval still ranks
     # within the resolved set). Safe on both paths — it only narrows to a known slug.

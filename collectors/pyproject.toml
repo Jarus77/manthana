@@ -1,6 +1,6 @@
 [project]
 name = "manthana-collectors"
-version = "0.2.0"
+version = "0.2.1"
 description = "Manthana collectors — per-surface adapters that normalize transcripts to Turns."
 requires-python = ">=3.11"
 license = "Apache-2.0"
