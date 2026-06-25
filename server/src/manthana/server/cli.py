@@ -61,6 +61,29 @@ def onboard(org_id: str, org_name: str, team_id: str, team_name: str, actor: str
     typer.echo(tok)
 
 
+@app.command()
+def router_analysis(org_id: str) -> None:
+    """Estimate cost savings from routing low-risk sessions to cheaper model tiers."""
+    from .analyzer import analyze_counterfactual_costs
+
+    config = ServerConfig.from_env()
+    report = analyze_counterfactual_costs(ServerStore.open(config.db_url), org_id)
+    skip = ""
+    if report.skipped_no_tokens:
+        skip = f" (skipped {report.skipped_no_tokens} pre-breakdown)"
+    typer.echo(f"org={report.org_id}  priced={report.priced}/{report.sessions} sessions{skip}")
+    typer.echo(
+        f"current ~${report.current_usd:.2f} → projected ~${report.projected_usd:.2f}  "
+        f"= save ${report.savings_usd:.2f} ({report.savings_pct:.1f}%)  "
+        f"downgrades: {report.by_target or '—'}"
+    )
+    for r in report.rows[:10]:
+        if r.savings_usd > 0:
+            typer.echo(
+                f"  {r.tier}→{r.target_tier}  save ${r.savings_usd:.2f}  [{r.project}] {r.id}"
+            )
+
+
 def main() -> None:
     app()
 

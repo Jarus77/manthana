@@ -184,6 +184,10 @@ class Compactor:
             tier_used=cost.tier,
             est_cost_usd=cost.usd,
             total_tokens=cost.total_tokens,
+            input_tokens=cost.input_tokens,
+            output_tokens=cost.output_tokens,
+            cache_write_tokens=cost.cache_write_tokens,
+            cache_read_tokens=cost.cache_read_tokens,
             created_at=datetime.now(UTC),  # when this digest was built (auto-release window)
             prompt_version=(
                 f"{self.prompt_version}-summary" if used_summary else self.prompt_version

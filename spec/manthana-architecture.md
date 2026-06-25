@@ -1432,3 +1432,25 @@ compactions in real time — and the first use of the local embeddings for *retr
 - Tests: `find_prior_work` surfaces related + excludes self + empty-when-no-priors; handler fires
   via dispatcher; `rank_scored` descending + matches `rank` order. **252 tests, ruff + pyright
   clean.**
+
+## 41. Router analyzer — counterfactual cost extraction (2026-06-25) — roadmap phase D
+
+A measurable, design-partner-facing artifact: what released sessions WOULD cost on cheaper
+tiers. Re-pricing only (no live replay).
+- **Per-kind tokens persisted:** added `input_tokens/output_tokens/cache_write_tokens/
+  cache_read_tokens` to `BaseCompaction` (additive; JSON mirror regenerated), set in
+  `compactor.py` from the existing `CostBreakdown`. Needed because cache-read (~1/10th the input
+  rate) dominates — a precise re-price needs the split, not just `total_tokens`.
+- `server/analyzer/router.py`: `analyze_counterfactual_costs(store, org_id) -> RouterReport`.
+  Re-prices each released compaction's per-kind tokens at its current tier and at one tier cheaper
+  for **low-risk** sessions (a `_safe_to_downgrade` heuristic: not abandoned, no `loop`/`deadend`
+  friction, ≤2 friction points). Reports per-session rows + org rollup (current/projected/savings
+  $ + %, downgrades by target). Pre-breakdown digests are **skipped + counted** (never silently
+  dropped). The rate table is duplicated (server is AGPL — no agent import) with a pointer to the
+  canonical `agent/cost/rates.py`.
+- Surfaces: `GET /v1/admin/router-analysis?org_id=` (admin-gated), console **Cost $** panel
+  (`/ui/router`), CLI `manthana-server router-analysis --org`.
+- **Live (synthetic 11-engineer org, after adding per-kind tokens to the seed):** re-priced 44/44
+  sessions → **est. $51.92 (42.3%) savings** by routing 23 low-risk sessions opus→sonnet.
+- Tests: exact re-pricing math, downgrade heuristic (safe vs loop/abandoned), pre-breakdown skip,
+  endpoint admin-gated. **256 tests, ruff + pyright clean.**

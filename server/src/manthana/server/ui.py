@@ -23,6 +23,7 @@ from fastapi import Cookie, FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from manthana.skills import mine_org
 
+from .analyzer import analyze_counterfactual_costs
 from .config import ServerConfig
 from .founder import run_query, team_topics, thread
 from .llm import LLMProvider
@@ -133,6 +134,7 @@ def mount_ui(
                 f"<tr><td>{_e(o.name)} <span class='muted'>({_e(o.id)})</span></td>"
                 f"<td>{teams}</td><td>{comps}</td><td>{pending}</td>"
                 f"<td><a href='/ui/topics?org_id={_e(o.id)}'>Topics</a> · "
+                f"<a href='/ui/router?org_id={_e(o.id)}'>Cost $</a> · "
                 f"<form method='post' action='/ui/mine'>"
                 f"<input type='hidden' name='org_id' value='{_e(o.id)}'>"
                 "<button>Mine org skills</button></form></td></tr>"
@@ -382,6 +384,37 @@ def mount_ui(
             "<p><a href='/ui/manager'>← back</a></p>"
         )
         return HTMLResponse(_page("Manager drill", body))
+
+    @app.get("/ui/router", response_class=HTMLResponse)
+    def ui_router(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:
+        if not _authed(manthana_admin):
+            return RedirectResponse(url="/ui/login", status_code=303)
+        rep = analyze_counterfactual_costs(store, org_id)
+        rows = "".join(
+            f"<tr><td>{_e(r.project)}</td><td>{_e(r.tier)}→{_e(r.target_tier or '—')}</td>"
+            f"<td>${r.current_usd:.2f}</td><td>${r.projected_usd:.2f}</td>"
+            f"<td>${r.savings_usd:.2f}</td></tr>"
+            for r in rep.rows[:25]
+            if r.savings_usd > 0
+        )
+        skip = (
+            f" · {rep.skipped_no_tokens} pre-breakdown digests skipped"
+            if rep.skipped_no_tokens
+            else ""
+        )
+        body = (
+            f"<p class='muted'>org: {_e(org_id)} · re-priced {rep.priced}/{rep.sessions} "
+            f"released sessions{skip} · API-list-equivalent (not subscription spend)</p>"
+            f"<h3>Estimated savings: ${rep.savings_usd:.2f} ({rep.savings_pct:.1f}%) "
+            f"by routing {sum(rep.by_target.values())} low-risk session(s) one tier down</h3>"
+            f"<p class='muted'>current ~${rep.current_usd:.2f} → "
+            f"projected ~${rep.projected_usd:.2f} · downgrades: {_e(str(rep.by_target) or '—')}</p>"
+            "<table><tr><th>project</th><th>route</th><th>now</th><th>projected</th>"
+            "<th>save</th></tr>"
+            f"{rows or '<tr><td colspan=5>no downgrade candidates</td></tr>'}</table>"
+            "<p><a href='/ui'>← console</a></p>"
+        )
+        return HTMLResponse(_page(f"Cost — {org_id}", body))
 
     @app.get("/ui/topics", response_class=HTMLResponse)
     def ui_topics(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:

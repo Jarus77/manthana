@@ -87,6 +87,30 @@
       "title": "Artifacts",
       "type": "array"
     },
+    "cache_read_tokens": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cache Read Tokens"
+    },
+    "cache_write_tokens": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cache Write Tokens"
+    },
     "call_cost_usd": {
       "anyOf": [
         {
@@ -172,6 +196,18 @@
       "title": "Id",
       "type": "string"
     },
+    "input_tokens": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Input Tokens"
+    },
     "kind": {
       "const": "engineering",
       "default": "engineering",
@@ -187,6 +223,18 @@
     },
     "outcome": {
       "$ref": "#/$defs/Outcome"
+    },
+    "output_tokens": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Output Tokens"
     },
     "project": {
       "title": "Project",

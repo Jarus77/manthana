@@ -56,6 +56,13 @@ class BaseCompaction(BaseModel):
         default=None,
         description="Total tokens (input + output + cache write + cache read) for the session",
     )
+    # Per-kind token breakdown — lets the org-side router analyzer re-price a session at a
+    # cheaper tier exactly (cache-read tokens are ~1/10th the input rate, so the blend matters).
+    # Non-sensitive counts; released as-is.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    cache_read_tokens: int | None = None
     # Actual cost of the compaction LLM call that produced this digest (CLI-reported),
     # vs est_cost_usd which is the list-price equivalent of the ORIGINAL session.
     call_cost_usd: float | None = None

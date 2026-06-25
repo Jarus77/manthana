@@ -155,6 +155,12 @@ def _build() -> list[EngineeringCompaction]:
                         tier_used="opus",
                         est_cost_usd=round(tokens * 1.5 / 1e6, 4),
                         total_tokens=tokens,
+                        # Realistic per-kind split (cache-read dominates) so the router
+                        # analyzer can re-price these at cheaper tiers.
+                        input_tokens=int(tokens * 0.05),
+                        output_tokens=int(tokens * 0.07),
+                        cache_write_tokens=int(tokens * 0.03),
+                        cache_read_tokens=int(tokens * 0.85),
                         files_touched=[f"src/{project.replace('-', '_')}/run_{n}.py"],
                         languages=["python"],
                         released=True,
