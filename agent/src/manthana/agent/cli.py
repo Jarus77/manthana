@@ -265,6 +265,20 @@ def ask(question: str, source: str = "") -> None:
 
 
 @app.command()
+def related(session_id: str) -> None:
+    """Surface your most relevant PRIOR compactions for a session (local embeddings)."""
+    from manthana.agent.actions.prior_work import find_prior_work
+
+    hits = find_prior_work(Store.open(), session_id)
+    if not hits:
+        typer.echo("no related prior work found (or no compaction for that session yet)")
+        return
+    typer.echo(f"related prior work ({len(hits)}):")
+    for score, c in hits:
+        typer.echo(f"  {score:.2f}  [{c.project}] {c.task_intent[:90]}")  # type: ignore[attr-defined]
+
+
+@app.command()
 def mode(session_id: str, value: str) -> None:
     """Set a session's mode: work | personal. Personal-mode sessions never sync."""
     try:

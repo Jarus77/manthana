@@ -45,6 +45,7 @@ _STYLE = (
     ".badge{padding:1px 6px;border-radius:4px;font-size:12px}"
     ".rel{background:#dfd;color:#060}.unrel{background:#eee;color:#666}"
     ".badge.warn{background:#fe9;color:#a60;margin-left:4px}"
+    ".badge.prior{background:#def;color:#04a;margin-left:4px}"
     ".ok{color:#060}.warn{color:#a60}details summary{cursor:pointer}"
     ".bar{margin:0 0 1rem;padding:.6rem;background:#f7f7f7;border:1px solid #eee;border-radius:6px}"
     "pre{white-space:pre-wrap;background:#fafafa;border:1px solid #eee;padding:8px}</style>"
@@ -104,7 +105,9 @@ def _session_row(session: Session, compacted: set[str], compacting: set[str]) ->
     )
 
 
-def _compaction_row(c: BaseCompaction, *, looped: bool = False) -> str:
+def _compaction_row(
+    c: BaseCompaction, *, looped: bool = False, prior: list[dict[str, object]] | None = None
+) -> str:
     badge = (
         "<span class='badge rel'>released</span>"
         if c.released
@@ -112,6 +115,10 @@ def _compaction_row(c: BaseCompaction, *, looped: bool = False) -> str:
     )
     label = "unrelease" if c.released else "release"
     loop_badge = "<span class='badge warn'>⚠ loop</span>" if looped else ""
+    prior_badge = ""
+    if prior:
+        tip = _e("; ".join(f"{p.get('project')}: {p.get('intent')}" for p in prior[:3]))
+        prior_badge = f"<span class='badge prior' title='{tip}'>🔗 {len(prior)} prior</span>"
     held = getattr(c, "hold", False)
     # State: released / held (auto-release opted out) / local-pending (will auto-release).
     if c.released:
@@ -129,7 +136,7 @@ def _compaction_row(c: BaseCompaction, *, looped: bool = False) -> str:
     cost = f"${c.est_cost_usd:.4f}" if c.est_cost_usd is not None else "—"
     return (
         f"<tr><td>{_e(c.id)}</td><td>{_e(c.project)}</td><td>{_e(c.outcome)}</td>"
-        f"<td>{_e(c.tier_used)}</td><td>{cost}</td><td>{badge}{state}{loop_badge}</td>"
+        f"<td>{_e(c.tier_used)}</td><td>{cost}</td><td>{badge}{state}{loop_badge}{prior_badge}</td>"
         f"<td><form method='post' action='/compaction/{_e(c.id)}/release'>"
         f"<button>{label}</button></form> "
         f"<form method='post' action='/compaction/{_e(c.id)}/hold'>"
@@ -376,7 +383,16 @@ def create_app(
             for e in store.list_audit(action_id="loop_warning", limit=500)
             if e.outcome is ActionOutcome.fired and e.details.get("session_id")
         }
-        rows = "".join(_compaction_row(c, looped=c.session_id in looped) for c in comps)
+        # Most recent prior-work hits per session → 🔗 badge.
+        prior: dict[str, list[dict[str, object]]] = {}
+        for e in store.list_audit(action_id="prior_work", limit=500):
+            sid = e.details.get("session_id")
+            if e.outcome is ActionOutcome.fired and sid and sid not in prior:
+                prior[sid] = e.details.get("related", [])
+        rows = "".join(
+            _compaction_row(c, looped=c.session_id in looped, prior=prior.get(c.session_id))
+            for c in comps
+        )
         bar = (
             "<div class='bar'><form method='post' action='/sync'>"
             "<button>↥ Sync released</button></form> "

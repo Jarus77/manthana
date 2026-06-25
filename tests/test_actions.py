@@ -232,3 +232,48 @@ def test_loop_warning_action_metadata() -> None:
 
     assert LOOP_WARNING_ACTION.shape is ActionShape.warn
     assert LOOP_WARNING_ACTION.consent_class is ConsentClass.opt_out
+
+
+# ── Prior-work surfacing (Phase C) ──────────────────────────────────────────
+def _seed_comp(store: Store, sid: str, project: str, intent: str, approach: str) -> None:
+    store.upsert_session(Session(
+        id=sid, actor="eng@example.com", surface=Surface.claude_code, project=project,
+        started_at=_T0, mode=Mode.work, turn_count=1))
+    store.upsert_compaction(EngineeringCompaction(
+        id=f"comp-{sid}", session_id=sid, actor="eng@example.com", surface=Surface.claude_code,
+        project=project, started_at=_T0, ended_at=_T0, duration_seconds=1.0,
+        task_intent=intent, approach=approach, outcome=Outcome.success))
+
+
+def test_find_prior_work_surfaces_related_and_excludes_self() -> None:
+    from manthana.agent.actions.prior_work import find_prior_work
+    from manthana.skills.embed import HashingEmbedder
+
+    store = Store.open_memory()
+    _seed_comp(store, "s1", "db", "postgres migration", "alter the postgres database schema")
+    _seed_comp(store, "s2", "db", "postgres database tuning", "optimize postgres database indexes")
+    _seed_comp(store, "s3", "ui", "react frontend", "build the react component tree")
+    hits = find_prior_work(store, "s1", embedder=HashingEmbedder(), tau=0.2)
+    ids = [c.id for _, c in hits]  # type: ignore[attr-defined]
+    assert "comp-s2" in ids and "comp-s1" not in ids  # related surfaced, self excluded
+    assert ids[0] == "comp-s2"  # postgres prior ranks above the react one
+
+
+def test_find_prior_work_empty_when_no_priors() -> None:
+    from manthana.agent.actions.prior_work import find_prior_work
+    from manthana.skills.embed import HashingEmbedder
+
+    store = Store.open_memory()
+    _seed_comp(store, "s1", "db", "postgres migration", "alter schema")
+    assert find_prior_work(store, "s1", embedder=HashingEmbedder()) == []
+
+
+def test_prior_work_handler_fires_via_dispatcher() -> None:
+    store = Store.open_memory()
+    _seed_comp(store, "s1", "db", "postgres migration", "alter the postgres database schema")
+    _seed_comp(store, "s2", "db", "postgres database tuning", "optimize postgres database indexes")
+    entries = default_dispatcher(store).dispatch(
+        TriggerEvent("session_closed", actor="eng@example.com", session_id="s1"))
+    pw = {e.action_id: e for e in entries}.get("prior_work")
+    assert pw is not None and pw.outcome is ActionOutcome.fired
+    assert any(r["id"] == "comp-s2" for r in pw.details["related"])

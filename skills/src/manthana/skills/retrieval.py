@@ -51,6 +51,31 @@ def text_hash(text: str) -> str:
     return hashlib.blake2b(text.encode("utf-8"), digest_size=8).hexdigest()
 
 
+def rank_scored(
+    query: str,
+    items: Sequence[HasId],
+    vectors: dict[str, Vector],
+    embedder: Embedder,
+    *,
+    k: int,
+) -> tuple[list[tuple[float, HasId]], Coverage]:
+    """Like ``rank`` but returns ``(cosine_score, item)`` pairs (top-``k``), so callers
+    that need to THRESHOLD on relevance (e.g. prior-work surfacing) can. Items without a
+    current-dim vector are kept but sorted last with score 0.0 (never silently dropped)."""
+    qv = embedder.embed([query])[0]
+    scored: list[tuple[float, HasId]] = []
+    unscored: list[HasId] = []
+    for item in items:
+        vec = vectors.get(item.id)
+        if vec is not None and len(vec) == len(qv):
+            scored.append((cosine(qv, vec), item))
+        else:
+            unscored.append(item)
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    ranked: list[tuple[float, HasId]] = scored + [(0.0, item) for item in unscored]
+    return ranked[:k], Coverage(matched=len(items), used=min(k, len(ranked)))
+
+
 def rank(
     query: str,
     items: Sequence[HasId],
@@ -64,19 +89,8 @@ def rank(
     Items without a (current-dim) vector are kept but sorted last (never silently
     dropped). Returns the top-``k`` and a Coverage over the full matched set.
     """
-    qv = embedder.embed([query])[0]
-    scored: list[tuple[float, HasId]] = []
-    unscored: list[HasId] = []
-    for item in items:
-        vec = vectors.get(item.id)
-        if vec is not None and len(vec) == len(qv):
-            scored.append((cosine(qv, vec), item))
-        else:
-            unscored.append(item)
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-    ranked: list[HasId] = [item for _, item in scored] + unscored
-    used = min(k, len(ranked))
-    return ranked[:k], Coverage(matched=len(items), used=used)
+    ranked, coverage = rank_scored(query, items, vectors, embedder, k=k)
+    return [item for _, item in ranked], coverage
 
 
-__all__ = ["Coverage", "HasId", "rank", "text_hash"]
+__all__ = ["Coverage", "HasId", "rank", "rank_scored", "text_hash"]

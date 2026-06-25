@@ -1408,3 +1408,27 @@ loop. Deterministic, local, no model call.
   manthana's `ruff --fix` loop + pyright retries, dab_clone's SCRIBE q3 FORMAT_ONLY loop, data's
   token-meter retries. Tests: `detect_loops` fires/no-false-positive/friction; handler
   fires/suppresses; metadata. **248 tests, ruff + pyright clean.**
+
+## 40. Prior-work surfacing action + embedding retrieval eval (2026-06-25) — roadmap phase C
+
+The compounding loop: when a session is compacted, surface the engineer's most relevant PRIOR
+compactions in real time — and the first use of the local embeddings for *retrieval*.
+- `skills/retrieval.py`: added `rank_scored` (returns `(cosine, item)` pairs); `rank` now
+  delegates to it. Additive — founder/insights `rank` callers unchanged.
+- `agent/actions/prior_work.py`: `find_prior_work(store, session_id, *, embedder, k=5, tau=0.45)`
+  embeds the new digest, ranks it against the engineer's prior compactions (excludes self +
+  same session) using the agent vector cache, returns matches >= tau. `PriorWorkHandler` +
+  `PRIOR_WORK_ACTION` (shape=`notify`, engineer, opt-out); fires on `session_closed` with the
+  related list (id/project/intent/score) as audit details. Registered in `default_dispatcher`
+  (AutoTag + LoopWarning + PriorWork), fired by the same watch/`compact` wiring as phase B.
+- Surfaces: dashboard `🔗 N prior` badge (titled with the related intents); `manthana related
+  <session_id>`.
+- **Embedding eval (`validation/embed_eval.py`):** the explicit test of whether local embeddings
+  are useful for retrieval. HashingEmbedder scores even unrelated AI-coding sessions ~0.4–0.55
+  (generic shared vocab) — mean top-1 0.556, all 10/10 "related" at the old tau=0.30, though the
+  benchmark cluster (dab_clone↔data↔bird-bench, 0.60–0.67) is genuinely right. **Raised default
+  tau 0.30 → 0.45**; documented that **bge-large** (the `embeddings` extra) is the precision path
+  (`default_embedder` uses it when installed). Finding recorded in `validation/FINDINGS.md`.
+- Tests: `find_prior_work` surfaces related + excludes self + empty-when-no-priors; handler fires
+  via dispatcher; `rank_scored` descending + matches `rank` order. **252 tests, ruff + pyright
+  clean.**

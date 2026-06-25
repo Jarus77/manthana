@@ -15,7 +15,7 @@ from manthana.server import ServerConfig, ServerStore
 from manthana.server.founder import run_query
 from manthana.server.llm import ScriptedProvider
 from manthana.skills.embed import HashingEmbedder
-from manthana.skills.retrieval import Coverage, rank
+from manthana.skills.retrieval import Coverage, rank, rank_scored
 
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -49,6 +49,24 @@ def test_rank_orders_relevant_first_and_truncates() -> None:
     assert ranked[0].id in {"a", "c"}  # postgres items rank above the react one
     assert [it.id for it in ranked] != ["b"]  # react not first
     assert cov == Coverage(matched=3, used=2) and cov.truncated is True
+
+
+def test_rank_scored_returns_descending_scores() -> None:
+    emb = HashingEmbedder()
+    items = [
+        _Item("a", "postgres database migration and indexes"),
+        _Item("b", "react frontend css styling"),
+        _Item("c", "postgres query planner tuning"),
+    ]
+    vecs = {it.id: emb.embed([it.text])[0] for it in items}
+    scored, cov = rank_scored("postgres database", items, vecs, emb, k=3)
+    scores = [s for s, _ in scored]
+    assert scores == sorted(scores, reverse=True)  # descending
+    assert scored[0][1].id in {"a", "c"}  # a postgres item is top
+    assert scores[0] > 0.0 and cov.matched == 3
+    # rank() returns the same order, just without scores
+    plain, _ = rank("postgres database", items, vecs, emb, k=3)
+    assert [it.id for it in plain] == [it.id for _, it in scored]
 
 
 def test_rank_no_truncation_within_budget() -> None:

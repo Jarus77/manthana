@@ -96,6 +96,32 @@ k-anon floor of 4** (real data is single-actor). Auto-scored on (a) filter corre
 
 ---
 
+# Embedding retrieval eval — prior-work surfacing (Phase C, 2026-06-25)
+
+_Harness: [embed_eval.py](embed_eval.py). The first test of the local embeddings for
+**retrieval** (not just clustering), via `find_prior_work` over the real corpus (10 compactions,
+all distinct projects)._
+
+**Finding: HashingEmbedder is weak for retrieval — usable but low-precision.** It scores even
+unrelated AI-coding sessions **~0.4–0.55** (mean top-1 **0.556**), because they share generic
+ML/benchmark vocabulary ("data", "run", "model", "benchmark"). At the original tau=0.30 *all
+10/10* sessions surfaced "related" priors — too noisy. Some matches are genuinely right (the
+benchmark cluster **dab_clone ↔ data ↔ bird-bench** scores 0.60–0.67), but the signal is
+dominated by shared vocabulary, not topic.
+
+**Actions taken:** raised the default relatedness threshold **tau 0.30 → 0.45**
+(`actions/prior_work.py`) so only strong matches surface on the offline embedder; documented that
+**bge-large** (the `embeddings` extra) is recommended when retrieval precision matters — it's
+semantically sharper and is what `default_embedder()` uses when installed. `embed_eval.py` will
+print the bge-large column once `uv sync --extra embeddings` is run (torch not installed here, so
+the comparison row is currently skipped).
+
+**Takeaway for the compounding loop:** the mechanism works end-to-end (embed → rank → threshold →
+surface, with a dashboard 🔗 badge + `manthana related`), but its *quality* on a homogeneous
+corpus needs bge-large; HashingEmbedder is the safe offline fallback, not the precision path.
+
+---
+
 # Compaction quality — empirical validation (10 real sessions) — RUN 1 (2026-06-20)
 
 _Run 2026-06-20 against the real corpus (471 sessions). Compactions generated via
