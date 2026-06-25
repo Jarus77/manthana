@@ -336,13 +336,21 @@ def run_query(
     allow_individual: bool = False,
     embedder: Embedder | None = None,
     now: datetime | None = None,
+    since: str | None = None,
+    until: str | None = None,
 ) -> FounderResult:
     """``allow_individual`` is the **manager view**: it skips the k-anonymity floor
     so a query that resolves to a single named person returns results. It must only
     be set behind manager auth, and every such call is audited by the caller. The
     default (founder console) path is unchanged: per-person queries are suppressed.
-    ``now`` anchors relative-date parsing (defaults to the wall clock; injectable for tests)."""
+    ``now`` anchors relative-date parsing (defaults to the wall clock; injectable for tests).
+    ``since``/``until`` (ISO dates) FORCE the time window, overriding whatever the query
+    parsed — used by the weekly digest so every section covers the same period."""
     spec = parse_filter(query, provider, now=now)
+    if since is not None:
+        spec.since = since
+    if until is not None:
+        spec.until = until
     # Resolve a free-text project ("LLM evaluation") to a real slug ("llm-eval") so a
     # phrasing mismatch doesn't silently return nothing (semantic retrieval still ranks
     # within the resolved set). Safe on both paths — it only narrows to a known slug.

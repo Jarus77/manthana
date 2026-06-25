@@ -25,6 +25,7 @@ from manthana.skills import mine_org
 
 from .analyzer import analyze_counterfactual_costs
 from .config import ServerConfig
+from .digest import build_weekly_digest
 from .founder import run_query, team_topics, thread
 from .llm import LLMProvider
 from .storage import ObjectStore
@@ -135,6 +136,7 @@ def mount_ui(
                 f"<td>{teams}</td><td>{comps}</td><td>{pending}</td>"
                 f"<td><a href='/ui/topics?org_id={_e(o.id)}'>Topics</a> · "
                 f"<a href='/ui/router?org_id={_e(o.id)}'>Cost $</a> · "
+                f"<a href='/ui/digest?org_id={_e(o.id)}'>Digest</a> · "
                 f"<form method='post' action='/ui/mine'>"
                 f"<input type='hidden' name='org_id' value='{_e(o.id)}'>"
                 "<button>Mine org skills</button></form></td></tr>"
@@ -384,6 +386,29 @@ def mount_ui(
             "<p><a href='/ui/manager'>← back</a></p>"
         )
         return HTMLResponse(_page("Manager drill", body))
+
+    @app.get("/ui/digest", response_class=HTMLResponse)
+    def ui_digest(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:
+        if not _authed(manthana_admin):
+            return RedirectResponse(url="/ui/login", status_code=303)
+        d = build_weekly_digest(store, config, org_id=org_id, provider=provider)
+        secs = "".join(
+            f"<h3>{_e(s.title)}</h3><p>{_e(s.narrative)}</p>"
+            f"<p class='muted'>sources: {_e(', '.join(s.citations))}</p>"
+            for s in d.sections
+        )
+        omitted = (
+            f"<p class='muted'>omitted (k-anon / no data): {_e(', '.join(d.omitted))}</p>"
+            if d.omitted
+            else ""
+        )
+        body = (
+            f"<p class='muted'>org: {_e(org_id)} · {_e(d.since)} → {_e(d.until)} · "
+            "founder-aggregate, k-anon enforced</p>"
+            f"{secs or '<p>no sections cleared the k-anonymity floor for this window.</p>'}"
+            f"{omitted}<p><a href='/ui'>← console</a></p>"
+        )
+        return HTMLResponse(_page(f"Digest — {org_id}", body))
 
     @app.get("/ui/router", response_class=HTMLResponse)
     def ui_router(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:

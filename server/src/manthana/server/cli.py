@@ -84,6 +84,26 @@ def router_analysis(org_id: str) -> None:
             )
 
 
+@app.command()
+def digest(org_id: str, since: str = "", until: str = "") -> None:
+    """Print the founder weekly digest for an org (last 7 days by default)."""
+    from .digest import build_weekly_digest
+    from .llm import make_provider
+
+    config = ServerConfig.from_env()
+    d = build_weekly_digest(
+        ServerStore.open(config.db_url), config, org_id=org_id,
+        provider=make_provider(config), since=since or None, until=until or None,
+    )
+    typer.echo(f"# Weekly digest — {d.org_id} ({d.since} → {d.until})")
+    for s in d.sections:
+        typer.echo(f"\n## {s.title}\n{s.narrative}\nsources: {', '.join(s.citations)}")
+    if d.omitted:
+        typer.echo(f"\n(omitted (k-anon / no data): {', '.join(d.omitted)})")
+    if not d.sections:
+        typer.echo("\n(no sections cleared the k-anonymity floor for this window)")
+
+
 def main() -> None:
     app()
 

@@ -27,6 +27,7 @@ from pydantic import BaseModel, ValidationError
 from .analyzer import analyze_counterfactual_costs
 from .auth import AuthError, TeamClaims, issue_team_token, verify_team_token
 from .config import ServerConfig
+from .digest import build_weekly_digest
 from .founder import run_query, team_topics, thread
 from .llm import LLMProvider, make_provider
 from .storage import ObjectStore, make_object_store
@@ -350,6 +351,20 @@ def create_app(
         """Counterfactual cost: what released sessions would cost on cheaper tiers, with
         an estimated saving from routing the low-risk ones one tier down."""
         return analyze_counterfactual_costs(store, org_id).as_dict()
+
+    @app.get("/v1/admin/digest")
+    def weekly_digest(
+        org_id: str,
+        _: Annotated[None, Depends(require_admin)],
+        since: str = "",
+        until: str = "",
+    ) -> dict[str, Any]:
+        """Founder weekly digest (last 7 days by default) composed from the founder-query
+        pipeline; k-anon-insufficient sections are omitted."""
+        return build_weekly_digest(
+            store, config, org_id=org_id, provider=provider,
+            since=since or None, until=until or None,
+        ).as_dict()
 
     @app.post("/v1/admin/mine-skills")
     def mine_skills(

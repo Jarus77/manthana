@@ -1454,3 +1454,22 @@ tiers. Re-pricing only (no live replay).
   sessions → **est. $51.92 (42.3%) savings** by routing 23 low-risk sessions opus→sonnet.
 - Tests: exact re-pricing math, downgrade heuristic (safe vs loop/abandoned), pre-breakdown skip,
   endpoint admin-gated. **256 tests, ruff + pyright clean.**
+
+## 42. Founder weekly digest (2026-06-25) — roadmap phase E
+
+Founder-retention surface, composed from the founder-query pipeline. Pull-based (no SMTP).
+- `run_query` gained explicit `since`/`until` overrides (force the window regardless of NL
+  parsing) — used so every digest section covers the same period.
+- `server/digest.py`: `build_weekly_digest(store, config, *, org_id, provider, since, until,
+  embedder) -> WeeklyDigest`. Runs canned founder-aggregate queries (Shipped / In progress /
+  Friction) over the window via `run_query`; **k-anon enforced by run_query** — a section that
+  returns `insufficient_data` (or no citations) is **omitted** (recorded in `omitted`), never
+  re-composed. `default_window` = last 7 days. `WeeklyDigest`/`DigestSection` dataclasses with
+  `as_dict()`.
+- Surfaces: `GET /v1/admin/digest?org_id=&since=&until=` (admin-gated), console **Digest** panel
+  (`/ui/digest`), cronnable CLI `manthana-server digest --org` (an external k8s CronJob drives
+  the weekly cadence).
+- **Live (synthetic org, real `claude`):** 3 grounded + cited sections, all clearing the k-anon
+  floor of 4 (Shipped/In progress/Friction), zero omissions.
+- Tests: default window, since/until override, happy path (3 cited sections), k-anon omission
+  (sub-floor → 0 sections, 3 omitted), endpoint admin-gated. **261 tests, ruff + pyright clean.**
