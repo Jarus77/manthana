@@ -22,6 +22,7 @@ from typing import Any
 
 from manthana.collectors import ClaudeCodeCollector
 
+from .actions import Dispatcher, TriggerEvent, default_dispatcher
 from .capture import IngestResult, ingest_file
 from .compact import compact_settled
 from .llm import LLMProvider
@@ -66,6 +67,7 @@ def watch(
     release_window: float = 600.0,
     release_fn: Callable[..., int] = _auto_release,
     auto_min_interval: float = 30.0,
+    dispatcher: Dispatcher | None = None,
     sync_fn: Callable[[Store], int] | None = None,
     sync_min_interval: float = 60.0,
     clock: Callable[[], float] = time.monotonic,
@@ -127,6 +129,18 @@ def watch(
                             f"compacted {len(results)} settled session(s) "
                             f"(call cost ~${cost:.4f})"
                         )
+                        # Fire post-compaction actions (auto-tag, loop warning, …) for each
+                        # newly-(re)compacted session; the dispatcher's own gates handle
+                        # personal-mode/consent/cooldown, and never raise.
+                        disp = dispatcher or default_dispatcher(store)
+                        for comp, _cost in results:
+                            disp.dispatch(
+                                TriggerEvent(
+                                    "session_closed",
+                                    actor=comp.actor,
+                                    session_id=comp.session_id,
+                                )
+                            )
                 except Exception:  # noqa: BLE001 - compaction failure must not kill the loop
                     _log.exception("watch: auto-compaction failed")
             if auto_release:

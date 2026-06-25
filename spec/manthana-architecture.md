@@ -1386,3 +1386,25 @@ ways in `server/founder.py`:
 **Shipped as v0.2.1** (the two founder-filter fixes from §37 — case-insensitive +
 free-text-project→slug — plus this temporal fix): all five workspace packages bumped
 `0.2.0 → 0.2.1`; tag `v0.2.1`. **242 tests, ruff + pyright clean.**
+
+## 39. Loop-detection warning action (2026-06-25) — roadmap phase B
+
+First non-trivial action on the existing dispatcher: warn the engineer when a session shows a
+loop. Deterministic, local, no model call.
+- `agent/actions/loops.py` — `detect_loops(turns, compaction, *, threshold=3) -> [LoopSignal]`:
+  (1) any tool that **failed ≥ threshold times** in the raw turns (grouped by `tool_name`, error
+  = `Turn.error` or an error marker in `tool_output`); (2) the compaction's **`loop`** friction
+  (always) and **`retry`** friction with ≥ threshold `turn_refs`.
+- `agent/actions/loop_warning.py` — `LoopWarningHandler` + `LOOP_WARNING_ACTION` (shape=`warn`,
+  actor=engineer, consent=`opt_out`). Fires on `session_closed`; `fired` with the signals as
+  audit `details` (incl. `session_id`), else `suppressed`/`no_loop`. Registered in
+  `default_dispatcher` (now AutoTag + LoopWarning).
+- Firing wired where compactions complete: the `watch` daemon dispatches `session_closed` for
+  each newly-(re)compacted session (new `dispatcher` param), and `manthana compact` does the same
+  — both reuse the dispatcher's personal-mode/consent/cooldown gates + audit (never raises).
+- Surfaces: dashboard Compactions shows a `⚠ loop` badge (reads fired `loop_warning` audits by
+  `session_id`); `manthana insights` prints a loop-warning count.
+- **Live (read-only over the real 10):** flagged genuinely loopy sessions — scribe Bash×6,
+  manthana's `ruff --fix` loop + pyright retries, dab_clone's SCRIBE q3 FORMAT_ONLY loop, data's
+  token-meter retries. Tests: `detect_loops` fires/no-false-positive/friction; handler
+  fires/suppresses; metadata. **248 tests, ruff + pyright clean.**

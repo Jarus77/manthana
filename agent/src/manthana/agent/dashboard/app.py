@@ -28,7 +28,7 @@ from manthana.agent.cost import estimate_cost
 from manthana.agent.llm import LLMProvider
 from manthana.agent.skillminer import mine_personal, write_proposal
 from manthana.agent.store import Store
-from manthana.schemas import BaseCompaction, Mode, Session
+from manthana.schemas import ActionOutcome, BaseCompaction, Mode, Session
 
 _log = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ _STYLE = (
     "form{display:inline}button{cursor:pointer;padding:3px 8px}"
     ".badge{padding:1px 6px;border-radius:4px;font-size:12px}"
     ".rel{background:#dfd;color:#060}.unrel{background:#eee;color:#666}"
+    ".badge.warn{background:#fe9;color:#a60;margin-left:4px}"
     ".ok{color:#060}.warn{color:#a60}details summary{cursor:pointer}"
     ".bar{margin:0 0 1rem;padding:.6rem;background:#f7f7f7;border:1px solid #eee;border-radius:6px}"
     "pre{white-space:pre-wrap;background:#fafafa;border:1px solid #eee;padding:8px}</style>"
@@ -103,13 +104,14 @@ def _session_row(session: Session, compacted: set[str], compacting: set[str]) ->
     )
 
 
-def _compaction_row(c: BaseCompaction) -> str:
+def _compaction_row(c: BaseCompaction, *, looped: bool = False) -> str:
     badge = (
         "<span class='badge rel'>released</span>"
         if c.released
         else "<span class='badge unrel'>local</span>"
     )
     label = "unrelease" if c.released else "release"
+    loop_badge = "<span class='badge warn'>⚠ loop</span>" if looped else ""
     held = getattr(c, "hold", False)
     # State: released / held (auto-release opted out) / local-pending (will auto-release).
     if c.released:
@@ -127,7 +129,7 @@ def _compaction_row(c: BaseCompaction) -> str:
     cost = f"${c.est_cost_usd:.4f}" if c.est_cost_usd is not None else "—"
     return (
         f"<tr><td>{_e(c.id)}</td><td>{_e(c.project)}</td><td>{_e(c.outcome)}</td>"
-        f"<td>{_e(c.tier_used)}</td><td>{cost}</td><td>{badge}{state}</td>"
+        f"<td>{_e(c.tier_used)}</td><td>{cost}</td><td>{badge}{state}{loop_badge}</td>"
         f"<td><form method='post' action='/compaction/{_e(c.id)}/release'>"
         f"<button>{label}</button></form> "
         f"<form method='post' action='/compaction/{_e(c.id)}/hold'>"
@@ -368,7 +370,13 @@ def create_app(
     @app.get("/compactions", response_class=HTMLResponse)
     def compactions() -> str:
         comps = store.list_compactions(limit=500)
-        rows = "".join(_compaction_row(c) for c in comps)
+        # Sessions the loop-warning action fired on → show a ⚠ badge.
+        looped = {
+            e.details.get("session_id")
+            for e in store.list_audit(action_id="loop_warning", limit=500)
+            if e.outcome is ActionOutcome.fired and e.details.get("session_id")
+        }
+        rows = "".join(_compaction_row(c, looped=c.session_id in looped) for c in comps)
         bar = (
             "<div class='bar'><form method='post' action='/sync'>"
             "<button>↥ Sync released</button></form> "

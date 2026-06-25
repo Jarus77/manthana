@@ -9,11 +9,12 @@ from ..store import Store
 from .auto_tag import AUTO_TAG_ACTION, AutoTagHandler
 from .base import ActionContext, ActionHandler, ActionResult, TriggerEvent
 from .dispatcher import Dispatcher
+from .loop_warning import LOOP_WARNING_ACTION, LoopWarningHandler
 
 
 def default_dispatcher(store: Store) -> Dispatcher:
-    """A dispatcher with the v1 built-in handlers registered."""
-    return Dispatcher(store, [AutoTagHandler()])
+    """A dispatcher with the built-in handlers registered."""
+    return Dispatcher(store, [AutoTagHandler(), LoopWarningHandler()])
 
 
 def tag_all(store: Store, *, dispatcher: Dispatcher | None = None, actor: str | None = None) -> int:
@@ -38,4 +39,6 @@ __all__ = [
     "ActionHandler",
     "AutoTagHandler",
     "AUTO_TAG_ACTION",
+    "LoopWarningHandler",
+    "LOOP_WARNING_ACTION",
 ]

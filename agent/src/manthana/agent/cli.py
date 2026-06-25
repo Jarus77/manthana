@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import typer
-from manthana.agent.actions import tag_all
+from manthana.agent.actions import TriggerEvent, default_dispatcher, tag_all
 from manthana.agent.capture import ingest_all
 from manthana.agent.compact import compact_pending, compact_session
 from manthana.agent.datahome import db_path, resolve_data_home
 from manthana.agent.store import Store
-from manthana.schemas import Mode
+from manthana.schemas import ActionOutcome, Mode
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -223,7 +223,8 @@ def insights(since: str = "") -> None:
     """
     from manthana.agent.insights import structural_insights
 
-    s = structural_insights(Store.open(), since=since or None)
+    store = Store.open()
+    s = structural_insights(store, since=since or None)
     cap = " (recent 300 sessions)" if s.cost_capped else ""
     typer.echo(
         f"sessions={s.session_count} compactions={s.compaction_count} "
@@ -235,6 +236,13 @@ def insights(since: str = "") -> None:
         typer.echo("by outcome: " + ", ".join(f"{o}={n}" for o, n in s.by_outcome.items()))
     if s.top_friction:
         typer.echo("recent friction: " + " · ".join(s.top_friction[:3]))
+    looped = {
+        e.details.get("session_id")
+        for e in store.list_audit(action_id="loop_warning", limit=500)
+        if e.outcome is ActionOutcome.fired and e.details.get("session_id")
+    }
+    if looped:
+        typer.echo(f"⚠ loop warnings: {len(looped)} session(s) flagged for repeated failures")
 
 
 @app.command()
@@ -275,8 +283,13 @@ def compact(session_id: str = typer.Argument(default="")) -> None:
     Uses the engineer's own model access (claude -p / codex exec).
     """
     store = Store.open()
+    dispatcher = default_dispatcher(store)
     if session_id:
         result = compact_session(store, session_id)
+        if result is not None:
+            dispatcher.dispatch(
+                TriggerEvent("session_closed", actor=result.actor, session_id=result.session_id)
+            )
         typer.echo(
             f"{result.id}: {result.outcome} (${result.est_cost_usd}, {result.tier_used})"
             if result
@@ -284,6 +297,10 @@ def compact(session_id: str = typer.Argument(default="")) -> None:
         )
         return
     results = compact_pending(store)
+    for c in results:
+        dispatcher.dispatch(
+            TriggerEvent("session_closed", actor=c.actor, session_id=c.session_id)
+        )
     typer.echo(f"compacted {len(results)} pending session(s)")
 
 

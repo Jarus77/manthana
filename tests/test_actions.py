@@ -69,7 +69,8 @@ def test_auto_tag_fires_and_writes_tags() -> None:
     store = Store.open_memory()
     _seed(store)
     entries = default_dispatcher(store).dispatch(_event())
-    assert [e.outcome for e in entries] == [ActionOutcome.fired]
+    by_action = {e.action_id: e for e in entries}  # default dispatcher now has >1 handler
+    assert by_action["auto_tag_sessions"].outcome is ActionOutcome.fired
     tags = store.get_session("s1").tags  # type: ignore[union-attr]
     assert tags["project"] == "demo"
     assert tags["task_type"] == "implementation"  # Edit tool used
@@ -161,3 +162,73 @@ def test_auto_tag_action_metadata() -> None:
     assert AUTO_TAG_ACTION.shape is ActionShape.write
     assert AUTO_TAG_ACTION.consent_class is ConsentClass.silent
     assert AutoTagHandler().handles(TriggerEvent(type="session_start", actor="e")) is False
+
+
+# ── Loop detection (Phase B) ────────────────────────────────────────────────
+def _err_turn(i: int, tool: str = "Bash") -> Turn:
+    return Turn(
+        id=f"e{i}", session_id="s1", actor="e", seq=i, role=Role.tool,
+        tool_name=tool, tool_output="x", error="failed",
+    )
+
+
+def test_detect_loops_flags_repeated_tool_failures() -> None:
+    from manthana.agent.actions.loops import detect_loops
+
+    signals = detect_loops([_err_turn(i) for i in range(3)])
+    assert len(signals) == 1
+    s = signals[0]
+    assert s.source == "tool_errors" and s.label == "Bash" and s.count == 3
+    assert s.turn_range == (0, 2)
+
+
+def test_detect_loops_no_false_positive() -> None:
+    from manthana.agent.actions.loops import detect_loops
+
+    assert detect_loops([_err_turn(0), _err_turn(1)]) == []  # 2 < threshold 3
+    ok = [
+        Turn(id=f"o{i}", session_id="s1", actor="e", seq=i, role=Role.tool,
+             tool_name="Bash", tool_output="ok")
+        for i in range(5)
+    ]
+    assert detect_loops(ok) == []  # no errors → no loop
+
+
+def test_detect_loops_from_loop_friction() -> None:
+    from manthana.agent.actions.loops import detect_loops
+
+    comp = EngineeringCompaction(
+        id="comp-s1", session_id="s1", actor="e", surface=Surface.claude_code, project="demo",
+        started_at=_T0, ended_at=_T0, duration_seconds=1.0, task_intent="t", approach="a",
+        outcome=Outcome.partial,
+        friction_points=[FrictionPoint(
+            category=FrictionCategory.loop, description="stuck retrying the migration",
+            turn_refs=["5", "7"])],
+    )
+    signals = detect_loops([], comp)
+    assert len(signals) == 1 and signals[0].source == "friction:loop"
+
+
+def test_loop_warning_fires_via_dispatcher() -> None:
+    store = Store.open_memory()
+    _seed(store)
+    store.add_turns([_err_turn(i) for i in range(10, 13)])  # 3 Bash failures on s1
+    entries = default_dispatcher(store).dispatch(_event())
+    warn = {e.action_id: e for e in entries}["loop_warning"]
+    assert warn.outcome is ActionOutcome.fired
+    assert warn.details["session_id"] == "s1" and warn.details["signal_count"] >= 1
+
+
+def test_loop_warning_suppressed_on_clean_session() -> None:
+    store = Store.open_memory()
+    _seed(store)
+    entries = default_dispatcher(store).dispatch(_event())
+    warn = {e.action_id: e for e in entries}["loop_warning"]
+    assert warn.outcome is ActionOutcome.suppressed and warn.trigger_condition == "no_loop"
+
+
+def test_loop_warning_action_metadata() -> None:
+    from manthana.agent.actions import LOOP_WARNING_ACTION
+
+    assert LOOP_WARNING_ACTION.shape is ActionShape.warn
+    assert LOOP_WARNING_ACTION.consent_class is ConsentClass.opt_out
