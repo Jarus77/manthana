@@ -18,7 +18,12 @@ import pytest
 from manthana.schemas import EngineeringCompaction, Outcome, Surface
 from manthana.server import ServerConfig, ServerStore
 from manthana.server.founder import run_query
-from manthana.server.llm import AnthropicProvider, MockProvider, make_provider
+from manthana.server.llm import (
+    AnthropicProvider,
+    MockProvider,
+    ResilientProvider,
+    make_provider,
+)
 
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -102,8 +107,69 @@ def test_make_provider_selects_anthropic(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(llm, "AnthropicProvider", _Stub)
     cfg = _cfg(llm_provider="anthropic", llm_model="claude-z", llm_max_tokens=7)
     provider = llm.make_provider(cfg)
-    assert provider.name == "anthropic"
+    # the real provider is wrapped in ResilientProvider (retry/backoff)
+    assert isinstance(provider, ResilientProvider) and provider.inner.name == "anthropic"
     assert captured == {"model": "claude-z", "max_tokens": 7}
+
+
+def test_make_provider_falls_back_to_mock_when_anthropic_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import manthana.server.llm as llm
+
+    def _boom(**_kw: Any) -> Any:  # SDK missing / no key → constructor raises
+        raise RuntimeError("anthropic SDK not installed")
+
+    monkeypatch.setattr(llm, "AnthropicProvider", _boom)
+    provider = llm.make_provider(_cfg(llm_provider="anthropic"))
+    assert isinstance(provider, MockProvider)  # degraded, did NOT crash
+
+
+# ── ResilientProvider: retry on transient, never on auth ─────────────────────
+class _Flaky:
+    name = "flaky"
+
+    def __init__(self, fail_times: int, exc: Exception) -> None:
+        self.fail_times = fail_times
+        self.exc = exc
+        self.calls = 0
+
+    def complete(self, prompt: str) -> str:
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise self.exc
+        return "ok"
+
+
+class RateLimitError(Exception):
+    """Name matches the retryable set."""
+
+
+class AuthenticationError(Exception):
+    """Name matches the non-retryable (auth) set."""
+
+
+def test_resilient_retries_transient_then_succeeds() -> None:
+    inner = _Flaky(2, RateLimitError("429"))
+    p = ResilientProvider(inner, retries=2, sleep=lambda _s: None)
+    assert p.complete("x") == "ok"
+    assert inner.calls == 3  # 2 failures + 1 success
+
+
+def test_resilient_does_not_retry_auth_errors() -> None:
+    inner = _Flaky(5, AuthenticationError("401"))
+    p = ResilientProvider(inner, retries=3, sleep=lambda _s: None)
+    with pytest.raises(AuthenticationError):
+        p.complete("x")
+    assert inner.calls == 1  # auth error → no retry, re-raised
+
+
+def test_resilient_gives_up_after_retries() -> None:
+    inner = _Flaky(99, RateLimitError("429"))
+    p = ResilientProvider(inner, retries=2, sleep=lambda _s: None)
+    with pytest.raises(RateLimitError):
+        p.complete("x")
+    assert inner.calls == 3  # initial + 2 retries, then re-raises
 
 
 def test_invalid_llm_provider_rejected() -> None:

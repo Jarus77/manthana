@@ -1473,3 +1473,23 @@ Founder-retention surface, composed from the founder-query pipeline. Pull-based 
   floor of 4 (Shipped/In progress/Friction), zero omissions.
 - Tests: default window, since/until override, happy path (3 cited sections), k-anon omission
   (sub-floor → 0 sections, 3 omitted), endpoint admin-gated. **261 tests, ruff + pyright clean.**
+
+## 43. Server LLM provider productionization (2026-06-25) — roadmap phase F
+
+Made the server-side narrative/digest provider production-safe (single server-wide key).
+- `server/llm.py`: `ResilientProvider` wraps the real provider with bounded retry/backoff on
+  **transient** errors (rate limit / connection / 5xx, classified SDK-agnostically by exception
+  class name or 429/5xx `status_code`); **auth / bad-request errors are not retried**. After
+  retries it re-raises — and the founder/digest pipeline already degrades a raised error to
+  "insufficient data" (no 500 / leak), so the failure contract is unchanged, just more robust.
+- `make_provider`: when `MANTHANA_SERVER_LLM=anthropic` but the SDK/key is missing (or the
+  provider can't be constructed), **fall back to the mock + log** instead of crashing boot; the
+  real provider is returned wrapped in `ResilientProvider`.
+- Config via env (already present, documented in `docs/deploy.md`): `MANTHANA_SERVER_LLM`,
+  `MANTHANA_SERVER_LLM_MODEL`, `MANTHANA_SERVER_LLM_MAX_TOKENS`, server-wide `ANTHROPIC_API_KEY`.
+  Per-org keys are explicitly out of scope.
+- Tests: retry-transient-then-succeed, no-retry-on-auth, give-up-after-retries, make_provider
+  mock-fallback when anthropic unavailable, plus the existing degrade-on-error path. **265 tests,
+  ruff + pyright clean.**
+
+**Roadmap A–F complete** (v0.2.1 + 5 features): all behind the green gate, each with spec + tests.

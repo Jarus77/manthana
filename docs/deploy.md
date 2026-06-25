@@ -45,6 +45,16 @@ secret. **Never put these on a command line.**
 | `MANTHANA_SERVER_ADMIN_TOKEN` | gates the founder console + admin/founder API |
 | `MANTHANA_SERVER_K_ANON` | k-anonymity floor for org aggregates (keep ≥4 in prod) |
 | `ANTHROPIC_API_KEY` + `MANTHANA_SERVER_LLM=anthropic` | real founder narratives (optional) |
+| `MANTHANA_SERVER_LLM_MODEL` | model id (default `claude-sonnet-4-6`) |
+| `MANTHANA_SERVER_LLM_MAX_TOKENS` | narrative cap (default 1024; 1..100000) |
+
+**LLM provider (founder narrative + weekly digest).** Default is the deterministic mock
+(no key needed). Set `MANTHANA_SERVER_LLM=anthropic` with a single server-wide
+`ANTHROPIC_API_KEY` (and install the `manthana-server[llm]` extra) for real narratives.
+The provider is **resilient + fail-safe**: transient errors (rate limit, connection, 5xx)
+are retried with backoff; a missing SDK/key or a persistent error **falls back to the mock
+and logs** rather than crashing the server, and the founder/digest endpoints still return a
+safe "insufficient data" instead of a 500.
 
 Compose overrides DB/S3 wiring for the in-cluster server, so the `MANTHANA_SERVER_DB_URL`
 / object-store lines in `.env` only matter when running the server **on the host**

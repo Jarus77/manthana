@@ -12,10 +12,35 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 from __future__ import annotations
 
+import logging
+import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from .config import ServerConfig
+
+_log = logging.getLogger(__name__)
+
+# Exception class names that are worth retrying (transient): rate limits, connection /
+# timeout blips, and 5xx. Auth / bad-request errors are NOT retried (they won't recover).
+_RETRYABLE_NAMES = {
+    "RateLimitError", "APIConnectionError", "APITimeoutError", "APIConnectionTimeoutError",
+    "InternalServerError", "ServiceUnavailableError", "OverloadedError",
+}
+_AUTH_NAMES = {"AuthenticationError", "PermissionDeniedError"}
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """A best-effort, SDK-agnostic classifier (we don't import anthropic — it's optional).
+    Retry on known-transient error class names or a 429 / 5xx ``status_code``; never on auth."""
+    name = type(exc).__name__
+    if name in _AUTH_NAMES:
+        return False
+    if name in _RETRYABLE_NAMES:
+        return True
+    status = getattr(exc, "status_code", None)
+    return isinstance(status, int) and (status == 429 or 500 <= status < 600)
 
 
 @runtime_checkable
@@ -106,15 +131,72 @@ class AnthropicProvider:
         return "".join(parts).strip()
 
 
+class ResilientProvider:
+    """Wraps a real provider with bounded retry/backoff on TRANSIENT failures (rate
+    limit, connection, 5xx). Auth / bad-request errors are not retried. After exhausting
+    retries it re-raises — the founder/digest pipeline already degrades a raised provider
+    error to ``insufficient data`` (never a 500 / leak), so this only improves the success
+    rate on blips without changing the failure contract."""
+
+    name = "resilient"
+
+    def __init__(
+        self,
+        inner: LLMProvider,
+        *,
+        retries: int = 2,
+        backoff: float = 0.5,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.inner = inner
+        self.retries = retries
+        self.backoff = backoff
+        self._sleep = sleep
+
+    def complete(self, prompt: str) -> str:
+        last: BaseException | None = None
+        for attempt in range(self.retries + 1):
+            try:
+                return self.inner.complete(prompt)
+            except Exception as exc:  # noqa: BLE001 - classify, maybe retry, else re-raise
+                last = exc
+                if attempt == self.retries or not _is_retryable(exc):
+                    break
+                _log.warning(
+                    "server LLM transient error (%s); retry %d/%d",
+                    type(exc).__name__, attempt + 1, self.retries,
+                )
+                self._sleep(self.backoff * (2**attempt))
+        _log.exception("server LLM call failed (%s)", type(last).__name__ if last else "?")
+        raise last if last else RuntimeError("LLM call failed")
+
+
 def make_provider(config: ServerConfig) -> LLMProvider:
     """Select the founder-narrative provider from config (arch §9).
 
-    Defaults to the deterministic mock so dev/tests need no API key; the org
-    flips ``MANTHANA_SERVER_LLM=anthropic`` for a real, citation-grounded model.
-    """
+    Defaults to the deterministic mock so dev/tests need no API key; the org flips
+    ``MANTHANA_SERVER_LLM=anthropic`` (single server-wide ``ANTHROPIC_API_KEY``) for a real
+    model. If the anthropic SDK / key is missing, FALL BACK to the mock with a clear log
+    rather than crashing the server; the real provider is wrapped in ``ResilientProvider``."""
     if config.llm_provider == "anthropic":
-        return AnthropicProvider(model=config.llm_model, max_tokens=config.llm_max_tokens)
+        try:
+            inner = AnthropicProvider(model=config.llm_model, max_tokens=config.llm_max_tokens)
+        except Exception as exc:  # noqa: BLE001 - missing SDK/key → degrade, don't crash boot
+            _log.warning(
+                "anthropic provider unavailable (%s); falling back to mock — set the "
+                "'manthana-server[llm]' extra + ANTHROPIC_API_KEY to enable",
+                exc,
+            )
+            return MockProvider("{}")
+        return ResilientProvider(inner)
     return MockProvider("{}")
 
 
-__all__ = ["LLMProvider", "MockProvider", "ScriptedProvider", "AnthropicProvider", "make_provider"]
+__all__ = [
+    "LLMProvider",
+    "MockProvider",
+    "ScriptedProvider",
+    "AnthropicProvider",
+    "ResilientProvider",
+    "make_provider",
+]
