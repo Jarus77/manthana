@@ -30,3 +30,22 @@ jobs:
       # land in v1.1.
       - name: Tests (personal-mode invariant + schema mirror)
         run: uv run pytest
+
+  # Proves an outside engineer can actually install the CLI from wheels (the pinned
+  # intra-package deps resolve from --find-links; a bare-name build would fail here).
+  install-proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Build the Apache wheels
+        run: |
+          for pkg in manthana-schemas manthana-collectors manthana-skills manthana; do
+            uv build --package "$pkg" --wheel --out-dir dist
+          done
+      - name: Install the CLI from the wheels (isolated) and run it
+        run: |
+          uv tool install --find-links dist manthana
+          manthana version

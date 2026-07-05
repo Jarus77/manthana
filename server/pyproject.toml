@@ -5,8 +5,8 @@ description = "Manthana org server — ingestion, multi-tenancy, k-anonymity, fo
 requires-python = ">=3.11"
 license = "AGPL-3.0-or-later"
 dependencies = [
-    "manthana-schemas",
-    "manthana-skills",
+    "manthana-schemas==0.2.1",
+    "manthana-skills==0.2.1",
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "python-multipart>=0.0.9",

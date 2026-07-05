@@ -1544,3 +1544,24 @@ The engineer half of smooth onboarding: one command in, plus a health check.
 - Tests: `_verify_connection` (accepted / rejected / unreachable); `setup` orchestration (mocked
   enroll + platform→Linux + no real capture → config written); `count_pending`/`last_sync_at`;
   `doctor` non-zero when unconfigured + passes when healthy. **277 tests, ruff + pyright clean.**
+
+## 46. Distributable install — wheels + `curl|sh` (2026-07-06) — onboarding P1
+
+The #1 blocker was that nothing was installable: `manthana`'s intra-package deps were *unversioned
+bare names not on any index*, so `pip/uv tool install manthana` failed. Fixed:
+- **Pinned intra-package deps** to `==0.2.1` in `collectors`/`skills`/`agent`/`server` pyprojects
+  (local dev still resolves via the root `[tool.uv.sources]` workspace redirect; the pins only
+  travel in the built wheels — verified the `manthana` wheel METADATA now carries
+  `Requires-Dist: manthana-schemas==0.2.1` etc.). All 5 packages bump together (version-sync).
+- **`scripts/install.sh`** (`curl|sh` bootstrap): installs `uv` if missing, reads the GitHub
+  Release assets via the API (no filename guessing), downloads the wheels, and
+  `uv tool install --find-links <tmp> manthana` — the `manthana-*` resolve from the release, the
+  normal deps (typer/fastapi/httpx/…) from PyPI. One-liner:
+  `curl -LsSf https://github.com/<owner>/manthana/releases/latest/download/install.sh | sh`.
+- **`.github/workflows/publish-wheels.yml`** (tag `v*`): `uv build --package` the 4 Apache wheels →
+  attach them + `install.sh` to the GitHub Release (`softprops/action-gh-release`).
+- **CI `install-proof` job** (`ci.yml`): builds the wheels, `uv tool install --find-links dist
+  manthana`, runs `manthana version` — proves an outside engineer can install.
+- **Local proof:** built all 4 wheels; `uv tool install --find-links` installed the CLI (v0.2.1,
+  `setup`+`doctor` present), then uninstalled; `uv sync --all-packages` still works with the pins.
+  Distribution = GitHub-Release wheels (no PyPI ownership); Docker/Postgres stays for "graduation".
