@@ -1582,3 +1582,25 @@ bare names not on any index*, so `pip/uv tool install manthana` failed. Fixed:
 
 **Onboarding P1–P5 complete.** Admin stands up + provisions a team in 2 commands; an engineer runs
 one `manthana setup` → connected, capturing, with `doctor` proof. **278 tests, ruff + pyright clean.**
+
+## 48. Multi-laptop deployment — bind + TLS (Caddy) + Tailscale (2026-07-06)
+
+`quickstart` bound loopback-only (single-machine demo). To serve a real 7+1 team, the server needs
+a reachable address + HTTPS (the team token is a bearer credential — never plaintext). Added both
+recommended paths (cloud+domain+TLS, and Tailscale), keeping quickstart as the on-ramp:
+- **`quickstart --host` + `--public-url`** (`server/cli.py`): `--host 0.0.0.0` to serve other
+  machines; `--public-url https://…` is the URL baked into the console/enroll hint. **Warn-and-allow**:
+  a loud "binding non-loopback without HTTPS → tokens in PLAINTEXT" warning when `host` isn't
+  loopback and the public URL isn't https (Tailscale/reverse-proxy legitimately provide TLS, so no
+  hard block). Live-verified.
+- **Path A — cloud + domain + TLS via Caddy** (auto Let's Encrypt): `deploy/Caddyfile` (standalone:
+  quickstart on 127.0.0.1 + `caddy run`) and `docker-compose.tls.yml` (a `caddy:2` service
+  `reverse-proxy --from $MANTHANA_DOMAIN --to server:8000` in front of the full stack). Enroll with
+  `--server-url https://<domain>` → every invite blob points there.
+- **Path B — Tailscale** (`scripts/tailscale_serve.sh`): `tailscale serve --bg http://127.0.0.1:8000`
+  → HTTPS on the tailnet hostname, zero certs / no domain / no open ports; quickstart stays loopback.
+- **`docs/deploy.md` §0** rewritten with a plain-English glossary (loopback/0.0.0.0, DNS/domain,
+  TLS/HTTPS, cert/Let's Encrypt, reverse proxy/Caddy, Tailscale) + both paths, and the note that the
+  unauthenticated `/v1/enroll` must sit behind HTTPS (rate-limiting deferred as pilot scope).
+- Connection itself unchanged: agents already point at the one `server_url` from the invite; this
+  just decides *where that server lives*. **278 tests, ruff + pyright clean.**

@@ -1,0 +1,30 @@
+# TLS overlay — puts Caddy (automatic HTTPS) in front of the server stack.
+#
+# Caddy fetches + auto-renews a free Let's Encrypt certificate for your domain and reverse-proxies
+# to the server container, so the whole team reaches https://<your-domain> securely.
+#
+# Prereqs: your domain's DNS A record points at this host; ports 80 + 443 are open.
+# Run:
+#   MANTHANA_DOMAIN=manthana.acme.com \
+#     docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+# Then enroll pointing at the domain:
+#   manthana-server enroll acme platform --open --server-url https://manthana.acme.com
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    # One-line reverse proxy with automatic HTTPS for $MANTHANA_DOMAIN → the server container.
+    command: caddy reverse-proxy --from ${MANTHANA_DOMAIN:?set MANTHANA_DOMAIN to your domain} --to server:8000
+    volumes:
+      - caddy_data:/data # persists the TLS certificate across restarts
+      - caddy_config:/config
+    depends_on:
+      - server
+
+volumes:
+  caddy_data:
+  caddy_config:

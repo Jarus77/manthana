@@ -4,6 +4,65 @@ The founder/admin self-hosts one server. Engineers' agents sync **released,
 redacted** compactions to it; the founder uses the web console at `/ui`. This is
 the AGPL `manthana-server` (Postgres + S3/MinIO).
 
+## 0. Serving a real team — where the server lives (+ a plain-English glossary)
+
+Onboarding a whole team is just "every laptop points at **one** `server_url`" (that URL is
+baked into the `manthana setup` invite). The only real decision is **where that one server
+lives so 7 engineers + a founder can all reach it** — and making sure the connection is
+encrypted. Some jargon first:
+
+- **Loopback / `127.0.0.1`** — "this machine only". A server bound here is invisible to any
+  other laptop. `manthana-server quickstart` defaults to loopback (a local demo).
+- **`0.0.0.0`** — "accept connections from other machines too". Needed to serve a team, but
+  only safe *behind HTTPS* (see below).
+- **Domain / DNS** — a human name like `manthana.acme.com`. DNS is the phone book that maps
+  that name to your server's IP address (you set an "A record" at your domain registrar).
+- **TLS / HTTPS** — encryption on the wire (the padlock in a browser). Manthana's team token is
+  a *bearer credential* (whoever holds it is trusted), so it must **never** travel unencrypted.
+  HTTPS = HTTP + TLS.
+- **TLS certificate** — the proof of identity HTTPS needs. **Let's Encrypt** issues them for
+  free, automatically.
+- **Reverse proxy** — a small front-door program that terminates HTTPS and forwards requests to
+  your app. **Caddy** is one that fetches + renews the Let's Encrypt certificate for you with
+  near-zero config.
+- **Tailscale** — a private network (VPN) that securely connects your machines directly, giving
+  each a stable `…​.ts.net` name with HTTPS built in — no domain, no open firewall ports.
+
+Pick one path:
+
+### Path A — Cloud host + your domain + HTTPS (most "productized")
+The server runs on a small cloud VM; **Caddy** sits in front and auto-provisions HTTPS for your
+domain. Two flavours:
+
+- **Zero-infra (quickstart + Caddy):** point `manthana.acme.com`'s DNS at the VM, open ports
+  80/443, then:
+  ```bash
+  manthana-server quickstart --public-url https://manthana.acme.com   # server on 127.0.0.1:8000
+  caddy run --config ./deploy/Caddyfile                               # edit <your-domain> first
+  manthana-server enroll acme platform --open --server-url https://manthana.acme.com
+  ```
+- **Full stack (Docker + Postgres + Caddy overlay):**
+  ```bash
+  MANTHANA_DOMAIN=manthana.acme.com \
+    docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+  ```
+  Caddy (`docker-compose.tls.yml`) gets the cert and proxies to the server container.
+
+### Path B — Tailscale / VPN (fastest secure path, no domain)
+If everyone installs Tailscale (`tailscale up`), run the server on this machine and publish it
+on the tailnet with automatic HTTPS — no domain, no certs, no public exposure:
+```bash
+manthana-server quickstart               # loopback is fine; Tailscale fronts it
+./scripts/tailscale_serve.sh             # → https://<machine>.<tailnet>.ts.net
+manthana-server enroll acme platform --open --server-url https://<machine>.<tailnet>.ts.net
+```
+
+> ⚠️ Do **not** expose `quickstart --host 0.0.0.0` to the internet **without** TLS in front —
+> tokens would travel in plaintext. quickstart prints a warning if you try. Caddy or Tailscale
+> provides that TLS layer. (The `/v1/enroll` redemption endpoint is intentionally unauthenticated
+> — the invite code *is* the credential, single-use + expiring — so it must sit behind HTTPS;
+> rate-limiting is deferred as pilot scope.)
+
 ## 1. Bring up the stack
 
 One host, one command — the server + Postgres + MinIO (S3) + bucket creation:

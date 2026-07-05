@@ -1,0 +1,20 @@
+# Manthana — automatic-HTTPS reverse proxy (Caddy).
+#
+# What this does: Caddy listens on the public internet for your domain, gets + auto-renews
+# a free TLS certificate from Let's Encrypt, and forwards ("reverse proxies") requests to the
+# Manthana server running privately on this same machine. Engineers point their agents at
+# https://<your-domain>; Caddy handles the encryption so bearer tokens never travel in plaintext.
+#
+# Setup (once):
+#   1. Point your domain's DNS "A record" at this server's public IP.
+#   2. Open ports 80 and 443 on the machine's firewall.
+#   3. Run the Manthana server:   manthana-server quickstart --public-url https://<your-domain>
+#   4. Run Caddy with this file:  caddy run --config ./deploy/Caddyfile
+#   5. Enroll pointing at the domain:
+#        manthana-server enroll acme platform --open --server-url https://<your-domain>
+#
+# Replace <your-domain> below with your real domain (e.g. manthana.acme.com).
+
+<your-domain> {
+	reverse_proxy 127.0.0.1:8000
+}

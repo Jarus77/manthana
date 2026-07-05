@@ -127,9 +127,19 @@ def digest(org_id: str, since: str = "", until: str = "") -> None:
 
 
 @app.command()
-def quickstart(port: int = 8000, k_anon: int = K_ANON_FLOOR_DEFAULT, data: str = "") -> None:
+def quickstart(
+    port: int = 8000,
+    host: str = typer.Option("127.0.0.1", help="bind address; 0.0.0.0 to serve other machines"),
+    public_url: str = typer.Option("", help="the https URL engineers use (when behind TLS)"),
+    k_anon: int = K_ANON_FLOOR_DEFAULT,
+    data: str = "",
+) -> None:
     """Zero-infra pilot server: SQLite + in-memory + auto-generated persisted secrets — no
-    Docker/Postgres/MinIO. Prints the admin token + console URL, then serves."""
+    Docker/Postgres/MinIO. Prints the admin token + console URL, then serves.
+
+    Default binds loopback (this machine only). To serve a real team, put HTTPS in front
+    (Caddy or `tailscale serve` — see docs/deploy.md) and pass --public-url; use --host
+    0.0.0.0 only when a TLS proxy terminates in front of it."""
     import uvicorn
 
     from .app import create_app
@@ -141,15 +151,22 @@ def quickstart(port: int = 8000, k_anon: int = K_ANON_FLOOR_DEFAULT, data: str =
     application = create_app(
         config, ServerStore.open(config.db_url), make_object_store(config), make_provider(config)
     )
-    url = f"http://127.0.0.1:{port}"
-    typer.echo(f"Manthana server (zero-infra: SQLite + in-memory) → {url}")
+    # The URL engineers/founder will actually point at: the TLS public URL if given, else
+    # this machine's local URL (only usable from the same box).
+    url = public_url.rstrip("/") or f"http://127.0.0.1:{port}"
+    loopback = host in {"127.0.0.1", "localhost", "::1"}
+    typer.echo(f"Manthana server (zero-infra: SQLite + in-memory) → binding {host}:{port}")
+    if not loopback and not url.startswith("https"):
+        typer.echo("  ⚠ WARNING: binding to a NON-loopback address without HTTPS in front.")
+        typer.echo("    Team tokens are bearer credentials — they would travel in PLAINTEXT.")
+        typer.echo("    Put TLS ahead of it (Caddy or `tailscale serve`) — see docs/deploy.md.")
     typer.echo(f"  data dir:    {data_dir}")
     typer.echo(f"  admin token: {config.admin_token}")
     typer.echo(f"  console:     {url}/ui   (sign in with the admin token)")
     if k_anon < 4:
         typer.echo(f"  ⚠ k-anon {k_anon} < 4 — cross-engineer features need >=4 contributors")
     typer.echo(f"  next → manthana-server enroll acme platform --open --server-url {url}")
-    uvicorn.run(application, host="127.0.0.1", port=port)
+    uvicorn.run(application, host=host, port=port)
 
 
 @app.command()
