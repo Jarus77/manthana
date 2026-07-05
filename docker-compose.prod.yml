@@ -10,5 +10,5 @@
 services:
   server:
     build: !reset null  # drop the source build — use the registry image
-    image: ghcr.io/suraj-gameramp/manthana-server:${MANTHANA_VERSION:-0.3.0}
+    image: ghcr.io/suraj-gameramp/manthana-server:${MANTHANA_VERSION:-0.4.0}
     pull_policy: always

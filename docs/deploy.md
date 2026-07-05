@@ -103,7 +103,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 # a different tag: MANTHANA_VERSION=0.3.0 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
-This runs `ghcr.io/suraj-gameramp/manthana-server:0.2.0` (overlay inherits
+This runs `ghcr.io/suraj-gameramp/manthana-server:0.4.0` (overlay inherits
 Postgres/MinIO from the base file). Requires Docker Compose v2.24+.
 
 - Founder console: <http://localhost:8000/ui> (sign in with `MANTHANA_SERVER_ADMIN_TOKEN`)

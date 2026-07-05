@@ -1604,3 +1604,25 @@ recommended paths (cloud+domain+TLS, and Tailscale), keeping quickstart as the o
   unauthenticated `/v1/enroll` must sit behind HTTPS (rate-limiting deferred as pilot scope).
 - Connection itself unchanged: agents already point at the one `server_url` from the invite; this
   just decides *where that server lives*. **278 tests, ruff + pyright clean.**
+
+## 49. Admin onboarding as easy as the client — v0.4.0 (2026-07-06)
+
+Testing-team feedback: the engineer side is one-line but the admin/server side still had "must
+clone" friction. Closed it (P0→P3), released **v0.4.0**.
+- **P0 — server installable:** `publish-wheels` + CI install-proof build `manthana-server` too (5
+  wheels on the Release); `install.sh` takes `agent|server|all` (`| sh -s server`); `docs/deploy.md`
+  documents `| sh -s server` *and* a pure `docker run ghcr.io/…/manthana-server` (no checkout).
+- **P1 — unify `serve` + `init`:** `serve` now uses `_resolve_config` → **auto-generates + persists
+  secrets when `MANTHANA_SERVER_*` env is unset** (zero-config pilot), honours env in prod; folds
+  quickstart's banner + `--host/--public-url/--k-anon/--data` + `--tailscale` (`_tailscale_public_url`
+  via `tailscale serve --bg` + `tailscale status --json`). `quickstart` = thin alias. Deleted the
+  loose `scripts/tailscale_serve.sh`. `manthana-server init <dir>` writes bundled deploy templates
+  (`deploy_templates.py`: Caddyfile, docker-compose{,.tls}.yml, .env.example) — no clone.
+- **P2 — breadth:** `manthana service {install,uninstall,status}` dispatches on OS — macOS launchd /
+  Linux `systemd --user` / Windows Scheduled Task (missing-binary tolerant); `setup` installs on all
+  three. New **`manthana-server doctor`** (secrets/DB/object-store/LLM/k-anon + org/actor/compaction/
+  invite counts, non-zero exit) parallel to the client `manthana doctor`.
+- **P3 — finish:** README "Admin quickstart in 5 steps" (Tailscale) at the top + Uninstall/rollback
+  section; onboarding.md cross-platform daemon note.
+- Release: bumped 0.3.0 → **0.4.0** (5 pkgs + `==0.4.0` pins), tag `v0.4.0` → CI attaches the server
+  wheel (+ others) to the Release and pushes the `:0.4.0` image. **283 tests, ruff + pyright clean.**
