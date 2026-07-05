@@ -5,13 +5,35 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 from __future__ import annotations
 
+import os
+import secrets
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
 import typer
+from manthana.schemas import encode_invite
 
 from .auth import issue_team_token
-from .config import ServerConfig
+from .config import K_ANON_FLOOR_DEFAULT, ServerConfig, persisted_secrets
 from .store import ServerStore
 
 app = typer.Typer(help="Manthana org server.", no_args_is_help=True, add_completion=False)
+
+_DEFAULT_DATA_DIR = Path.home() / ".manthana-server"
+
+
+def _resolve_config(data: str = "") -> ServerConfig:
+    """Config for the admin CLI. Prod (env secrets set) → ``from_env``. Otherwise the
+    zero-infra quickstart path: persisted secrets + a data-dir SQLite DB, so `quickstart`,
+    `enroll`, and `invites` all share one server + DB with no env wiring."""
+    data_dir = Path(data).expanduser() if data else _DEFAULT_DATA_DIR
+    env = os.environ.get
+    if env("MANTHANA_SERVER_JWT_SECRET") and env("MANTHANA_SERVER_ADMIN_TOKEN"):
+        return ServerConfig.from_env()
+    jwt, admin = persisted_secrets(data_dir)
+    db_url = env("MANTHANA_SERVER_DB_URL") or f"sqlite:///{data_dir / 'manthana-server.db'}"
+    return ServerConfig(jwt_secret=jwt, admin_token=admin, db_url=db_url, object_store="memory")
 
 
 @app.command()
@@ -102,6 +124,91 @@ def digest(org_id: str, since: str = "", until: str = "") -> None:
         typer.echo(f"\n(omitted (k-anon / no data): {', '.join(d.omitted)})")
     if not d.sections:
         typer.echo("\n(no sections cleared the k-anonymity floor for this window)")
+
+
+@app.command()
+def quickstart(port: int = 8000, k_anon: int = K_ANON_FLOOR_DEFAULT, data: str = "") -> None:
+    """Zero-infra pilot server: SQLite + in-memory + auto-generated persisted secrets — no
+    Docker/Postgres/MinIO. Prints the admin token + console URL, then serves."""
+    import uvicorn
+
+    from .app import create_app
+    from .llm import make_provider
+    from .storage import make_object_store
+
+    config = replace(_resolve_config(data), k_anon_floor=k_anon)
+    data_dir = Path(data).expanduser() if data else _DEFAULT_DATA_DIR
+    application = create_app(
+        config, ServerStore.open(config.db_url), make_object_store(config), make_provider(config)
+    )
+    url = f"http://127.0.0.1:{port}"
+    typer.echo(f"Manthana server (zero-infra: SQLite + in-memory) → {url}")
+    typer.echo(f"  data dir:    {data_dir}")
+    typer.echo(f"  admin token: {config.admin_token}")
+    typer.echo(f"  console:     {url}/ui   (sign in with the admin token)")
+    if k_anon < 4:
+        typer.echo(f"  ⚠ k-anon {k_anon} < 4 — cross-engineer features need >=4 contributors")
+    typer.echo(f"  next → manthana-server enroll acme platform --open --server-url {url}")
+    uvicorn.run(application, host="127.0.0.1", port=port)
+
+
+@app.command()
+def enroll(
+    org_id: str,
+    team_id: str,
+    server_url: str = typer.Option(..., "--server-url", help="public URL engineers redeem at"),
+    emails: str = typer.Option("", help="file of engineer emails (one per line) → bound invites"),
+    open_invite: bool = typer.Option(False, "--open", help="one shared multi-use team invite"),
+    org_name: str = "",
+    team_name: str = "",
+    expires_days: int = 14,
+    data: str = "",
+) -> None:
+    """Provision a team + emit `manthana setup <blob>` one-liners. `--open` = one shared invite
+    to drop in Slack; `--emails <file>` = a single-use invite per engineer (identity bound)."""
+    config = _resolve_config(data)
+    store = ServerStore.open(config.db_url)
+    store.create_org(org_id, org_name or org_id)
+    store.create_team(team_id, org_id, team_name or team_id)
+    exp = datetime.now(UTC) + timedelta(days=expires_days)
+    if open_invite:
+        code = secrets.token_urlsafe(8)
+        store.create_invite(code, org_id=org_id, team_id=team_id, uses=10_000, expires_at=exp)
+        typer.echo(f"open team invite (share in Slack; expires in {expires_days}d):")
+        typer.echo(f"  manthana setup {encode_invite(server_url, code)}")
+    elif emails:
+        actors = [
+            ln.strip()
+            for ln in Path(emails).expanduser().read_text().splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")
+        ]
+        for actor in actors:
+            store.upsert_actor(actor, org_id, team_id)
+            code = secrets.token_urlsafe(8)
+            store.create_invite(
+                code, org_id=org_id, team_id=team_id, actor=actor, uses=1, expires_at=exp
+            )
+            typer.echo(f"{actor} → manthana setup {encode_invite(server_url, code)}")
+        typer.echo(f"\nprovisioned {len(actors)} engineer(s); send each their line")
+    else:
+        typer.echo("pass --open (one shared invite) OR --emails <file> (one per engineer)")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def invites(org_id: str, data: str = "") -> None:
+    """List an org's onboarding invites and their state."""
+    config = _resolve_config(data)
+    rows = ServerStore.open(config.db_url).list_invites(org_id)
+    if not rows:
+        typer.echo("no invites")
+        return
+    for inv in rows:
+        state = "redeemed" if inv.redeemed_at else f"{inv.uses_left} use(s) left"
+        typer.echo(
+            f"{inv.code}  team={inv.team_id}  who={inv.actor or '(open)'}  "
+            f"{state}  expires={inv.expires_at}"
+        )
 
 
 def main() -> None:

@@ -1493,3 +1493,32 @@ Made the server-side narrative/digest provider production-safe (single server-wi
   ruff + pyright clean.**
 
 **Roadmap A–F complete** (v0.2.1 + 5 features): all behind the green gate, each with spec + tests.
+
+## 44. Frictionless org onboarding — server side (2026-07-06) — onboarding P2
+
+Design-partner readiness (direction A): make the org onboarding smooth. This is the server half
+(quickstart + enroll + invite-code redemption); the engineer `setup`/`doctor` + distribution follow.
+- **Invite blob** (`schemas/invite.py`, Apache — shared by agent + server): `encode_invite(server_url,
+  code)` → a `mia_…` base64url token wrapping `{server_url, code}` (NO secret); `decode_invite`
+  reverses it. This is what `manthana setup <blob>` carries.
+- **Invite storage** (`tables.py` `InviteRow`: code pk, org/team, nullable `actor`, `uses_left`,
+  `expires_at`, `redeemed_at`) + store methods `create_invite / get_invite / redeem_invite
+  (atomic validity+single-use consume) / list_invites`.
+- **Endpoints** (`app.py`): admin-gated `POST /v1/admin/invites` mints a `secrets.token_urlsafe(8)`
+  code; **`POST /v1/enroll` is UNAUTHENTICATED by design** (the code *is* the credential) — validates
+  (exists / not expired / uses-left), resolves actor (invite-bound OR supplied — checked *before*
+  consuming a use), `issue_team_token`, returns `{token, actor}`. So the team token never travels in
+  Slack.
+- **CLI** (`server/cli.py`): `quickstart` — zero-infra pilot server (SQLite + in-memory + secrets
+  auto-generated & **persisted** to `~/.manthana-server/server-secrets.toml`, chmod 0600, reused on
+  restart so issued agent tokens survive; `config.persisted_secrets`), prints admin token + console
+  URL + the next `enroll` command. `enroll <org> <team> --server-url … (--open | --emails file)` —
+  provisions the team + emits `manthana setup <blob>` one-liners (one shared multi-use invite, or a
+  single-use bound invite per email). `invites <org>` lists state. A shared `_resolve_config` makes
+  quickstart/enroll/invites share one DB with no env wiring (prod still uses `from_env`).
+- **Live E2E:** `quickstart --port 8011` → `enroll acme platform --open` → decode the emitted blob →
+  `POST /v1/enroll` → a team token that `verify_team_token` accepts (actor/org/team correct).
+- Tests (`tests/test_onboarding.py`): blob roundtrip + garbage; persisted-secrets generate+reuse;
+  invite redeem (bound single-use / open multi-use / expired / unknown / actor-required-before-
+  consume); admin endpoint gated + `/v1/enroll` open-but-validating. **273 tests, ruff + pyright
+  clean.**

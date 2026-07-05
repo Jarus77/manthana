@@ -9,7 +9,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 from __future__ import annotations
 
 import os
+import secrets
+import tomllib
 from dataclasses import dataclass
+from pathlib import Path
 
 K_ANON_FLOOR_DEFAULT = 4
 
@@ -98,4 +101,26 @@ class ServerConfig:
         )
 
 
-__all__ = ["ServerConfig", "K_ANON_FLOOR_DEFAULT"]
+def persisted_secrets(data_dir: Path) -> tuple[str, str]:
+    """Load ``(jwt_secret, admin_token)`` from ``<data_dir>/server-secrets.toml``, generating
+    and persisting them (chmod 0600) on first run. Stable across restarts — regenerating would
+    invalidate every already-issued agent token (they're signed with ``jwt_secret``). Used by
+    ``manthana-server quickstart`` for a zero-config secure boot."""
+    path = data_dir / "server-secrets.toml"
+    if path.exists():
+        data = tomllib.loads(path.read_text())
+        sec = data.get("secrets", {})
+        jwt, admin = sec.get("jwt_secret"), sec.get("admin_token")
+        if jwt and admin:
+            return str(jwt), str(admin)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    jwt, admin = secrets.token_hex(32), secrets.token_hex(24)
+    path.write_text(f'[secrets]\njwt_secret = "{jwt}"\nadmin_token = "{admin}"\n')
+    try:
+        path.chmod(0o600)
+    except OSError:  # best-effort on filesystems without POSIX perms
+        pass
+    return jwt, admin
+
+
+__all__ = ["ServerConfig", "K_ANON_FLOOR_DEFAULT", "persisted_secrets"]

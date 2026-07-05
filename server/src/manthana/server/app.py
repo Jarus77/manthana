@@ -17,6 +17,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 import hmac
 import json
+import secrets
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response
@@ -50,6 +52,19 @@ class MintToken(BaseModel):
     org_id: str
     team_id: str
     actor: str
+
+
+class CreateInvite(BaseModel):
+    org_id: str
+    team_id: str
+    actor: str | None = None  # bound identity, or None for an open team invite
+    expires_minutes: int = 20_160  # 14 days
+    uses: int = 1
+
+
+class RedeemInvite(BaseModel):
+    code: str
+    actor: str | None = None  # required only for an open (unbound) invite
 
 
 class IngestBody(BaseModel):
@@ -146,6 +161,39 @@ def create_app(
             config.jwt_secret, org_id=body.org_id, team_id=body.team_id, actor=body.actor
         )
         return {"token": token}
+
+    @app.post("/v1/admin/invites")
+    def create_invite(
+        body: CreateInvite, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """Mint an onboarding invite the engineer redeems for a team token (so the token
+        never travels in Slack). ``actor`` bound = single-engineer; ``actor`` null = open
+        team invite (engineer supplies their email at redemption)."""
+        code = secrets.token_urlsafe(8)
+        expires = datetime.now(UTC) + timedelta(minutes=max(1, body.expires_minutes))
+        store.create_invite(
+            code, org_id=body.org_id, team_id=body.team_id, actor=body.actor,
+            uses=max(1, body.uses), expires_at=expires,
+        )
+        return {"code": code, "expires_at": expires.isoformat(), "actor": body.actor}
+
+    @app.post("/v1/enroll")
+    def enroll(body: RedeemInvite) -> dict[str, str]:
+        """Redeem an invite for a team token. UNAUTHENTICATED by design — the code IS the
+        credential (validity + single-use bound). The engineer's `manthana setup` calls this."""
+        invite = store.get_invite(body.code)
+        if invite is None:
+            raise HTTPException(status_code=400, detail="unknown invite code")
+        actor = invite.actor or body.actor
+        if not actor:
+            raise HTTPException(status_code=400, detail="this invite needs your identity (actor)")
+        # Atomic validity + single-use consume (guards expiry/exhaustion + races).
+        if store.redeem_invite(body.code) is None:
+            raise HTTPException(status_code=400, detail="invite expired or already used")
+        token = issue_team_token(
+            config.jwt_secret, org_id=invite.org_id, team_id=invite.team_id, actor=actor
+        )
+        return {"token": token, "actor": actor}
 
     @app.post("/v1/compactions")
     def ingest(

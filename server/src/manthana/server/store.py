@@ -30,6 +30,7 @@ from .tables import (
     ActionQueueRow,
     ActorRow,
     FounderQueryAuditRow,
+    InviteRow,
     OrgConsentRow,
     OrgRow,
     RawTranscriptRow,
@@ -51,6 +52,12 @@ def _utc_iso(value: datetime) -> str:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _parse_iso(value: str) -> datetime:
+    """Parse a stored ISO timestamp to a UTC-aware datetime (naive → assumed UTC)."""
+    dt = datetime.fromisoformat(value)
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
 
 
 def _pk(org_id: str, compaction_id: str) -> str:
@@ -135,6 +142,54 @@ class ServerStore:
     def list_actors(self, org_id: str) -> list[ActorRow]:
         with DBSession(self._engine) as db:
             return list(db.exec(select(ActorRow).where(ActorRow.org_id == org_id)))
+
+    # ── onboarding invites ───────────────────────────────────────────────
+    def create_invite(
+        self,
+        code: str,
+        *,
+        org_id: str,
+        team_id: str,
+        actor: str | None = None,
+        uses: int = 1,
+        expires_at: datetime,
+    ) -> None:
+        """Store an onboarding invite (redeemed at POST /v1/enroll for a team token)."""
+        with DBSession(self._engine) as db:
+            db.merge(
+                InviteRow(
+                    code=code, org_id=org_id, team_id=team_id, actor=actor,
+                    uses_left=uses, expires_at=_utc_iso(expires_at), created_at=_now_iso(),
+                )
+            )
+            db.commit()
+
+    def get_invite(self, code: str) -> InviteRow | None:
+        with DBSession(self._engine) as db:
+            return db.get(InviteRow, code)
+
+    def redeem_invite(self, code: str, *, now: datetime | None = None) -> InviteRow | None:
+        """Atomically consume one use of a valid invite; return the (pre-decrement) row, or
+        None if the code is unknown / expired / exhausted. Decrements ``uses_left`` and stamps
+        ``redeemed_at`` when it hits zero — so a single-use invite can't be replayed."""
+        now = now or datetime.now(UTC)
+        with DBSession(self._engine) as db:
+            row = db.get(InviteRow, code)
+            if row is None or row.uses_left <= 0:
+                return None
+            if _parse_iso(row.expires_at) <= now:
+                return None
+            row.uses_left -= 1
+            if row.uses_left == 0:
+                row.redeemed_at = _utc_iso(now)
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            return row
+
+    def list_invites(self, org_id: str) -> list[InviteRow]:
+        with DBSession(self._engine) as db:
+            return list(db.exec(select(InviteRow).where(InviteRow.org_id == org_id)))
 
     def list_projects(self, org_id: str) -> list[str]:
         """Distinct project slugs that have at least one released compaction in this org.

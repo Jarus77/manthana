@@ -102,6 +102,23 @@ class ReleasedCompactionVectorRow(SQLModel, table=True):
     vec: list[float] = Field(sa_column=Column(JSON, nullable=False))
 
 
+class InviteRow(SQLModel, table=True):
+    """Onboarding invite: an engineer redeems ``code`` at ``POST /v1/enroll`` for a team
+    token — so the token itself never travels over Slack. ``actor`` bound = per-engineer
+    (single-use); ``actor`` null = open team invite (the engineer supplies their email).
+    ``uses_left`` bounds redemptions; ``expires_at`` bounds time."""
+
+    __tablename__ = "invite"  # type: ignore[assignment]
+    code: str = Field(primary_key=True)
+    org_id: str = Field(index=True)
+    team_id: str = Field(index=True)
+    actor: str | None = Field(default=None)  # bound identity, or None for an open invite
+    uses_left: int = Field(default=1)
+    expires_at: str  # UTC ISO-8601
+    created_at: str
+    redeemed_at: str | None = Field(default=None)
+
+
 class FounderQueryAuditRow(SQLModel, table=True):
     """Audit trail of founder queries — who looked at what, and whether the
     answer was grounded/k-anon-met. Governance + after-the-fact investigation."""
@@ -126,6 +143,7 @@ SERVER_TABLES = [
     OrgConsentRow,
     FounderQueryAuditRow,
     ReleasedCompactionVectorRow,
+    InviteRow,
 ]
 
 __all__ = [
@@ -138,5 +156,6 @@ __all__ = [
     "OrgConsentRow",
     "FounderQueryAuditRow",
     "ReleasedCompactionVectorRow",
+    "InviteRow",
     "SERVER_TABLES",
 ]

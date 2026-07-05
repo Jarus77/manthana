@@ -33,6 +33,7 @@ from .enums import (
     Surface,
 )
 from .friction import FrictionPoint
+from .invite import decode_invite, encode_invite
 from .session import Session
 from .turn import Turn
 
@@ -63,4 +64,7 @@ __all__ = [
     "ConsentState",
     "ActionOutcome",
     "QueueStatus",
+    # onboarding
+    "encode_invite",
+    "decode_invite",
 ]
