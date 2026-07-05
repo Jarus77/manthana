@@ -29,7 +29,33 @@ This installs `uv` (if needed) and the `manthana` CLI. (Dev from a clone instead
 
 ---
 
-## Onboarding a team
+## Admin quickstart — a secure team server in 5 steps
+
+The fastest secure path (no domain, no certificates) uses **Tailscale** (a private VPN):
+
+```bash
+# 1. On every machine (admin + engineers): install Tailscale and join your tailnet.
+#    https://tailscale.com/download  — then enable MagicDNS + HTTPS in the Tailscale admin console.
+tailscale up
+
+# 2. Install the server (admin machine only):
+curl -LsSf https://github.com/Suraj-gameramp/manthana/releases/latest/download/install.sh | sh -s server
+
+# 3. Run it — auto-generates secrets, exposes it on your tailnet with automatic HTTPS:
+manthana-server serve --tailscale        # prints an admin token + your https://<machine>.<tailnet>.ts.net URL
+
+# 4. Create a shareable invite — copy the printed `manthana setup …` line:
+manthana-server enroll acme platform --open --server-url https://<machine>.<tailnet>.ts.net
+
+# 5. Send that one line to each engineer; they run `manthana setup <it>` and they're on.
+```
+
+Prefer a real domain instead of Tailscale? See **[docs/deploy.md](docs/deploy.md)** for the
+Caddy automatic-HTTPS path, or run `manthana-server init .` to drop the Docker/Caddy files.
+
+---
+
+## Onboarding a team (details)
 
 The whole flow is **2 commands for the admin, 1 for each engineer.** Try it end-to-end locally
 with zero infra: `./scripts/quickstart_demo.sh`.
@@ -37,8 +63,9 @@ with zero infra: `./scripts/quickstart_demo.sh`.
 ### Admin — stand up + provision
 
 ```bash
-# 1. start a server (pilot: SQLite + in-memory, no Docker) — prints the admin token + console URL
-manthana-server quickstart
+# 1. start a server (auto-secrets, SQLite + in-memory, no Docker) — prints the admin token + URL.
+#    add --tailscale to expose it securely to the team (see the quickstart above).
+manthana-server serve
 
 # 2. enroll the team — emits a `manthana setup <blob>` one-liner to send each engineer
 manthana-server enroll acme platform --open --server-url https://manthana.acme.com
@@ -56,7 +83,7 @@ team, not one person.
 manthana setup mia_…        # the one-liner from your admin (add --actor you@acme.com if it's an open invite)
 ```
 
-That single command redeems the invite, connects, installs auto-capture at login (macOS),
+That single command redeems the invite, connects, installs auto-capture at login (macOS / Linux / Windows),
 runs a first capture, and prints a confirmation. Check anytime:
 
 ```bash
@@ -80,7 +107,7 @@ credential — never send it unencrypted). Three paths, explained in plain Engli
 | **Cloud + domain + TLS** | the productized path | quickstart (or Docker) behind **Caddy** (`deploy/Caddyfile` / `docker-compose.tls.yml`) → auto Let's Encrypt HTTPS |
 | **Full Docker stack** | Postgres + object store at scale | `docker compose up -d` (see deploy.md) |
 
-⚠️ Never expose the server publicly **without** HTTPS — `quickstart` warns you if you try.
+⚠️ Never expose the server publicly **without** HTTPS — `serve` warns you if you try.
 
 ---
 
@@ -102,6 +129,26 @@ manthana related <session-id>                  # prior work related to a session
 
 The founder sees only released, redacted, k-anonymized data via the console at `/ui`, with a
 weekly **digest** and a **cost analyzer** (what sessions would cost on cheaper model tiers).
+
+---
+
+## Uninstall / rollback
+
+Everything is cleanly removable — nothing is installed system-wide beyond a CLI and (optionally)
+a login service.
+
+```bash
+# Engineer (client)
+manthana service uninstall        # stop the auto-capture daemon (macOS/Linux/Windows)
+uv tool uninstall manthana        # remove the CLI
+rm -rf ~/.manthana                # remove the local store (your captured data)
+
+# Admin (server)
+tailscale serve --https=443 off   # stop sharing over the tailnet (if you used --tailscale)
+uv tool uninstall manthana-server
+rm -rf ~/.manthana-server         # server DB + generated secrets
+# Docker deployments:  docker compose down -v     # also removes volumes (data + certs)
+```
 
 ---
 

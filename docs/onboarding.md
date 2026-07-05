@@ -45,17 +45,16 @@ Then paste the one-liner your admin sent:
 manthana setup mia_…          # add --actor you@acme.com for an open team invite
 ```
 
-That single command redeems the invite, connects, installs auto-capture at login (macOS),
-runs a first capture, and prints a confirmation:
+That single command redeems the invite, connects, installs auto-capture at login (macOS launchd
+· Linux `systemd --user` · Windows Scheduled Task), runs a first capture, and prints a confirmation:
 
 ```
 ✓ connected as you@acme.com → https://manthana.acme.com
-  captured 14 session(s) · auto-capture: running at login (launchd)
+  captured 14 session(s) · auto-capture: installed (runs at login)
   dashboard: http://127.0.0.1:8765  ·  health check: manthana doctor
 ```
 
-Flags: `--no-service` (skip the login daemon and run `manthana watch` yourself); on Linux the
-daemon step prints a `systemd --user` note (auto-install is macOS-only for now).
+Flag: `--no-service` skips the login daemon (run `manthana watch` yourself instead).
 
 ## Check it's working
 
