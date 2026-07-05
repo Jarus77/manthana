@@ -1,10 +1,10 @@
 [project]
 name = "manthana-skills"
-version = "0.2.1"
+version = "0.3.0"
 description = "Manthana skill miner — cluster compactions into proposed SKILL.md (shared by agent + server)."
 requires-python = ">=3.11"
 license = "Apache-2.0"
-dependencies = ["manthana-schemas==0.2.1"]
+dependencies = ["manthana-schemas==0.3.0"]
 
 [project.optional-dependencies]
 # Semantic embeddings (bge-large via sentence-transformers). Heavy (torch); the

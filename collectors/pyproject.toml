@@ -1,10 +1,10 @@
 [project]
 name = "manthana-collectors"
-version = "0.2.1"
+version = "0.3.0"
 description = "Manthana collectors — per-surface adapters that normalize transcripts to Turns."
 requires-python = ">=3.11"
 license = "Apache-2.0"
-dependencies = ["manthana-schemas==0.2.1"]
+dependencies = ["manthana-schemas==0.3.0"]
 
 [build-system]
 requires = ["hatchling"]
