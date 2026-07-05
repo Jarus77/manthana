@@ -292,6 +292,61 @@ def init(directory: str = typer.Argument(".", help="where to write the deploy fi
     )
 
 
+@app.command()
+def doctor(data: str = "") -> None:
+    """Health check for the org server — exits non-zero if a critical check fails."""
+    import os as _os
+
+    from .storage import make_object_store
+
+    failed = False
+
+    def check(ok: bool, label: str, detail: str = "", *, critical: bool = True) -> None:
+        nonlocal failed
+        mark = "✓" if ok else ("✗" if critical else "•")
+        typer.echo(f"  {mark} {label}" + (f" — {detail}" if detail else ""))
+        if not ok and critical:
+            failed = True
+
+    typer.echo("Manthana server doctor")
+    try:
+        config = _resolve_config(data)  # constructs → validates secrets (refuses dev defaults)
+    except Exception as exc:  # noqa: BLE001 - surface a bad config as a failed check, not a crash
+        typer.echo(f"  ✗ config invalid: {exc}")
+        raise typer.Exit(code=1) from exc
+    check(True, "secrets configured", f"db={config.db_url}")
+
+    store = ServerStore.open(config.db_url)
+    check(store.ping(), "database reachable")
+    try:
+        make_object_store(config)
+        os_ok = True
+    except Exception:  # noqa: BLE001 - object-store init failure is a (non-fatal) health signal
+        os_ok = False
+    check(os_ok, "object store", config.object_store, critical=False)
+    if config.llm_provider == "anthropic":
+        check(
+            bool(_os.environ.get("ANTHROPIC_API_KEY")),
+            "LLM: anthropic key present", critical=False,
+        )
+    else:
+        check(True, "LLM: mock (set MANTHANA_SERVER_LLM=anthropic for real narratives)",
+              critical=False)
+    check(config.k_anon_floor >= 4, f"k-anon floor = {config.k_anon_floor}",
+          "cross-engineer features need >=4", critical=False)
+
+    orgs = store.list_orgs()
+    actors = sum(len(store.list_actors(o.id)) for o in orgs)
+    comps = sum(store.count_compactions(o.id) for o in orgs)
+    invs = sum(len(store.list_invites(o.id)) for o in orgs)
+    typer.echo(
+        f"  • {len(orgs)} org(s) · {actors} actor(s) · {comps} released compaction(s) · "
+        f"{invs} invite(s)"
+    )
+    if failed:
+        raise typer.Exit(code=1)
+
+
 def main() -> None:
     app()
 

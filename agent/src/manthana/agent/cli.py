@@ -137,8 +137,6 @@ def setup(
 ) -> None:
     """One command to onboard: redeem the invite → connect → install auto-capture → first
     capture → confirm. Everything `login` + `service install` + `capture` do, in one step."""
-    import platform
-
     import httpx
     from manthana.agent.config import Config, save_config
     from manthana.collectors import resolve_actor
@@ -177,17 +175,15 @@ def setup(
     if opt.available():
         opt.setup()
 
-    # Install auto-capture at login (macOS launchd). Non-macOS or --no-service → manual note.
+    # Install auto-capture at login (macOS launchd / Linux systemd / Windows task).
     if not service_install:
         daemon = "skipped (--no-service) — run `manthana watch` yourself"
-    elif platform.system() == "Darwin":
+    else:
         try:
             service("install")
-            daemon = "running at login (launchd)"
+            daemon = "installed (runs at login)"
         except typer.Exit:
             daemon = "install failed — run `manthana service install`"
-    else:
-        daemon = "manual — run `manthana watch` (see docs/onboarding.md)"
 
     store = Store.open()
     ingest_all(store)  # first capture
@@ -625,31 +621,34 @@ def _watch_plist(manthana_bin: str, actor: str | None) -> dict[str, object]:
     }
 
 
-@app.command()
-def service(action: str = typer.Argument("status")) -> None:
-    """Run the capture daemon at login (macOS launchd): install | uninstall | status."""
-    import platform
-    import plistlib
+_SYSTEMD_UNIT = "manthana-watch.service"
+_WIN_TASK = "ManthanaWatch"
+
+
+def _watch_bin_and_actor() -> tuple[str, str | None]:
+    """The `manthana` executable path + the configured actor (for the daemon env/identity)."""
     import shutil
+
+    from manthana.agent.config import load_config
+
+    manthana_bin = shutil.which("manthana")
+    if not manthana_bin:
+        typer.echo("could not find the `manthana` executable on PATH")
+        raise typer.Exit(code=1)
+    return manthana_bin, (load_config().actor or os.environ.get("MANTHANA_ACTOR"))
+
+
+def _service_darwin(action: str) -> None:
+    import plistlib
     import subprocess
 
     plist_path = Path.home() / "Library" / "LaunchAgents" / f"{_SERVICE_LABEL}.plist"
 
-    if platform.system() != "Darwin":
-        typer.echo(
-            "service is macOS-only. On Linux, create a `systemd --user` unit running "
-            "`manthana watch` (see docs/onboarding.md)."
-        )
-        raise typer.Exit(code=1)
-
     def _launchctl(*args: str) -> subprocess.CompletedProcess[str]:
         try:
-            return subprocess.run(
-                ["launchctl", *args], capture_output=True, text=True, check=False
-            )
-        except FileNotFoundError as exc:  # launchctl absent (shouldn't happen on macOS)
-            typer.echo("`launchctl` not found — cannot manage the service")
-            raise typer.Exit(code=1) from exc
+            return subprocess.run(["launchctl", *args], capture_output=True, text=True, check=False)
+        except FileNotFoundError:
+            return subprocess.CompletedProcess(args, 1, "", "launchctl not found")
 
     if action == "status":
         if not plist_path.exists():
@@ -657,39 +656,118 @@ def service(action: str = typer.Argument("status")) -> None:
             return
         state = "running" if _SERVICE_LABEL in _launchctl("list").stdout else "loaded (not running)"
         typer.echo(f"installed at {plist_path} — {state}")
-        return
-
-    if action == "install":
-        from manthana.agent.config import load_config
-
-        manthana_bin = shutil.which("manthana")
-        if not manthana_bin:
-            typer.echo("could not find the `manthana` executable on PATH")
-            raise typer.Exit(code=1)
-        actor = load_config().actor or os.environ.get("MANTHANA_ACTOR")
+    elif action == "install":
+        manthana_bin, actor = _watch_bin_and_actor()
         plist_path.parent.mkdir(parents=True, exist_ok=True)
         (Path.home() / "Library" / "Logs").mkdir(parents=True, exist_ok=True)
         with plist_path.open("wb") as fh:
             plistlib.dump(_watch_plist(manthana_bin, actor), fh)
-        _launchctl("unload", str(plist_path))  # ignore: not loaded yet on first install
+        _launchctl("unload", str(plist_path))
         loaded = _launchctl("load", "-w", str(plist_path))
         if loaded.returncode != 0:
             typer.echo(f"wrote {plist_path} but `launchctl load` failed: {loaded.stderr.strip()}")
             raise typer.Exit(code=1)
-        typer.echo(f"installed + loaded {_SERVICE_LABEL} ({plist_path})")
-        typer.echo("capture now runs at login; logs: ~/Library/Logs/manthana-watch.log")
-        return
-
-    if action == "uninstall":
+        typer.echo(f"installed + loaded {_SERVICE_LABEL}; logs: ~/Library/Logs/manthana-watch.log")
+    elif action == "uninstall":
         if not plist_path.exists():
             typer.echo("not installed")
             return
         _launchctl("unload", str(plist_path))
         plist_path.unlink(missing_ok=True)
         typer.echo(f"uninstalled {_SERVICE_LABEL}")
-        return
 
-    raise typer.BadParameter("action must be install | uninstall | status")
+
+def _systemd_unit_text(manthana_bin: str, actor: str | None) -> str:
+    env = f"Environment=MANTHANA_ACTOR={actor}\n" if actor else ""
+    return (
+        "[Unit]\nDescription=Manthana capture daemon\n\n"
+        f"[Service]\nExecStart={manthana_bin} watch --interval 5\n{env}Restart=always\n\n"
+        "[Install]\nWantedBy=default.target\n"
+    )
+
+
+def _service_linux(action: str) -> None:
+    import subprocess
+
+    unit = Path.home() / ".config" / "systemd" / "user" / _SYSTEMD_UNIT
+
+    def _sc(*args: str) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True,
+                                  check=False)
+        except FileNotFoundError:
+            return subprocess.CompletedProcess(args, 1, "", "systemctl not found")
+
+    if action == "status":
+        if not unit.exists():
+            typer.echo("not installed")
+            return
+        typer.echo(f"installed at {unit} — {_sc('is-active', _SYSTEMD_UNIT).stdout.strip()}")
+    elif action == "install":
+        manthana_bin, actor = _watch_bin_and_actor()
+        unit.parent.mkdir(parents=True, exist_ok=True)
+        unit.write_text(_systemd_unit_text(manthana_bin, actor))
+        _sc("daemon-reload")
+        r = _sc("enable", "--now", _SYSTEMD_UNIT)
+        if r.returncode != 0:
+            typer.echo(f"wrote {unit} but `systemctl --user enable --now` failed: {r.stderr.strip()}")  # noqa: E501
+            typer.echo("  (headless box? `loginctl enable-linger $USER` for a user session bus)")
+            raise typer.Exit(code=1)
+        typer.echo(f"installed + started {_SYSTEMD_UNIT} (logs: journalctl --user -u {_SYSTEMD_UNIT})")  # noqa: E501
+    elif action == "uninstall":
+        if not unit.exists():
+            typer.echo("not installed")
+            return
+        _sc("disable", "--now", _SYSTEMD_UNIT)
+        unit.unlink(missing_ok=True)
+        _sc("daemon-reload")
+        typer.echo(f"uninstalled {_SYSTEMD_UNIT}")
+
+
+def _service_windows(action: str) -> None:
+    import subprocess
+
+    def _st(*args: str) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(["schtasks", *args], capture_output=True, text=True, check=False)
+        except FileNotFoundError:
+            return subprocess.CompletedProcess(args, 1, "", "schtasks not found")
+
+    if action == "status":
+        installed = _st("/query", "/tn", _WIN_TASK).returncode == 0
+        typer.echo("installed" if installed else "not installed")
+    elif action == "install":
+        manthana_bin, _actor = _watch_bin_and_actor()  # actor read from config by the daemon
+        r = _st("/create", "/tn", _WIN_TASK, "/sc", "onlogon", "/tr",
+                f'"{manthana_bin}" watch --interval 5', "/f")
+        if r.returncode != 0:
+            typer.echo(f"schtasks create failed: {r.stderr.strip()}")
+            raise typer.Exit(code=1)
+        typer.echo(f"installed scheduled task {_WIN_TASK} (runs at logon)")
+    elif action == "uninstall":
+        r = _st("/delete", "/tn", _WIN_TASK, "/f")
+        typer.echo(f"uninstalled {_WIN_TASK}" if r.returncode == 0 else "not installed")
+
+
+@app.command()
+def service(action: str = typer.Argument("status")) -> None:
+    """Run the capture daemon at login: install | uninstall | status.
+
+    macOS = launchd · Linux = `systemd --user` · Windows = Scheduled Task."""
+    import platform
+
+    if action not in {"install", "uninstall", "status"}:
+        raise typer.BadParameter("action must be install | uninstall | status")
+    system = platform.system()
+    if system == "Darwin":
+        _service_darwin(action)
+    elif system == "Linux":
+        _service_linux(action)
+    elif system == "Windows":
+        _service_windows(action)
+    else:
+        typer.echo(f"unsupported OS ({system}) — run `manthana watch` yourself")
+        raise typer.Exit(code=1)
 
 
 def _apply_identity_from_config() -> None:

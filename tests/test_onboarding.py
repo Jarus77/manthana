@@ -150,8 +150,6 @@ def test_setup_redeems_invite_and_writes_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MANTHANA_DATA_HOME", str(tmp_path))
-    import platform
-
     import httpx
     import manthana.agent.cli as cli
     from manthana.agent.config import load_config
@@ -165,7 +163,7 @@ def test_setup_redeems_invite_and_writes_config(
 
     monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
     monkeypatch.setattr(cli, "_verify_connection", lambda base, token: (True, True))
-    monkeypatch.setattr(platform, "system", lambda: "Linux")  # skip macOS launchd install
+    monkeypatch.setattr(cli, "service", lambda *a, **k: None)  # don't touch real launchd/systemd
     monkeypatch.setattr(cli, "ingest_all", lambda store: None)  # skip real ~/.claude capture
 
     cli.setup(invite=encode_invite("http://localhost:9999", "code1"), actor="bob@acme.com")
@@ -269,3 +267,41 @@ def test_init_writes_deploy_files(tmp_path: Path) -> None:
     scli.init(str(tmp_path))
     for name in ("Caddyfile", "docker-compose.yml", "docker-compose.tls.yml", ".env.example"):
         assert (tmp_path / name).read_text()  # written + non-empty
+
+
+# ── cross-platform capture daemon (phase P2) ─────────────────────────────────
+def test_service_linux_install_writes_systemd_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import platform
+    import shutil
+    import subprocess
+    from pathlib import Path as _Path
+
+    import manthana.agent.cli as cli
+
+    monkeypatch.setenv("MANTHANA_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/manthana")
+    monkeypatch.setattr(_Path, "home", lambda: tmp_path)  # keep it off the real ~
+    calls: list[list[str]] = []
+
+    def _run(cmd: list[str], **k: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "active", "")
+
+    monkeypatch.setattr(subprocess, "run", _run)
+    cli.service("install")
+
+    unit = tmp_path / ".config" / "systemd" / "user" / "manthana-watch.service"
+    assert "watch --interval 5" in unit.read_text()  # systemd unit written
+    assert any("enable" in c for c in calls)  # systemctl --user enable --now called
+
+
+def test_server_doctor_healthy_on_pilot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import manthana.server.cli as scli
+
+    monkeypatch.delenv("MANTHANA_SERVER_JWT_SECRET", raising=False)
+    monkeypatch.delenv("MANTHANA_SERVER_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("MANTHANA_SERVER_DB_URL", raising=False)
+    scli.doctor(str(tmp_path))  # zero-config pilot → all critical checks pass (does not raise)
