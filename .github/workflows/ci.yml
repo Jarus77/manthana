@@ -40,12 +40,14 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - name: Build the Apache wheels
+      - name: Build the client + server wheels
         run: |
-          for pkg in manthana-schemas manthana-collectors manthana-skills manthana; do
+          for pkg in manthana-schemas manthana-collectors manthana-skills manthana manthana-server; do
             uv build --package "$pkg" --wheel --out-dir dist
           done
-      - name: Install the CLI from the wheels (isolated) and run it
+      - name: Install both CLIs from the wheels (isolated) and run them
         run: |
           uv tool install --find-links dist manthana
+          uv tool install --find-links dist manthana-server
           manthana version
+          manthana-server --help >/dev/null

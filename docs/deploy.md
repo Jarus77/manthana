@@ -6,6 +6,25 @@ the AGPL `manthana-server` (Postgres + S3/MinIO).
 
 ## 0. Serving a real team — where the server lives (+ a plain-English glossary)
 
+**Install the server (no clone needed).** Either install the CLI or run the container:
+
+```bash
+# CLI — installs the `manthana-server` command
+curl -LsSf https://github.com/Suraj-gameramp/manthana/releases/latest/download/install.sh | sh -s server
+
+# …or pure Docker (no install at all)
+docker run -p 8000:8000 \
+  -e MANTHANA_SERVER_JWT_SECRET=$(python3 -c 'import secrets;print(secrets.token_hex(32))') \
+  -e MANTHANA_SERVER_ADMIN_TOKEN=$(python3 -c 'import secrets;print(secrets.token_hex(24))') \
+  ghcr.io/suraj-gameramp/manthana-server:0.4.0
+```
+
+Then run `manthana-server serve` (auto-generates + persists secrets when the env vars aren't set)
+and `manthana-server init .` to drop the deploy files (Caddyfile, compose, `.env.example`) locally
+— again, no repo checkout.
+
+---
+
 Onboarding a whole team is just "every laptop points at **one** `server_url`" (that URL is
 baked into the `manthana setup` invite). The only real decision is **where that one server
 lives so 7 engineers + a founder can all reach it** — and making sure the connection is
@@ -34,31 +53,34 @@ Pick one path:
 The server runs on a small cloud VM; **Caddy** sits in front and auto-provisions HTTPS for your
 domain. Two flavours:
 
-- **Zero-infra (quickstart + Caddy):** point `manthana.acme.com`'s DNS at the VM, open ports
-  80/443, then:
+- **Zero-infra (serve + Caddy):** point `manthana.acme.com`'s DNS at the VM, open ports 80/443,
+  then:
   ```bash
-  manthana-server quickstart --public-url https://manthana.acme.com   # server on 127.0.0.1:8000
-  caddy run --config ./deploy/Caddyfile                               # edit <your-domain> first
+  manthana-server init .                                              # writes Caddyfile, compose, .env
+  # edit <your-domain> in ./Caddyfile, then:
+  manthana-server serve --public-url https://manthana.acme.com &      # server on 127.0.0.1:8000
+  caddy run --config ./Caddyfile
   manthana-server enroll acme platform --open --server-url https://manthana.acme.com
   ```
-- **Full stack (Docker + Postgres + Caddy overlay):**
+- **Full stack (Docker + Caddy overlay):**
   ```bash
+  manthana-server init .                                              # writes docker-compose*.yml + .env
+  # fill .env (secrets — see its header), then:
   MANTHANA_DOMAIN=manthana.acme.com \
     docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
   ```
-  Caddy (`docker-compose.tls.yml`) gets the cert and proxies to the server container.
 
 ### Path B — Tailscale / VPN (fastest secure path, no domain)
-If everyone installs Tailscale (`tailscale up`), run the server on this machine and publish it
-on the tailnet with automatic HTTPS — no domain, no certs, no public exposure:
+If everyone installs Tailscale (`tailscale up`, with MagicDNS + HTTPS enabled in the admin
+console), one command exposes the server on the tailnet with automatic HTTPS — no domain, no
+certs, no public exposure:
 ```bash
-manthana-server quickstart               # loopback is fine; Tailscale fronts it
-./scripts/tailscale_serve.sh             # → https://<machine>.<tailnet>.ts.net
+manthana-server serve --tailscale        # → prints https://<machine>.<tailnet>.ts.net
 manthana-server enroll acme platform --open --server-url https://<machine>.<tailnet>.ts.net
 ```
 
-> ⚠️ Do **not** expose `quickstart --host 0.0.0.0` to the internet **without** TLS in front —
-> tokens would travel in plaintext. quickstart prints a warning if you try. Caddy or Tailscale
+> ⚠️ Do **not** expose `serve --host 0.0.0.0` to the internet **without** TLS in front —
+> tokens would travel in plaintext. `serve` prints a warning if you try. Caddy or Tailscale
 > provides that TLS layer. (The `/v1/enroll` redemption endpoint is intentionally unauthenticated
 > — the invite code *is* the credential, single-use + expiring — so it must sit behind HTTPS;
 > rate-limiting is deferred as pilot scope.)

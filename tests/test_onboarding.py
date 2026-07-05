@@ -235,3 +235,37 @@ def test_doctor_passes_when_healthy(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(httpx, "get", lambda *a, **k: _R())
     cli.doctor()  # all critical checks pass → does not raise
+
+
+# ── server: unified serve (--tailscale) + init (phase P1) ────────────────────
+def test_tailscale_public_url_from_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    import manthana.server.cli as scli
+
+    class _P:
+        stdout = '{"Self":{"DNSName":"box.tail1234.ts.net."}}'
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _P())
+    assert scli._tailscale_public_url(8000) == "https://box.tail1234.ts.net"
+
+
+def test_serve_tailscale_requires_the_binary(monkeypatch: pytest.MonkeyPatch) -> None:
+    import shutil
+
+    import manthana.server.cli as scli
+    import typer
+
+    monkeypatch.setattr(shutil, "which", lambda name: None)  # tailscale absent
+    with pytest.raises(typer.Exit):
+        scli._run_server(
+            host="127.0.0.1", port=8000, public_url="", k_anon=None, data="", tailscale=True
+        )
+
+
+def test_init_writes_deploy_files(tmp_path: Path) -> None:
+    import manthana.server.cli as scli
+
+    scli.init(str(tmp_path))
+    for name in ("Caddyfile", "docker-compose.yml", "docker-compose.tls.yml", ".env.example"):
+        assert (tmp_path / name).read_text()  # written + non-empty

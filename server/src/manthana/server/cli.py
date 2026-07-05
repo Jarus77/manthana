@@ -36,14 +36,87 @@ def _resolve_config(data: str = "") -> ServerConfig:
     return ServerConfig(jwt_secret=jwt, admin_token=admin, db_url=db_url, object_store="memory")
 
 
-@app.command()
-def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
-    """Serve the API (config from MANTHANA_SERVER_* env vars)."""
+def _tailscale_public_url(port: int) -> str | None:
+    """This machine's tailnet HTTPS URL (from `tailscale status --json`), or None."""
+    import json
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True, text=True, check=True, timeout=10,
+        ).stdout
+        dns = str(json.loads(out).get("Self", {}).get("DNSName", "")).rstrip(".")
+        return f"https://{dns}" if dns else None
+    except Exception:  # noqa: BLE001 - tailscale missing/erroring → no URL, caller falls back
+        return None
+
+
+def _run_server(
+    *, host: str, port: int, public_url: str, k_anon: int | None, data: str, tailscale: bool
+) -> None:
+    """Serve the org server. Secrets from MANTHANA_SERVER_* env if set, else auto-generated +
+    persisted (zero-config pilot). ``--tailscale`` fronts loopback with tailnet HTTPS."""
+    import shutil
+    import subprocess
+
     import uvicorn
 
-    from .app import build_default_app
+    from .app import create_app
+    from .llm import make_provider
+    from .storage import make_object_store
 
-    uvicorn.run(build_default_app(), host=host, port=port)
+    if tailscale:
+        if not shutil.which("tailscale"):
+            typer.echo("✗ tailscale not found — install it from https://tailscale.com/download")
+            raise typer.Exit(code=1)
+        subprocess.run(["tailscale", "serve", "--bg", f"http://127.0.0.1:{port}"], check=False)
+        public_url = _tailscale_public_url(port) or public_url
+        host = "127.0.0.1"  # Tailscale fronts loopback with HTTPS
+
+    config = _resolve_config(data)
+    if k_anon is not None:
+        config = replace(config, k_anon_floor=k_anon)
+    data_dir = Path(data).expanduser() if data else _DEFAULT_DATA_DIR
+    application = create_app(
+        config, ServerStore.open(config.db_url), make_object_store(config), make_provider(config)
+    )
+    url = public_url.rstrip("/") or f"http://127.0.0.1:{port}"
+    loopback = host in {"127.0.0.1", "localhost", "::1"}
+    typer.echo(f"Manthana server (SQLite + in-memory unless env-set) → binding {host}:{port}")
+    if not loopback and not url.startswith("https"):
+        typer.echo("  ⚠ WARNING: binding to a NON-loopback address without HTTPS in front.")
+        typer.echo("    Team tokens are bearer credentials — they would travel in PLAINTEXT.")
+        typer.echo("    Put TLS ahead of it (Caddy or --tailscale) — see docs/deploy.md.")
+    typer.echo(f"  data dir:    {data_dir}")
+    typer.echo(f"  admin token: {config.admin_token}")
+    typer.echo(f"  console:     {url}/ui   (sign in with the admin token)")
+    if config.k_anon_floor < 4:
+        typer.echo(
+            f"  ⚠ k-anon {config.k_anon_floor} < 4 — cross-engineer features need >=4 contributors"
+        )
+    typer.echo(f"  next → manthana-server enroll acme platform --open --server-url {url}")
+    uvicorn.run(application, host=host, port=port)
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="bind address; 0.0.0.0 to serve other machines"),
+    port: int = 8000,
+    public_url: str = typer.Option("", help="the https URL engineers use (when behind TLS)"),
+    k_anon: int = typer.Option(-1, "--k-anon", help="k-anonymity floor (default: env or 4)"),
+    data: str = "",
+    tailscale: bool = typer.Option(
+        False, "--tailscale", help="expose over Tailscale (automatic HTTPS)"
+    ),
+) -> None:
+    """Run the org server (zero-config for a pilot: auto-generates + persists secrets when the
+    MANTHANA_SERVER_* env vars aren't set; honours them in production). --tailscale exposes it on
+    your tailnet with automatic HTTPS. SQLite + in-memory by default — no Docker/Postgres."""
+    _run_server(
+        host=host, port=port, public_url=public_url,
+        k_anon=(k_anon if k_anon >= 1 else None), data=data, tailscale=tailscale,
+    )
 
 
 @app.command()
@@ -133,40 +206,14 @@ def quickstart(
     public_url: str = typer.Option("", help="the https URL engineers use (when behind TLS)"),
     k_anon: int = K_ANON_FLOOR_DEFAULT,
     data: str = "",
+    tailscale: bool = typer.Option(
+        False, "--tailscale", help="expose over Tailscale (automatic HTTPS)"
+    ),
 ) -> None:
-    """Zero-infra pilot server: SQLite + in-memory + auto-generated persisted secrets — no
-    Docker/Postgres/MinIO. Prints the admin token + console URL, then serves.
-
-    Default binds loopback (this machine only). To serve a real team, put HTTPS in front
-    (Caddy or `tailscale serve` — see docs/deploy.md) and pass --public-url; use --host
-    0.0.0.0 only when a TLS proxy terminates in front of it."""
-    import uvicorn
-
-    from .app import create_app
-    from .llm import make_provider
-    from .storage import make_object_store
-
-    config = replace(_resolve_config(data), k_anon_floor=k_anon)
-    data_dir = Path(data).expanduser() if data else _DEFAULT_DATA_DIR
-    application = create_app(
-        config, ServerStore.open(config.db_url), make_object_store(config), make_provider(config)
+    """Alias for `serve` (zero-infra pilot: auto-secrets, SQLite + in-memory)."""
+    _run_server(
+        host=host, port=port, public_url=public_url, k_anon=k_anon, data=data, tailscale=tailscale
     )
-    # The URL engineers/founder will actually point at: the TLS public URL if given, else
-    # this machine's local URL (only usable from the same box).
-    url = public_url.rstrip("/") or f"http://127.0.0.1:{port}"
-    loopback = host in {"127.0.0.1", "localhost", "::1"}
-    typer.echo(f"Manthana server (zero-infra: SQLite + in-memory) → binding {host}:{port}")
-    if not loopback and not url.startswith("https"):
-        typer.echo("  ⚠ WARNING: binding to a NON-loopback address without HTTPS in front.")
-        typer.echo("    Team tokens are bearer credentials — they would travel in PLAINTEXT.")
-        typer.echo("    Put TLS ahead of it (Caddy or `tailscale serve`) — see docs/deploy.md.")
-    typer.echo(f"  data dir:    {data_dir}")
-    typer.echo(f"  admin token: {config.admin_token}")
-    typer.echo(f"  console:     {url}/ui   (sign in with the admin token)")
-    if k_anon < 4:
-        typer.echo(f"  ⚠ k-anon {k_anon} < 4 — cross-engineer features need >=4 contributors")
-    typer.echo(f"  next → manthana-server enroll acme platform --open --server-url {url}")
-    uvicorn.run(application, host=host, port=port)
 
 
 @app.command()
@@ -226,6 +273,23 @@ def invites(org_id: str, data: str = "") -> None:
             f"{inv.code}  team={inv.team_id}  who={inv.actor or '(open)'}  "
             f"{state}  expires={inv.expires_at}"
         )
+
+
+@app.command()
+def init(directory: str = typer.Argument(".", help="where to write the deploy files")) -> None:
+    """Write the deploy templates (Caddyfile, docker-compose{,.tls}.yml, .env.example) into a
+    directory — so you never have to clone the repo to stand up a Docker/TLS deployment."""
+    from .deploy_templates import TEMPLATES
+
+    target = Path(directory).expanduser()
+    target.mkdir(parents=True, exist_ok=True)
+    for name, content in TEMPLATES.items():
+        (target / name).write_text(content)
+        typer.echo(f"  wrote {target / name}")
+    typer.echo(
+        "next: fill `.env` (generate secrets — see its header), then `docker compose up -d`; "
+        "or skip Docker with `manthana-server serve --tailscale`."
+    )
 
 
 def main() -> None:
