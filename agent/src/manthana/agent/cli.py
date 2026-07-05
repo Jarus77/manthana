@@ -131,6 +131,9 @@ def login(
 def setup(
     invite: str = typer.Argument("", help="the `mia_…` invite from your admin"),
     actor: str = typer.Option("", help="your email (needed only for an open team invite)"),
+    service_install: bool = typer.Option(
+        True, "--service/--no-service", help="install the auto-capture daemon at login"
+    ),
 ) -> None:
     """One command to onboard: redeem the invite → connect → install auto-capture → first
     capture → confirm. Everything `login` + `service install` + `capture` do, in one step."""
@@ -174,8 +177,10 @@ def setup(
     if opt.available():
         opt.setup()
 
-    # Install auto-capture at login (macOS launchd). Non-macOS → manual note.
-    if platform.system() == "Darwin":
+    # Install auto-capture at login (macOS launchd). Non-macOS or --no-service → manual note.
+    if not service_install:
+        daemon = "skipped (--no-service) — run `manthana watch` yourself"
+    elif platform.system() == "Darwin":
         try:
             service("install")
             daemon = "running at login (launchd)"

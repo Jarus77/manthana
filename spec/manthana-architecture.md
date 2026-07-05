@@ -1565,3 +1565,20 @@ bare names not on any index*, so `pip/uv tool install manthana` failed. Fixed:
 - **Local proof:** built all 4 wheels; `uv tool install --find-links` installed the CLI (v0.2.1,
   `setup`+`doctor` present), then uninstalled; `uv sync --all-packages` still works with the pins.
   Distribution = GitHub-Release wheels (no PyPI ownership); Docker/Postgres stays for "graduation".
+
+## 47. Onboarding — docs + demo + live E2E (2026-07-06) — onboarding P5
+
+- `setup` gained `--no-service` (skip the login daemon; a legit "I manage my own watch" option
+  that also lets the demo run without touching the real launchd).
+- **`scripts/quickstart_demo.sh`** — the whole flow in throwaway temp dirs, torn down on exit:
+  `quickstart` → `enroll --open` → `manthana setup <blob> --no-service` → `manthana doctor`.
+- Rewrote `docs/onboarding.md` around **admin: 2 commands / engineer: 1 command** (+ the install
+  one-liner); `docs/DEMO.md` points at the quickstart demo.
+- **Live E2E (real HTTP, real tokens):** quickstart booted → enroll emitted the `manthana setup
+  mia_…` one-liner → `setup` redeemed it and printed **✓ connected as alice@acme.com** (650
+  sessions captured) → `doctor` all green (configured / reachable / token accepted / DB ready /
+  model / data). **Secret-persistence** verified: restarting quickstart on the same data dir keeps
+  the admin token and a pre-restart agent token still verifies.
+
+**Onboarding P1–P5 complete.** Admin stands up + provisions a team in 2 commands; an engineer runs
+one `manthana setup` → connected, capturing, with `doctor` proof. **278 tests, ruff + pyright clean.**

@@ -3,6 +3,12 @@
 Everything below runs **on your laptop, on your real data** (471 captured sessions).
 Read top-to-bottom once, then drive from the **Cheat-sheet** at the end.
 
+> **Fastest path — the whole onboarding flow, zero infra:** `./scripts/quickstart_demo.sh`
+> boots a server (SQLite + in-memory), enrolls a team, onboards an engineer with one
+> `manthana setup`, and runs `manthana doctor` — then tears itself down. See
+> [onboarding.md](onboarding.md). Engineers install with:
+> `curl -LsSf https://github.com/Suraj-gameramp/manthana/releases/latest/download/install.sh | sh`
+
 ---
 
 ## 0. The one-sentence pitch (say this first)
