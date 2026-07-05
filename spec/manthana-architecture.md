@@ -1522,3 +1522,25 @@ Design-partner readiness (direction A): make the org onboarding smooth. This is 
   invite redeem (bound single-use / open multi-use / expired / unknown / actor-required-before-
   consume); admin endpoint gated + `/v1/enroll` open-but-validating. **273 tests, ruff + pyright
   clean.**
+
+## 45. Frictionless org onboarding — engineer `setup` + `doctor` (2026-07-06) — onboarding P3/P4
+
+The engineer half of smooth onboarding: one command in, plus a health check.
+- **`manthana setup <invite>`** (`agent/cli.py`): decode the `mia_…` blob (`decode_invite`) →
+  resolve actor (`--actor` > `MANTHANA_ACTOR` > `resolve_actor()` git/OS) → `POST /v1/enroll`
+  (redeem → team token) → `save_config` (chmod 0600) → verify → wire headroom if present → macOS
+  `service install` (else a manual `watch` note) → first `ingest_all` capture → a `✓ connected as
+  … · N sessions · auto-capture: … · dashboard …` summary. No-arg form prompts for the invite.
+  Collapses the old 4-command dance (`login → config → sync --check → service install`) into one.
+- **`_verify_connection(base, token) -> (reachable, token_ok)`** — factored from `sync --check`
+  (healthz + an authed no-op push; never raises, catches transport errors too). Reused by
+  `setup`, `sync --check`, and `doctor`.
+- **`manthana doctor`** (`agent/cli.py`): a checklist that exits non-zero on any *critical*
+  failure — configured? · server reachable (`/healthz`) + token accepted + DB ready (`/readyz`) ·
+  model available (`default_provider().name != "mock"`, non-critical) · daemon installed (macOS
+  plist, non-critical) · a data line (sessions · compactions (pending) · synced · last sync). The
+  observability the pilot needs. New store helpers `count_pending` (Work sessions w/o a compaction,
+  no model run) + `last_sync_at` (max `SyncStateRow.synced_at`).
+- Tests: `_verify_connection` (accepted / rejected / unreachable); `setup` orchestration (mocked
+  enroll + platform→Linux + no real capture → config written); `count_pending`/`last_sync_at`;
+  `doctor` non-zero when unconfigured + passes when healthy. **277 tests, ruff + pyright clean.**

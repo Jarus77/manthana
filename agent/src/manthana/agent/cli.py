@@ -35,6 +35,27 @@ def _resolve_server() -> tuple[str | None, str | None]:
     return base, token
 
 
+def _verify_connection(base: str, token: str) -> tuple[bool, bool]:
+    """(server_reachable, token_accepted) — never raises. Reachability = GET /healthz;
+    token acceptance = an authed no-op push. Shared by `setup`, `login`, `sync --check`,
+    and `doctor`."""
+    import httpx
+    from manthana.agent.sync_client import SyncClient
+
+    try:
+        reachable = httpx.get(f"{base}/healthz", timeout=5.0).status_code == 200
+    except httpx.HTTPError:
+        return False, False
+    client = SyncClient(base, token)
+    try:
+        client.push_compactions([])  # 200 = token accepted
+        return reachable, True
+    except Exception:  # noqa: BLE001 - SyncError OR a transport error → token not verified
+        return reachable, False
+    finally:
+        client.close()
+
+
 def _sync_pushed(client: SyncClient) -> Callable[[Store], int]:
     """Adapt a SyncClient into the watcher's `sync_fn` (returns #pushed)."""
 
@@ -107,6 +128,76 @@ def login(
 
 
 @app.command()
+def setup(
+    invite: str = typer.Argument("", help="the `mia_…` invite from your admin"),
+    actor: str = typer.Option("", help="your email (needed only for an open team invite)"),
+) -> None:
+    """One command to onboard: redeem the invite → connect → install auto-capture → first
+    capture → confirm. Everything `login` + `service install` + `capture` do, in one step."""
+    import platform
+
+    import httpx
+    from manthana.agent.config import Config, save_config
+    from manthana.collectors import resolve_actor
+    from manthana.schemas import decode_invite
+
+    if not invite:
+        invite = typer.prompt("paste your `manthana setup` invite (mia_…)").strip()
+    try:
+        server_url, code = decode_invite(invite)
+    except ValueError as exc:
+        typer.echo(f"invalid invite: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    who = actor or os.environ.get("MANTHANA_ACTOR") or resolve_actor()
+    # Redeem the invite for a team token (the token is never in the invite itself).
+    try:
+        resp = httpx.post(
+            f"{server_url}/v1/enroll", json={"code": code, "actor": who}, timeout=10.0
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"could not reach {server_url}: {exc}")
+        raise typer.Exit(code=1) from exc
+    if resp.status_code != 200:
+        detail = resp.json().get("detail", resp.text) if resp.content else resp.text
+        typer.echo(f"enrollment failed ({resp.status_code}): {detail}")
+        raise typer.Exit(code=1)
+    data = resp.json()
+    token, who = data["token"], data.get("actor", who)
+
+    save_config(Config(server_url=server_url, team_token=token, actor=who))  # chmod 0600
+    os.environ["MANTHANA_ACTOR"] = who  # so this process's capture attributes correctly
+    reachable, token_ok = _verify_connection(server_url, token)
+
+    from manthana.agent import optimize as opt
+
+    if opt.available():
+        opt.setup()
+
+    # Install auto-capture at login (macOS launchd). Non-macOS → manual note.
+    if platform.system() == "Darwin":
+        try:
+            service("install")
+            daemon = "running at login (launchd)"
+        except typer.Exit:
+            daemon = "install failed — run `manthana service install`"
+    else:
+        daemon = "manual — run `manthana watch` (see docs/onboarding.md)"
+
+    store = Store.open()
+    ingest_all(store)  # first capture
+    n_sessions = len(store.list_sessions(limit=1_000_000))
+
+    mark = "✓" if (reachable and token_ok) else "⚠"
+    typer.echo("")
+    typer.echo(f"{mark} connected as {who} → {server_url}")
+    if not (reachable and token_ok):
+        typer.echo(f"  (server reachable={reachable}, token accepted={token_ok})")
+    typer.echo(f"  captured {n_sessions} session(s) · auto-capture: {daemon}")
+    typer.echo("  dashboard: http://127.0.0.1:8765  ·  health check: manthana doctor")
+
+
+@app.command()
 def config() -> None:
     """Show the resolved agent config (token masked)."""
     from manthana.agent.config import config_path, load_config
@@ -118,6 +209,66 @@ def config() -> None:
     typer.echo(f"team_token: {masked}")
     typer.echo(f"actor:      {cfg.actor or '(from MANTHANA_ACTOR / git / user)'}")
     typer.echo(f"redact:     secrets={cfg.redact_secrets} pii={cfg.redact_pii}")
+
+
+@app.command()
+def doctor() -> None:
+    """Health check — is Manthana set up and flowing? Exits non-zero if a critical check fails."""
+    import platform
+
+    import httpx
+    from manthana.agent.config import load_config
+    from manthana.agent.llm import default_provider
+
+    cfg = load_config()
+    base, token = _resolve_server()
+    failed = False
+
+    def check(ok: bool, label: str, detail: str = "", *, critical: bool = True) -> None:
+        nonlocal failed
+        mark = "✓" if ok else ("✗" if critical else "•")
+        typer.echo(f"  {mark} {label}" + (f" — {detail}" if detail else ""))
+        if not ok and critical:
+            failed = True
+
+    typer.echo("Manthana doctor")
+    check(
+        bool(cfg.server_url and cfg.team_token),
+        "configured",
+        f"server={cfg.server_url or '(unset)'} · actor={cfg.actor or '(auto)'}",
+    )
+    if base and token:
+        reachable, token_ok = _verify_connection(base, token)
+        check(reachable, "server reachable", base)
+        check(token_ok, "token accepted")
+        try:
+            ready = httpx.get(f"{base}/readyz", timeout=5.0).status_code == 200
+        except httpx.HTTPError:
+            ready = False
+        check(ready, "server DB ready", critical=False)
+    else:
+        check(False, "server reachable", "not configured — run `manthana setup <invite>`")
+
+    prov = default_provider().name
+    check(
+        prov != "mock", "model available (can compact)",
+        "" if prov != "mock" else "no claude/codex CLI on PATH", critical=False,
+    )
+    if platform.system() == "Darwin":
+        plist = Path.home() / "Library" / "LaunchAgents" / f"{_SERVICE_LABEL}.plist"
+        check(plist.exists(), "auto-capture daemon installed", critical=False)
+
+    store = Store.open()
+    n_sess = len(store.list_sessions(limit=1_000_000))
+    n_comp = len(store.list_compactions(limit=1_000_000))
+    last = store.last_sync_at()
+    when = f"{last:%Y-%m-%d %H:%M}Z" if last else "never"
+    typer.echo(
+        f"  • data: {n_sess} sessions · {n_comp} compactions "
+        f"({store.count_pending()} pending) · {len(store.synced_ids())} synced · last sync {when}"
+    )
+    if failed:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -353,7 +504,7 @@ def sync(raw: bool = False, check: bool = False) -> None:
     (or the [server] section of manthana.toml). --raw also releases transcripts.
     --check only verifies the server is reachable and the token is accepted (no push).
     """
-    from manthana.agent.sync_client import SyncClient, SyncError
+    from manthana.agent.sync_client import SyncClient
 
     base, token = _resolve_server()
     if not base or not token:
@@ -361,22 +512,14 @@ def sync(raw: bool = False, check: bool = False) -> None:
         raise typer.Exit(code=1)
 
     if check:
-        import httpx
-
-        try:
-            reachable = httpx.get(f"{base}/healthz", timeout=5.0).status_code == 200
-        except httpx.HTTPError as exc:
-            typer.echo(f"server unreachable: {exc}")
-            raise typer.Exit(code=1) from exc
-        client = SyncClient(base, token)
-        try:
-            client.push_compactions([])  # authed no-op: 200 if the token is accepted
-        except SyncError as exc:
-            typer.echo(f"token rejected by {base}: {exc}")
-            raise typer.Exit(code=1) from exc
-        finally:
-            client.close()
-        typer.echo(f"ok — {base} reachable (healthz={reachable}) and token accepted")
+        reachable, token_ok = _verify_connection(base, token)
+        if not reachable:
+            typer.echo(f"server unreachable: {base}")
+            raise typer.Exit(code=1)
+        if not token_ok:
+            typer.echo(f"token rejected by {base}")
+            raise typer.Exit(code=1)
+        typer.echo(f"ok — {base} reachable and token accepted")
         return
 
     client = SyncClient(base, token)

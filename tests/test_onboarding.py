@@ -117,3 +117,121 @@ def test_open_invite_requires_actor_without_consuming() -> None:
 def test_enroll_unknown_code_400() -> None:
     client, _ = _client()
     assert client.post("/v1/enroll", json={"code": "bogus"}).status_code == 400
+
+
+# ── engineer side: _verify_connection + setup orchestration (phase P3) ───────
+def test_verify_connection_reports_reachable_and_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+    import manthana.agent.cli as cli
+    from manthana.agent import sync_client
+
+    class _R:
+        status_code = 200
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _R())
+    monkeypatch.setattr(sync_client.SyncClient, "close", lambda self: None)
+    monkeypatch.setattr(sync_client.SyncClient, "push_compactions", lambda self, comps: 0)
+    assert cli._verify_connection("http://x", "tok") == (True, True)  # token accepted
+
+    def _reject(self: object, comps: object) -> int:
+        raise sync_client.SyncError("rejected")
+
+    monkeypatch.setattr(sync_client.SyncClient, "push_compactions", _reject)
+    assert cli._verify_connection("http://x", "tok") == (True, False)  # token rejected
+
+    def _boom(*a: object, **k: object) -> object:
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(httpx, "get", _boom)
+    assert cli._verify_connection("http://x", "tok") == (False, False)  # unreachable
+
+
+def test_setup_redeems_invite_and_writes_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MANTHANA_DATA_HOME", str(tmp_path))
+    import platform
+
+    import httpx
+    import manthana.agent.cli as cli
+    from manthana.agent.config import load_config
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        def json(self) -> dict[str, str]:
+            return {"token": "TESTTOKEN", "actor": "bob@acme.com"}
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+    monkeypatch.setattr(cli, "_verify_connection", lambda base, token: (True, True))
+    monkeypatch.setattr(platform, "system", lambda: "Linux")  # skip macOS launchd install
+    monkeypatch.setattr(cli, "ingest_all", lambda store: None)  # skip real ~/.claude capture
+
+    cli.setup(invite=encode_invite("http://localhost:9999", "code1"), actor="bob@acme.com")
+
+    cfg = load_config()
+    assert cfg.server_url == "http://localhost:9999"
+    assert cfg.team_token == "TESTTOKEN" and cfg.actor == "bob@acme.com"
+
+
+# ── doctor + status helpers (phase P4) ───────────────────────────────────────
+def test_count_pending_and_last_sync() -> None:
+    from manthana.agent.store import Store
+    from manthana.schemas import (
+        EngineeringCompaction,
+        Mode,
+        Outcome,
+        Session,
+        Surface,
+    )
+
+    store = Store.open_memory()
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def sess(sid: str, mode: Mode = Mode.work) -> Session:
+        return Session(
+            id=sid, actor="e@x", surface=Surface.claude_code, project="p",
+            started_at=t0, turn_count=1, mode=mode,
+        )
+
+    store.upsert_session(sess("s1"))
+    store.upsert_session(sess("s2"))
+    store.upsert_session(sess("p1", Mode.personal))
+    store.upsert_compaction(EngineeringCompaction(
+        id="comp-s1", session_id="s1", actor="e@x", surface=Surface.claude_code, project="p",
+        started_at=t0, ended_at=t0, duration_seconds=1.0, task_intent="t", approach="a",
+        outcome=Outcome.success))
+    assert store.count_pending() == 1  # s2 pending (s1 compacted, p1 personal never counts)
+    assert store.last_sync_at() is None
+    store.mark_synced("comp-s1", datetime(2026, 1, 2, 12, 0, tzinfo=UTC))
+    assert store.last_sync_at() == datetime(2026, 1, 2, 12, 0, tzinfo=UTC)
+
+
+def test_doctor_exits_nonzero_when_unconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import manthana.agent.cli as cli
+    import typer
+
+    monkeypatch.setenv("MANTHANA_DATA_HOME", str(tmp_path))
+    monkeypatch.delenv("MANTHANA_SERVER_URL", raising=False)
+    monkeypatch.delenv("MANTHANA_TEAM_TOKEN", raising=False)
+    with pytest.raises(typer.Exit):
+        cli.doctor()  # no config → critical check fails → non-zero exit
+
+
+def test_doctor_passes_when_healthy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+    import manthana.agent.cli as cli
+    from manthana.agent.config import Config, save_config
+
+    monkeypatch.setenv("MANTHANA_DATA_HOME", str(tmp_path))
+    save_config(Config(server_url="http://x:8000", team_token="tok", actor="bob@x"))
+    monkeypatch.setattr(cli, "_verify_connection", lambda base, token: (True, True))
+
+    class _R:
+        status_code = 200
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _R())
+    cli.doctor()  # all critical checks pass → does not raise

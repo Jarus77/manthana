@@ -481,5 +481,24 @@ class Store:
                 if row.raw_synced_at is not None
             }
 
+    def count_pending(self) -> int:
+        """Work (non-personal) sessions without a compaction yet — the same predicate as
+        ``compact_pending``, but WITHOUT running the model (for the `doctor` health check)."""
+        existing = {c.session_id for c in self.list_compactions()}
+        return sum(
+            1
+            for s in self.list_sessions(mode=Mode.work, limit=1_000_000)
+            if s.id not in existing
+        )
+
+    def last_sync_at(self) -> datetime | None:
+        """Most recent sync timestamp across all compactions, or None if nothing synced."""
+        with DBSession(self._engine) as db:
+            stamps = [r.synced_at for r in db.exec(select(SyncStateRow)) if r.synced_at]
+        if not stamps:
+            return None
+        dt = datetime.fromisoformat(max(stamps))  # ISO-8601 sorts lexicographically
+        return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+
 
 __all__ = ["Store"]
