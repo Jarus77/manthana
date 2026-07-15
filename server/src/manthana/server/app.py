@@ -18,20 +18,31 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 import hmac
 import json
 import secrets
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from manthana.schemas import CompactionAdapter
 from manthana.skills import mine_org
 from pydantic import BaseModel, ValidationError
 
 from .analyzer import analyze_counterfactual_costs
-from .auth import AuthError, TeamClaims, issue_team_token, verify_team_token
+from .auth import (
+    AuthError,
+    TeamClaims,
+    issue_founder_token,
+    issue_team_token,
+    verify_founder_token,
+    verify_team_token,
+)
 from .config import ServerConfig
 from .digest import build_weekly_digest
 from .founder import run_query, team_topics, thread
+from .hardening import install_hardening
 from .llm import LLMProvider, make_provider
+from .metering import MeteredProvider, QuotaExceededError, month_key
 from .storage import ObjectStore, make_object_store
 from .store import ServerStore
 from .ui import mount_ui
@@ -85,6 +96,15 @@ class MineSkillsBody(BaseModel):
     org_id: str
 
 
+class SetQuotaBody(BaseModel):
+    monthly_cap_usd: float | None = None  # None clears the override → server default
+
+
+class FounderTokenBody(BaseModel):
+    org_id: str
+    expires_days: int = 365
+
+
 class ManagerThreadBody(BaseModel):
     org_id: str
     session_id: str
@@ -112,6 +132,20 @@ def create_app(
     provider: LLMProvider,
 ) -> FastAPI:
     app = FastAPI(title="Manthana Server")
+    install_hardening(app, config)
+
+    def org_provider(org_id: str) -> LLMProvider:
+        # Per-org metered view of the shared provider: the org's cap override, or
+        # the server default. Cheap per-request construction; enforcement raises
+        # QuotaExceededError → the 429 handler below.
+        cap = store.get_org_quota(org_id)
+        if cap is None:
+            cap = config.llm_monthly_cap_usd
+        return MeteredProvider(provider, store, org_id, cap)
+
+    @app.exception_handler(QuotaExceededError)
+    def quota_exceeded(_request: Request, exc: QuotaExceededError) -> JSONResponse:
+        return JSONResponse(status_code=429, content={"detail": str(exc)})
 
     def require_admin(x_admin_token: Annotated[str, Header()] = "") -> None:
         # constant-time comparison — admin token gates org/team/token mint + founder query
@@ -124,6 +158,41 @@ def create_app(
         # gated by constant-time comparison.
         if not config.manager_token or not _ct_eq(x_manager_token, config.manager_token):
             raise HTTPException(status_code=401, detail="invalid or disabled manager token")
+
+    def require_founder_access(
+        x_admin_token: Annotated[str, Header()] = "",
+        authorization: Annotated[str, Header()] = "",
+    ) -> Callable[[str], None]:
+        """Admin token (any org) OR an org-scoped founder bearer token.
+
+        Returns a checker the handler calls with the REQUESTED org id — a founder
+        token for another org gets 403, so a hosted startup's founder can never
+        read a different tenant. (Agent tokens are rejected here: their scope is
+        'agent', and verify_founder_token requires scope 'founder'.)
+        """
+        if x_admin_token and _ct_eq(x_admin_token, config.admin_token):
+            def allow_any(_org_id: str) -> None:
+                return None
+
+            return allow_any
+        if authorization.startswith("Bearer "):
+            try:
+                claims = verify_founder_token(
+                    config.jwt_secret, authorization.removeprefix("Bearer ")
+                )
+            except AuthError as exc:
+                raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+            def check(org_id: str) -> None:
+                if org_id != claims.org_id:
+                    raise HTTPException(
+                        status_code=403, detail="founder token is not valid for this org"
+                    )
+
+            return check
+        raise HTTPException(
+            status_code=401, detail="admin token or founder bearer token required"
+        )
 
     def require_team(authorization: Annotated[str, Header()] = "") -> TeamClaims:
         if not authorization.startswith("Bearer "):
@@ -249,11 +318,13 @@ def create_app(
 
     @app.post("/v1/founder/query")
     def founder_query(
-        body: FounderQueryBody, _: Annotated[None, Depends(require_admin)]
+        body: FounderQueryBody,
+        check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
     ) -> dict[str, Any]:
+        check_org(body.org_id)
         result = run_query(
-            store, config, org_id=body.org_id, query=body.query, provider=provider,
-            source=body.source,
+            store, config, org_id=body.org_id, query=body.query,
+            provider=org_provider(body.org_id), source=body.source,
         )
         store.record_founder_query(
             org_id=body.org_id,
@@ -277,8 +348,8 @@ def create_app(
         # Manager view: may resolve to a single named person (k-anon bypassed).
         # ALWAYS audited as an individual query — the accountability record.
         result = run_query(
-            store, config, org_id=body.org_id, query=body.query, provider=provider,
-            source=body.source, allow_individual=True,
+            store, config, org_id=body.org_id, query=body.query,
+            provider=org_provider(body.org_id), source=body.source, allow_individual=True,
         )
         store.record_founder_query(
             org_id=body.org_id,
@@ -298,8 +369,10 @@ def create_app(
 
     @app.get("/v1/founder/topics")
     def founder_topics(
-        org_id: str, _: Annotated[None, Depends(require_admin)]
+        org_id: str,
+        check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
     ) -> dict[str, Any]:
+        check_org(org_id)
         # Emergent topic clusters across the team, k-anon de-identified (>= floor
         # contributors, names dropped) — cross-cutting visibility beyond project tags.
         tops, cov = team_topics(store, config, org_id)
@@ -392,6 +465,90 @@ def create_app(
             ]
         }
 
+    @app.post("/v1/admin/founder-tokens")
+    def mint_founder_token(
+        body: FounderTokenBody, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, str]:
+        """Mint an org-scoped founder token (hosted onboarding: one per customer org).
+        Grants that org's console/query/digest view — and only that org's."""
+        token = issue_founder_token(
+            config.jwt_secret, org_id=body.org_id,
+            expires_days=max(1, body.expires_days),
+        )
+        return {"token": token, "org_id": body.org_id}
+
+    @app.get("/v1/founder/digest")
+    def founder_digest(
+        org_id: str,
+        check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
+        since: str = "",
+        until: str = "",
+    ) -> dict[str, Any]:
+        """The weekly digest, reachable with an org-scoped founder token (the
+        /v1/admin/digest route below stays admin-only for compatibility)."""
+        check_org(org_id)
+        return build_weekly_digest(
+            store, config, org_id=org_id, provider=org_provider(org_id),
+            since=since or None, until=until or None,
+        ).as_dict()
+
+    @app.get("/v1/founder/audit")
+    def founder_audit(
+        org_id: str,
+        check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
+    ) -> dict[str, Any]:
+        """The org's founder-query audit trail (same shape as /v1/admin/audit) —
+        a founder can see who queried THEIR org, including manager-view lookups."""
+        check_org(org_id)
+        rows = store.list_founder_audit(org_id)
+        return {
+            "entries": [
+                {
+                    "id": r.id,
+                    "query": r.query,
+                    "insufficient": r.insufficient,
+                    "citation_count": r.citation_count,
+                    "created_at": r.created_at,
+                    "individual": bool(r.data.get("individual")),
+                }
+                for r in rows
+            ]
+        }
+
+    @app.get("/v1/admin/usage")
+    def llm_usage(
+        org_id: str, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """Month-by-month server-side LLM usage for an org, plus its effective cap."""
+        override = store.get_org_quota(org_id)
+        cap = override if override is not None else config.llm_monthly_cap_usd
+        return {
+            "org_id": org_id,
+            "month": month_key(),
+            "monthly_cap_usd": cap,
+            "cap_is_override": override is not None,
+            "months": [
+                {
+                    "month": r.month,
+                    "calls": r.calls,
+                    "input_tokens": r.input_tokens,
+                    "output_tokens": r.output_tokens,
+                    "est_cost_usd": round(r.est_cost_usd, 6),
+                }
+                for r in store.list_llm_usage(org_id)
+            ],
+        }
+
+    @app.put("/v1/admin/orgs/{org_id}/quota")
+    def set_quota(
+        org_id: str, body: SetQuotaBody, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """Set (or clear, with null) the org's monthly LLM budget override."""
+        if body.monthly_cap_usd is not None and body.monthly_cap_usd < 0:
+            raise HTTPException(status_code=422, detail="monthly_cap_usd must be >= 0")
+        store.set_org_quota(org_id, body.monthly_cap_usd)
+        return {"org_id": org_id, "monthly_cap_usd": body.monthly_cap_usd}
+
     @app.get("/v1/admin/router-analysis")
     def router_analysis(
         org_id: str, _: Annotated[None, Depends(require_admin)]
@@ -410,7 +567,7 @@ def create_app(
         """Founder weekly digest (last 7 days by default) composed from the founder-query
         pipeline; k-anon-insufficient sections are omitted."""
         return build_weekly_digest(
-            store, config, org_id=org_id, provider=provider,
+            store, config, org_id=org_id, provider=org_provider(org_id),
             since=since or None, until=until or None,
         ).as_dict()
 
@@ -423,7 +580,7 @@ def create_app(
         # already redacted on sync, so no redactor is needed here. Proposals are
         # enqueued for human approval (the action-queue seam) rather than applied.
         compactions = store.query_compactions(org_id=body.org_id, limit=100_000)
-        proposals = mine_org(compactions, provider=provider)
+        proposals = mine_org(compactions, provider=org_provider(body.org_id))
         out = []
         for proposal in proposals:
             store.enqueue_action(
@@ -447,7 +604,7 @@ def create_app(
             )
         return {"proposals": out, "queued": len(out)}
 
-    mount_ui(app, config, store, provider, object_store)
+    mount_ui(app, config, store, provider, object_store, provider_for=org_provider)
     return app
 
 

@@ -41,9 +41,19 @@ class ServerConfig:
     llm_provider: str = "mock"  # "mock" | "anthropic"
     llm_model: str = "claude-sonnet-4-6"
     llm_max_tokens: int = 1024
+    # Default monthly server-side LLM budget per org (USD, hosted multi-tenant);
+    # 0 disables enforcement (self-hosted default behavior — usage still recorded).
+    # Per-org overrides live in the org_quota table (PUT /v1/admin/orgs/{id}/quota).
+    llm_monthly_cap_usd: float = 0.0
     # Hard ceiling on an uploaded raw transcript (bytes) — bounds memory on the
     # privileged manager drill path. Default 25 MB.
     max_raw_bytes: int = 25_000_000
+    # Mark console cookies Secure (HTTPS-only). Off by default so local/dev HTTP
+    # logins keep working; MUST be enabled on any public TLS deployment.
+    cookie_secure: bool = False
+    # Whole-request Content-Length ceiling (bytes). Slightly above max_raw_bytes
+    # so the raw endpoint's own cap stays the binding limit on its path.
+    max_request_bytes: int = 30_000_000
 
     def __post_init__(self) -> None:
         # An empty admin token or JWT secret is an auth bypass: hmac.compare_digest
@@ -77,8 +87,14 @@ class ServerConfig:
             raise ValueError(f"k_anon_floor must be >= 1, got {self.k_anon_floor}")
         if not 1 <= self.llm_max_tokens <= 100_000:
             raise ValueError(f"llm_max_tokens must be 1..100000, got {self.llm_max_tokens}")
+        if self.llm_monthly_cap_usd < 0:
+            raise ValueError(
+                f"llm_monthly_cap_usd must be >= 0 (0 = unlimited), got {self.llm_monthly_cap_usd}"
+            )
         if self.max_raw_bytes < 1:
             raise ValueError(f"max_raw_bytes must be >= 1, got {self.max_raw_bytes}")
+        if self.max_request_bytes < 1:
+            raise ValueError(f"max_request_bytes must be >= 1, got {self.max_request_bytes}")
 
     @classmethod
     def from_env(cls) -> ServerConfig:
@@ -97,7 +113,14 @@ class ServerConfig:
             llm_provider=env("MANTHANA_SERVER_LLM", cls.llm_provider),
             llm_model=env("MANTHANA_SERVER_LLM_MODEL", cls.llm_model),
             llm_max_tokens=int(env("MANTHANA_SERVER_LLM_MAX_TOKENS", str(cls.llm_max_tokens))),
+            llm_monthly_cap_usd=float(
+                env("MANTHANA_SERVER_LLM_MONTHLY_CAP_USD", str(cls.llm_monthly_cap_usd))
+            ),
             max_raw_bytes=int(env("MANTHANA_SERVER_MAX_RAW_BYTES", str(cls.max_raw_bytes))),
+            cookie_secure=env("MANTHANA_SERVER_COOKIE_SECURE", "") in ("1", "true", "yes"),
+            max_request_bytes=int(
+                env("MANTHANA_SERVER_MAX_REQUEST_BYTES", str(cls.max_request_bytes))
+            ),
         )
 
 

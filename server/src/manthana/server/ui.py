@@ -1,9 +1,11 @@
 """Founder web console (server-rendered HTML + htmx).
 
 A browser GUI for the org side — founder natural-language query, org/team overview,
-and org skill mining — beyond the Swagger ``/docs`` page. Org-wide data, so it is
-gated by a cookie-based admin login (``hmac.compare_digest`` vs the configured
-admin token; httponly cookie). Self-hosted, single-admin for v1.
+and org skill mining — beyond the Swagger ``/docs`` page. Two session roles share
+the same cookie login: the operator's ADMIN token sees every org, while an
+org-scoped FOUNDER token (hosted multi-tenant; a JWT minted at onboarding) sees
+only its own org — every handler derives the org from the SESSION for founders,
+ignoring any client-supplied org field, so cross-tenant reads are impossible.
 
 NOTE: like ``app.py``, this module intentionally does NOT use ``from __future__
 import annotations`` — FastAPI must resolve the ``Form``/``Cookie`` parameters in
@@ -17,6 +19,7 @@ import hmac
 import html
 import json
 import logging
+from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import Cookie, FastAPI, Form
@@ -24,10 +27,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from manthana.skills import mine_org
 
 from .analyzer import analyze_counterfactual_costs
+from .auth import AuthError, verify_founder_token
 from .config import ServerConfig
 from .digest import build_weekly_digest
 from .founder import run_query, team_topics, thread
 from .llm import LLMProvider
+from .metering import QuotaExceededError, month_key
 from .storage import ObjectStore
 from .store import ServerStore
 
@@ -70,12 +75,22 @@ def _page(title: str, body: str) -> str:
 
 
 def _login_page(error: bool = False) -> str:
-    msg = "<p class='warn'>Invalid admin token.</p>" if error else ""
+    msg = "<p class='warn'>Invalid token.</p>" if error else ""
     return _page(
         "Login",
         f"{msg}<form method='post' action='/ui/login'>"
-        "<p>Admin token: <input type='password' name='token' autofocus></p>"
+        "<p>Admin or founder token: <input type='password' name='token' autofocus></p>"
         "<button>Sign in</button></form>",
+    )
+
+
+def _quota_page(exc: QuotaExceededError, back: str = "/ui") -> str:
+    return _page(
+        "AI quota reached",
+        "<p class='warn'>Monthly AI quota reached for this org "
+        f"(${exc.spent_usd:.2f} of ${exc.cap_usd:.2f} used) — resets next month; "
+        "contact your Manthana admin to raise the budget.</p>"
+        f"<p><a href='{back}'>← back</a></p>",
     )
 
 
@@ -85,9 +100,37 @@ def mount_ui(
     store: ServerStore,
     provider: LLMProvider,
     object_store: ObjectStore | None = None,
+    provider_for: Callable[[str], LLMProvider] | None = None,
 ) -> None:
-    def _authed(cookie: str) -> bool:
-        return bool(cookie) and _ct_eq(cookie, config.admin_token)
+    def _provider(org_id: str) -> LLMProvider:
+        # Per-org metered provider when the app supplies one (hosted quotas);
+        # the shared provider otherwise (self-hosted / tests).
+        return provider_for(org_id) if provider_for is not None else provider
+
+    def _session(cookie: str) -> tuple[str, str | None] | None:
+        """Resolve the console cookie to ``(role, org_id)``.
+
+        ``("admin", None)`` = the operator (every org); ``("founder", org)`` = a
+        hosted customer's founder, locked to their org. None = not signed in.
+        The cookie holds the credential itself (admin token or founder JWT), so
+        sessions survive restarts without server-side state.
+        """
+        if not cookie:
+            return None
+        if _ct_eq(cookie, config.admin_token):
+            return ("admin", None)
+        try:
+            claims = verify_founder_token(config.jwt_secret, cookie)
+        except AuthError:
+            return None
+        return ("founder", claims.org_id)
+
+    def _scope_org(sess: tuple[str, str | None], requested: str) -> str:
+        """The org a handler may act on: founders are FORCED to their own org —
+        the client-supplied form/query value is ignored. This (not the form) is
+        the tenant-isolation enforcement for the console."""
+        _role, sess_org = sess
+        return sess_org if sess_org is not None else requested
 
     @app.get("/ui/login", response_class=HTMLResponse)
     def login_form() -> str:
@@ -95,11 +138,14 @@ def mount_ui(
 
     @app.post("/ui/login")
     def login(token: Annotated[str, Form()] = "") -> Response:
-        if not _ct_eq(token, config.admin_token):
+        if _session(token) is None:
             return HTMLResponse(_login_page(error=True), status_code=401)
         resp = RedirectResponse(url="/ui", status_code=303)
         # Scope the cookie to the console routes; httponly keeps it out of JS.
-        resp.set_cookie(COOKIE, token, httponly=True, samesite="lax", path="/ui")
+        resp.set_cookie(
+            COOKIE, token, httponly=True, samesite="lax", path="/ui",
+            secure=config.cookie_secure,
+        )
         return resp
 
     @app.post("/ui/logout")
@@ -113,9 +159,15 @@ def mount_ui(
 
     @app.get("/ui", response_class=HTMLResponse)
     def console(manthana_admin: Annotated[str, Cookie()] = "") -> Response:
-        if not _authed(manthana_admin):
+        sess = _session(manthana_admin)
+        if sess is None:
             return RedirectResponse(url="/ui/login", status_code=303)
-        orgs = store.list_orgs()
+        _role, sess_org = sess
+        if sess_org is None:
+            orgs = store.list_orgs()
+        else:  # founder session: their org only — no cross-tenant listing
+            org = store.get_org(sess_org)
+            orgs = [org] if org else []
         options = "".join(f"<option value='{_e(o.id)}'>{_e(o.name)}</option>" for o in orgs)
         query_form = (
             "<div class='bar'><form method='post' action='/ui/query'>"
@@ -127,13 +179,19 @@ def mount_ui(
             "<button>Ask</button></form></div>"
         )
         rows = []
+        month = month_key()
         for o in orgs:
             teams = len(store.list_teams(o.id))
             comps = store.count_compactions(o.id)
             pending = len(store.list_queue(o.id))
+            spent = store.get_llm_usage(o.id, month).est_cost_usd
+            override = store.get_org_quota(o.id)
+            cap = override if override is not None else config.llm_monthly_cap_usd
+            budget = f"${spent:.2f} / " + (f"${cap:.2f}" if cap > 0 else "∞")
             rows.append(
                 f"<tr><td>{_e(o.name)} <span class='muted'>({_e(o.id)})</span></td>"
                 f"<td>{teams}</td><td>{comps}</td><td>{pending}</td>"
+                f"<td title='month-to-date server AI spend / monthly cap'>{_e(budget)}</td>"
                 f"<td><a href='/ui/topics?org_id={_e(o.id)}'>Topics</a> · "
                 f"<a href='/ui/router?org_id={_e(o.id)}'>Cost $</a> · "
                 f"<a href='/ui/digest?org_id={_e(o.id)}'>Digest</a> · "
@@ -143,8 +201,8 @@ def mount_ui(
             )
         table = (
             "<table><tr><th>org</th><th>teams</th><th>compactions</th>"
-            "<th>pending skills</th><th></th></tr>"
-            f"{''.join(rows) or '<tr><td colspan=5>no orgs yet</td></tr>'}</table>"
+            "<th>pending skills</th><th>AI budget (mo)</th><th></th></tr>"
+            f"{''.join(rows) or '<tr><td colspan=6>no orgs yet</td></tr>'}</table>"
         )
         # Recent founder queries across orgs (governance / transparency).
         audit_rows = []
@@ -169,11 +227,17 @@ def mount_ui(
         source: Annotated[str, Form()] = "",
         manthana_admin: Annotated[str, Cookie()] = "",
     ) -> Response:
-        if not _authed(manthana_admin):
+        sess = _session(manthana_admin)
+        if sess is None:
             return RedirectResponse(url="/ui/login", status_code=303)
-        result = run_query(
-            store, config, org_id=org_id, query=query, provider=provider, source=source or None
-        )
+        org_id = _scope_org(sess, org_id)
+        try:
+            result = run_query(
+                store, config, org_id=org_id, query=query,
+                provider=_provider(org_id), source=source or None,
+            )
+        except QuotaExceededError as exc:
+            return HTMLResponse(_quota_page(exc), status_code=429)
         store.record_founder_query(
             org_id=org_id,
             query=query,
@@ -256,7 +320,10 @@ def mount_ui(
                 status_code=401,
             )
         resp = RedirectResponse(url="/ui/manager", status_code=303)
-        resp.set_cookie(MANAGER_COOKIE, token, httponly=True, samesite="lax", path="/ui/manager")
+        resp.set_cookie(
+            MANAGER_COOKIE, token, httponly=True, samesite="lax", path="/ui/manager",
+            secure=config.cookie_secure,
+        )
         return resp
 
     @app.post("/ui/manager/query", response_class=HTMLResponse)
@@ -267,9 +334,13 @@ def mount_ui(
     ) -> Response:
         if not _manager_authed(manthana_manager):
             return RedirectResponse(url="/ui/manager", status_code=303)
-        result = run_query(
-            store, config, org_id=org_id, query=query, provider=provider, allow_individual=True
-        )
+        try:
+            result = run_query(
+                store, config, org_id=org_id, query=query,
+                provider=_provider(org_id), allow_individual=True,
+            )
+        except QuotaExceededError as exc:
+            return HTMLResponse(_quota_page(exc, back="/ui/manager"), status_code=429)
         store.record_founder_query(
             org_id=org_id,
             query=query,
@@ -389,9 +460,14 @@ def mount_ui(
 
     @app.get("/ui/digest", response_class=HTMLResponse)
     def ui_digest(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:
-        if not _authed(manthana_admin):
+        sess = _session(manthana_admin)
+        if sess is None:
             return RedirectResponse(url="/ui/login", status_code=303)
-        d = build_weekly_digest(store, config, org_id=org_id, provider=provider)
+        org_id = _scope_org(sess, org_id)
+        try:
+            d = build_weekly_digest(store, config, org_id=org_id, provider=_provider(org_id))
+        except QuotaExceededError as exc:
+            return HTMLResponse(_quota_page(exc), status_code=429)
         secs = "".join(
             f"<h3>{_e(s.title)}</h3><p>{_e(s.narrative)}</p>"
             f"<p class='muted'>sources: {_e(', '.join(s.citations))}</p>"
@@ -412,8 +488,10 @@ def mount_ui(
 
     @app.get("/ui/router", response_class=HTMLResponse)
     def ui_router(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:
-        if not _authed(manthana_admin):
+        sess = _session(manthana_admin)
+        if sess is None:
             return RedirectResponse(url="/ui/login", status_code=303)
+        org_id = _scope_org(sess, org_id)
         rep = analyze_counterfactual_costs(store, org_id)
         rows = "".join(
             f"<tr><td>{_e(r.project)}</td><td>{_e(r.tier)}→{_e(r.target_tier or '—')}</td>"
@@ -443,8 +521,10 @@ def mount_ui(
 
     @app.get("/ui/topics", response_class=HTMLResponse)
     def ui_topics(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:
-        if not _authed(manthana_admin):
+        sess = _session(manthana_admin)
+        if sess is None:
             return RedirectResponse(url="/ui/login", status_code=303)
+        org_id = _scope_org(sess, org_id)
         tops, cov = team_topics(store, config, org_id)
         rows = "".join(
             f"<tr><td>{_e(t.label)}</td><td>{len(t.contributors)}</td>"
@@ -471,13 +551,15 @@ def mount_ui(
     def ui_mine(
         org_id: Annotated[str, Form()], manthana_admin: Annotated[str, Cookie()] = ""
     ) -> Response:
-        if not _authed(manthana_admin):
+        sess = _session(manthana_admin)
+        if sess is None:
             return RedirectResponse(url="/ui/login", status_code=303)
+        org_id = _scope_org(sess, org_id)
         # Mining touches the provider/embedder; degrade to a clean redirect (no
         # 500 on the admin console) if anything raises.
         try:
             compactions = store.query_compactions(org_id=org_id, limit=100_000)
-            for proposal in mine_org(compactions, provider=provider):
+            for proposal in mine_org(compactions, provider=_provider(org_id)):
                 store.enqueue_action(
                     action_id="auto_draft_org_skill",
                     org_id=org_id,
@@ -488,6 +570,8 @@ def mount_ui(
                         "contributor_count": proposal.provenance.contributor_count,
                     },
                 )
+        except QuotaExceededError as exc:
+            return HTMLResponse(_quota_page(exc), status_code=429)
         except Exception:  # noqa: BLE001 - console action degrades, never 500s
             _log.exception("org skill mining failed for %s", org_id)
         return RedirectResponse(url="/ui", status_code=303)

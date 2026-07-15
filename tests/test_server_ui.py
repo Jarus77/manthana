@@ -89,7 +89,7 @@ def test_login_rejects_wrong_token() -> None:
     client, _ = _make()
     resp = client.post("/ui/login", data={"token": "nope"})
     assert resp.status_code == 401
-    assert "Invalid admin token" in resp.text
+    assert "Invalid token" in resp.text  # login accepts an admin OR founder token
 
 
 # ── happy paths after login ────────────────────────────────────────────────

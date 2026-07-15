@@ -102,6 +102,9 @@ class AnthropicProvider:
     ) -> None:
         self.model = model
         self.max_tokens = max_tokens
+        # (input_tokens, output_tokens) of the most recent call — read by the
+        # per-org metering wrapper for quota accounting.
+        self.last_usage: tuple[int, int] | None = None
         if client is not None:
             self._client = client
             return
@@ -121,6 +124,12 @@ class AnthropicProvider:
             max_tokens=self.max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
+        usage = getattr(message, "usage", None)
+        if usage is not None:
+            self.last_usage = (
+                int(getattr(usage, "input_tokens", 0) or 0),
+                int(getattr(usage, "output_tokens", 0) or 0),
+            )
         # Concatenate only text blocks (tool-use / thinking blocks have no .text);
         # getattr-default guards a malformed text block missing .text.
         parts = [

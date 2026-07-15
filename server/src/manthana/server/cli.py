@@ -259,6 +259,187 @@ def enroll(
         raise typer.Exit(code=1)
 
 
+def _onboard_org_via_api(
+    client,  # httpx.Client-compatible (base_url set); injectable for tests
+    *,
+    org_id: str,
+    org_name: str,
+    server_url: str,
+    admin_token: str,
+    teams: list[str],
+    emails_path: str,
+    open_invite: bool,
+    quota_usd: float,
+    expires_days: int,
+) -> str:
+    """Provision a customer org over the ADMIN HTTP API and return the
+    paste-ready welcome block. HTTP (not direct-DB) on purpose: the hosted
+    DB (RDS) is not reachable from the operator's laptop — the admin API is."""
+    headers = {"X-Admin-Token": admin_token}
+
+    def call(method: str, path: str, **kwargs):
+        resp = client.request(method, path, headers=headers, **kwargs)
+        if resp.status_code >= 300:
+            raise RuntimeError(f"{method} {path} → {resp.status_code}: {resp.text[:300]}")
+        return resp.json()
+
+    call("POST", "/v1/admin/orgs", json={"org_id": org_id, "name": org_name})
+    for t in teams:
+        call("POST", "/v1/admin/teams", json={"team_id": t, "org_id": org_id, "name": t})
+
+    expires_minutes = max(1, expires_days) * 24 * 60
+    setup_lines: list[str] = []
+    if open_invite:
+        for t in teams:
+            inv = call(
+                "POST", "/v1/admin/invites",
+                json={
+                    "org_id": org_id, "team_id": t,
+                    "expires_minutes": expires_minutes, "uses": 10_000,
+                },
+            )
+            setup_lines.append(
+                f"  [team {t}] manthana setup {encode_invite(server_url, inv['code'])}"
+            )
+    elif emails_path:
+        actors = [
+            ln.strip()
+            for ln in Path(emails_path).expanduser().read_text().splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")
+        ]
+        team = teams[0]  # bound invites land on the first team
+        for actor in actors:
+            inv = call(
+                "POST", "/v1/admin/invites",
+                json={
+                    "org_id": org_id, "team_id": team, "actor": actor,
+                    "expires_minutes": expires_minutes, "uses": 1,
+                },
+            )
+            setup_lines.append(
+                f"  {actor} → manthana setup {encode_invite(server_url, inv['code'])}"
+            )
+    else:
+        raise RuntimeError("pass --open (one shared invite per team) OR --emails <file>")
+
+    founder = call("POST", "/v1/admin/founder-tokens", json={"org_id": org_id})
+    if quota_usd >= 0:
+        call("PUT", f"/v1/admin/orgs/{org_id}/quota", json={"monthly_cap_usd": quota_usd})
+    quota_line = (
+        f"${quota_usd:.2f}/month" if quota_usd >= 0 else "server default"
+    )
+
+    url = server_url.rstrip("/")
+    return (
+        f"══ Welcome to Manthana — {org_name} ══\n"
+        f"Server: {url}\n"
+        "\n"
+        f"Engineers — each runs ONE command (invites expire in {expires_days}d):\n"
+        + "\n".join(setup_lines)
+        + "\n\n"
+        f"Founder console: {url}/ui\n"
+        f"  sign-in token (founder-only, keep private): {founder['token']}\n"
+        "\n"
+        f"AI budget: {quota_line}\n"
+    )
+
+
+@app.command()
+def onboard_org(
+    org_id: str,
+    org_name: str,
+    server_url: str = typer.Option(..., "--server-url", help="the hosted server's https URL"),
+    admin_token: str = typer.Option(
+        "", "--admin-token", envvar="MANTHANA_SERVER_ADMIN_TOKEN",
+        help="operator admin token (or env MANTHANA_SERVER_ADMIN_TOKEN)",
+    ),
+    teams: str = typer.Option("core", "--teams", help="comma-separated team id(s)"),
+    emails: str = typer.Option("", help="file of engineer emails (one per line) → bound invites"),
+    open_invite: bool = typer.Option(False, "--open", help="one shared invite per team"),
+    quota_usd: float = typer.Option(
+        -1.0, "--quota-usd", help="monthly AI budget for this org (USD); -1 = server default"
+    ),
+    expires_days: int = 14,
+) -> None:
+    """Onboard a customer org onto the HOSTED server in one command: org + team(s) +
+    engineer invites + an org-scoped founder console token + AI budget — then prints a
+    paste-ready welcome block to email the startup. Works over the admin HTTP API, so
+    it runs from anywhere the server URL is reachable (no DB access needed).
+
+    An individual engineer is just an org of one: onboard-org jane jane --emails <file>."""
+    import httpx
+
+    if not admin_token:
+        typer.echo("✗ no admin token (pass --admin-token or set MANTHANA_SERVER_ADMIN_TOKEN)")
+        raise typer.Exit(code=1)
+    with httpx.Client(base_url=server_url.rstrip("/"), timeout=30.0) as client:
+        try:
+            block = _onboard_org_via_api(
+                client,
+                org_id=org_id, org_name=org_name, server_url=server_url,
+                admin_token=admin_token,
+                teams=[t.strip() for t in teams.split(",") if t.strip()] or ["core"],
+                emails_path=emails,
+                open_invite=open_invite, quota_usd=quota_usd, expires_days=expires_days,
+            )
+        except RuntimeError as exc:
+            typer.echo(f"✗ {exc}")
+            raise typer.Exit(code=1) from exc
+    typer.echo(block)
+
+
+@app.command()
+def usage(
+    org_id: str,
+    server_url: str = typer.Option(..., "--server-url"),
+    admin_token: str = typer.Option("", "--admin-token", envvar="MANTHANA_SERVER_ADMIN_TOKEN"),
+) -> None:
+    """Show an org's month-by-month server-side AI usage and its budget cap."""
+    import httpx
+
+    with httpx.Client(base_url=server_url.rstrip("/"), timeout=30.0) as client:
+        resp = client.get(
+            "/v1/admin/usage", params={"org_id": org_id},
+            headers={"X-Admin-Token": admin_token},
+        )
+        if resp.status_code >= 300:
+            typer.echo(f"✗ {resp.status_code}: {resp.text[:300]}")
+            raise typer.Exit(code=1)
+        data = resp.json()
+    cap = data["monthly_cap_usd"]
+    src = "org override" if data["cap_is_override"] else "server default"
+    typer.echo(f"org={org_id}  cap=" + (f"${cap:.2f}/mo ({src})" if cap > 0 else "unlimited"))
+    for m in data["months"]:
+        typer.echo(
+            f"  {m['month']}  ${m['est_cost_usd']:.4f}  ({m['calls']} calls, "
+            f"{m['input_tokens']:,} in / {m['output_tokens']:,} out tokens)"
+        )
+    if not data["months"]:
+        typer.echo("  (no usage recorded)")
+
+
+@app.command()
+def set_quota(
+    org_id: str,
+    monthly_cap_usd: float = typer.Argument(..., help="USD per month; 0 = unlimited"),
+    server_url: str = typer.Option(..., "--server-url"),
+    admin_token: str = typer.Option("", "--admin-token", envvar="MANTHANA_SERVER_ADMIN_TOKEN"),
+) -> None:
+    """Set an org's monthly AI budget."""
+    import httpx
+
+    with httpx.Client(base_url=server_url.rstrip("/"), timeout=30.0) as client:
+        resp = client.put(
+            f"/v1/admin/orgs/{org_id}/quota",
+            json={"monthly_cap_usd": monthly_cap_usd},
+            headers={"X-Admin-Token": admin_token},
+        )
+        if resp.status_code >= 300:
+            typer.echo(f"✗ {resp.status_code}: {resp.text[:300]}")
+            raise typer.Exit(code=1)
+    typer.echo(f"org={org_id} monthly cap → ${monthly_cap_usd:.2f}")
+
+
 @app.command()
 def invites(org_id: str, data: str = "") -> None:
     """List an org's onboarding invites and their state."""
@@ -334,6 +515,19 @@ def doctor(data: str = "") -> None:
               critical=False)
     check(config.k_anon_floor >= 4, f"k-anon floor = {config.k_anon_floor}",
           "cross-engineer features need >=4", critical=False)
+    # Hosted-deploy sanity: a Postgres DB with the in-memory object store loses
+    # every raw transcript on restart — almost certainly a misconfiguration.
+    if config.db_url.startswith("postgres"):
+        check(config.object_store == "s3", "object store persistent",
+              f"db is Postgres but object store is '{config.object_store}' — "
+              "raw transcripts would vanish on restart (set MANTHANA_SERVER_OBJECT_STORE=s3)",
+              critical=False)
+        check(config.cookie_secure, "secure cookies",
+              "set MANTHANA_SERVER_COOKIE_SECURE=1 behind TLS", critical=False)
+    cap = config.llm_monthly_cap_usd
+    check(True, "AI budget default",
+          f"${cap:.2f}/org/month" if cap > 0 else "unlimited (set "
+          "MANTHANA_SERVER_LLM_MONTHLY_CAP_USD for hosted multi-tenant)", critical=False)
 
     orgs = store.list_orgs()
     actors = sum(len(store.list_actors(o.id)) for o in orgs)

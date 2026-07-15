@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .config import ServerConfig
 from .llm import LLMProvider
+from .metering import QuotaExceededError
 from .store import ServerStore
 
 _log = logging.getLogger(__name__)
@@ -209,6 +210,10 @@ def parse_filter(
     # exception reach the client.
     try:
         raw = provider.complete(_PARSE_PROMPT.format(query=query, today=now.date().isoformat()))
+    except QuotaExceededError:
+        # Quota exhaustion must surface as 429 to the caller, never degrade to a
+        # misleading "insufficient data" answer.
+        raise
     except Exception:  # noqa: BLE001 - any provider failure degrades gracefully
         _log.exception("founder filter parse: provider call failed")
         spec = FounderFilter()
@@ -427,6 +432,8 @@ def run_query(
                 coverage=coverage.note(),
             )
         ).strip()
+    except QuotaExceededError:
+        raise  # surface as 429, never as "insufficient data"
     except Exception:  # noqa: BLE001 - provider failure → withhold narrative, keep rollup
         _log.exception("founder narrative: provider call failed")
         return FounderResult(

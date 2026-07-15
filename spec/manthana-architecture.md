@@ -1626,3 +1626,48 @@ clone" friction. Closed it (P0→P3), released **v0.4.0**.
   section; onboarding.md cross-platform daemon note.
 - Release: bumped 0.3.0 → **0.4.0** (5 pkgs + `==0.4.0` pins), tag `v0.4.0` → CI attaches the server
   wheel (+ others) to the Release and pushes the `:0.4.0` image. **283 tests, ruff + pyright clean.**
+
+## 50. Hosted multi-tenant SaaS — Phase B code changes (2026-07-16)
+
+Decision: offer a builder-operated hosted option on AWS (shared infra, logical isolation; manual
+onboarding for the pilot; builder's Anthropic key with per-org caps; managed/growth-ready deploy).
+Plan file: `~/.claude/plans/now-we-are-using-fluffy-seahorse.md`. Pilot domain: `latentspaces.in`
+(GoDaddy → Route53 delegation); permanent domain purchased later. AWS target: ECS Fargate + ALB
+(2 vCPU/8 GB — bge-large needs the headroom), RDS Postgres 16 Multi-AZ, one S3 bucket, Secrets
+Manager, CloudWatch + Budgets, ECR; Terraform in the private `manthana-infra` repo (owner: Jarus77).
+
+Phase B (all landed; self-hosted path unchanged — features default off):
+- **Per-org LLM metering + monthly caps** — `server/metering.py`: `MeteredProvider` wraps the shared
+  provider per-request (pre-call cap check → `QuotaExceededError` → HTTP 429; post-call usage row),
+  API-list-price estimate from real `message.usage` (captured as `AnthropicProvider.last_usage`) or
+  chars/4 for mocks. New tables `llm_usage` (`org::YYYY-MM`, atomic SQL increments) + `org_quota`
+  (per-org override; server default `MANTHANA_SERVER_LLM_MONTHLY_CAP_USD`, 0 = unlimited).
+  `GET /v1/admin/usage`, `PUT /v1/admin/orgs/{id}/quota`; console shows an "AI budget (mo)" column
+  + a quota banner. **Critical companion fix:** `founder.py` re-raises `QuotaExceededError` ahead of
+  its broad provider-failure handlers so quota surfaces as 429, never "insufficient data".
+- **Per-org founder auth** (THE hosted product gap) — `auth.py` founder-scope JWTs
+  (`issue/verify_founder_token`; agent/founder scopes mutually exclusive); `require_founder_access`
+  dependency (admin token = any org; founder bearer = own org else 403) on `/v1/founder/*` (+ new
+  founder-scoped `/v1/founder/digest`, `/v1/founder/audit`); `POST /v1/admin/founder-tokens`.
+  Console: `_session(cookie) → (role, org)`; founders see ONLY their org and every handler derives
+  org from the session, ignoring client-supplied org fields. Cookies get `secure=` via
+  `MANTHANA_SERVER_COOKIE_SECURE`. Manager view stays operator-only for the pilot.
+- **Hardening** — `server/hardening.py`: in-process sliding-window rate limits (enroll + logins
+  10/min/IP; query routes 30/min), `MANTHANA_SERVER_MAX_REQUEST_BYTES` (30 MB) Content-Length cap,
+  nosniff/X-Frame-Options always + HSTS when cookie_secure.
+- **Dockerfile** — multi-stage uv build; CPU-only torch + sentence-transformers; bge-large **baked
+  at build time** (`HF_HOME=/app/hf-cache`, runtime `HF_HUB_OFFLINE=1`) — no HF dependency at boot;
+  `--proxy-headers --forwarded-allow-ips=*` so per-IP rate limits see real client IPs behind ALB.
+- **`manthana-server onboard-org`** — one-command customer onboarding as a pure HTTPS client of the
+  admin API (RDS unreachable from a laptop; the API is the seam): org + teams + invites (`--open`
+  per team | `--emails` bound) + founder token + quota → paste-ready welcome block. Also `usage` /
+  `set-quota` (HTTP). An individual engineer = an org of one (same command; k-anon features stay
+  "insufficient data" — expected). `doctor` now warns on Postgres+memory-object-store and
+  missing secure-cookie/cap config.
+- Tests: `test_metering.py` (13), `test_founder_auth.py` (12, incl. forged-org-field override),
+  `test_hardening.py` (7), `test_onboard_org.py` (4). **318 passed, ruff + pyright clean.**
+  (`test_dashboard.py::test_sync_button_warns_when_unconfigured` fails on this machine only because
+  a real `~/.manthana` exists — pre-existing, unrelated.)
+
+Next: Phase A Terraform bootstrap (blocked on `aws configure`), then Phase C deploy workflow +
+8-point E2E smoke test (enroll/sync/founder-console/isolation/quota/rate-limit/resilience/backup).

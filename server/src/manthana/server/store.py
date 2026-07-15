@@ -31,7 +31,9 @@ from .tables import (
     ActorRow,
     FounderQueryAuditRow,
     InviteRow,
+    LlmUsageRow,
     OrgConsentRow,
+    OrgQuotaRow,
     OrgRow,
     RawTranscriptRow,
     ReleasedCompactionRow,
@@ -444,6 +446,88 @@ class ServerStore:
                 .limit(limit)
             )
             return list(db.exec(stmt))
+
+    # ── LLM usage metering + org quotas (hosted multi-tenant) ────────────
+    def add_llm_usage(
+        self,
+        org_id: str,
+        month: str,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        est_cost_usd: float,
+    ) -> None:
+        """Atomically accumulate one LLM call into the org's monthly bucket.
+
+        SQL-side increments (not read-modify-write): handlers run concurrently
+        in FastAPI's threadpool, and lost updates would under-count spend.
+        """
+        row_id = f"{org_id}::{month}"
+        with DBSession(self._engine) as db:
+            updated = db.execute(
+                text(
+                    "UPDATE llm_usage SET calls = calls + 1, "
+                    "input_tokens = input_tokens + :i, "
+                    "output_tokens = output_tokens + :o, "
+                    "est_cost_usd = est_cost_usd + :c WHERE id = :id"
+                ),
+                {"i": input_tokens, "o": output_tokens, "c": est_cost_usd, "id": row_id},
+            )
+            if getattr(updated, "rowcount", 0) == 0:
+                try:
+                    db.add(
+                        LlmUsageRow(
+                            id=row_id, org_id=org_id, month=month, calls=1,
+                            input_tokens=input_tokens, output_tokens=output_tokens,
+                            est_cost_usd=est_cost_usd,
+                        )
+                    )
+                    db.commit()
+                    return
+                except Exception:  # noqa: BLE001 - insert race: another thread created the row
+                    db.rollback()
+                    db.execute(
+                        text(
+                            "UPDATE llm_usage SET calls = calls + 1, "
+                            "input_tokens = input_tokens + :i, "
+                            "output_tokens = output_tokens + :o, "
+                            "est_cost_usd = est_cost_usd + :c WHERE id = :id"
+                        ),
+                        {
+                            "i": input_tokens, "o": output_tokens,
+                            "c": est_cost_usd, "id": row_id,
+                        },
+                    )
+            db.commit()
+
+    def get_llm_usage(self, org_id: str, month: str) -> LlmUsageRow:
+        """The org's usage bucket for a month (a zeroed row when none exists yet)."""
+        with DBSession(self._engine) as db:
+            row = db.get(LlmUsageRow, f"{org_id}::{month}")
+            return row or LlmUsageRow(
+                id=f"{org_id}::{month}", org_id=org_id, month=month
+            )
+
+    def list_llm_usage(self, org_id: str, *, limit: int = 12) -> list[LlmUsageRow]:
+        with DBSession(self._engine) as db:
+            stmt = (
+                select(LlmUsageRow)
+                .where(LlmUsageRow.org_id == org_id)
+                .order_by(LlmUsageRow.month.desc())  # type: ignore[attr-defined]
+                .limit(limit)
+            )
+            return list(db.exec(stmt))
+
+    def set_org_quota(self, org_id: str, monthly_cap_usd: float | None) -> None:
+        with DBSession(self._engine) as db:
+            db.merge(OrgQuotaRow(org_id=org_id, monthly_cap_usd=monthly_cap_usd))
+            db.commit()
+
+    def get_org_quota(self, org_id: str) -> float | None:
+        """The org's cap override, or None when the server default applies."""
+        with DBSession(self._engine) as db:
+            row = db.get(OrgQuotaRow, org_id)
+            return row.monthly_cap_usd if row else None
 
     # ── consent registry (seam) ──────────────────────────────────────────
     def set_consent(

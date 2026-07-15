@@ -133,6 +133,31 @@ class FounderQueryAuditRow(SQLModel, table=True):
     data: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))  # cited ids, etc.
 
 
+class LlmUsageRow(SQLModel, table=True):
+    """Month-to-date server-side LLM usage per org (hosted quota accounting).
+
+    One row per (org, month); counters are incremented atomically in SQL.
+    New TABLE (not new columns on ``org``) so ``create_all`` upgrades existing DBs.
+    """
+
+    __tablename__ = "llm_usage"  # type: ignore[assignment]
+    id: str = Field(primary_key=True)  # org-namespaced: org::YYYY-MM
+    org_id: str = Field(index=True)
+    month: str = Field(index=True)  # UTC YYYY-MM
+    calls: int = Field(default=0)
+    input_tokens: int = Field(default=0)
+    output_tokens: int = Field(default=0)
+    est_cost_usd: float = Field(default=0.0)
+
+
+class OrgQuotaRow(SQLModel, table=True):
+    """Per-org monthly LLM budget override (None/absent → server default cap)."""
+
+    __tablename__ = "org_quota"  # type: ignore[assignment]
+    org_id: str = Field(primary_key=True)
+    monthly_cap_usd: float | None = Field(default=None)
+
+
 SERVER_TABLES = [
     OrgRow,
     TeamRow,
@@ -144,6 +169,8 @@ SERVER_TABLES = [
     FounderQueryAuditRow,
     ReleasedCompactionVectorRow,
     InviteRow,
+    LlmUsageRow,
+    OrgQuotaRow,
 ]
 
 __all__ = [
@@ -157,5 +184,7 @@ __all__ = [
     "FounderQueryAuditRow",
     "ReleasedCompactionVectorRow",
     "InviteRow",
+    "LlmUsageRow",
+    "OrgQuotaRow",
     "SERVER_TABLES",
 ]
