@@ -1671,3 +1671,20 @@ Phase B (all landed; self-hosted path unchanged — features default off):
 
 Next: Phase A Terraform bootstrap (blocked on `aws configure`), then Phase C deploy workflow +
 8-point E2E smoke test (enroll/sync/founder-console/isolation/quota/rate-limit/resilience/backup).
+
+### §50 addendum — Phase A/C execution log (2026-07-16, same night)
+
+- **Phase A applied** (owner-approved after cost discussion; original Multi-AZ spec chosen): 54
+  resources — VPC/ALB/ECS/RDS(t4g.small Multi-AZ)/S3/ECR/Secrets/Route53/alarms/budget. Stage 2
+  (ACM + HTTPS + api record) applied after the owner switched GoDaddy NS (email + Vercel records
+  replicated + verified BEFORE delegation). **https://api.latentspaces.in live** (503 until server on).
+- **Alert identity corrected:** all alerts → surajprasad@latentspaces.in (Manthana is a latentspaces
+  project; never actioneer.com).
+- **Image:** `manthana-server:0.4.1` built arm64 (task def switched to ARM64/Graviton, ~20% cheaper)
+  and pushed to ECR. `deploy-aws.yml` (OIDC → ECR → ECS with circuit breaker) committed.
+- **Incident:** binary `.tfplan` files containing generated secrets were pushed to the private infra
+  repo → owner-approved remediation: history rewritten to one clean commit (force-push) + all four
+  secrets rotated (`-replace` on the random_password resources). `*.tfplan` now gitignored.
+- **Paused by owner ("Not yet"):** server stays at desired_count=0 (~$80/mo idle). Pending: app-repo
+  transfer acceptance (Suraj-gameramp → Jarus77; local commits unpushed), then service on + 8-point
+  E2E smoke test.
