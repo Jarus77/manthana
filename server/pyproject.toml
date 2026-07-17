@@ -21,6 +21,9 @@ postgres = ["psycopg[binary]>=3.2", "pgvector>=0.3"]
 s3 = ["boto3>=1.35"]
 # Real founder-narrative provider; dev/tests use the deterministic mock.
 llm = ["anthropic>=0.40"]
+# Founder MCP gateway — Claude Code connects over MCP/HTTP (spec: manthana-founder-mcp).
+# Optional; the gateway degrades to an install hint when absent.
+mcp = ["mcp>=1.0"]
 
 [project.scripts]
 manthana-server = "manthana.server.cli:main"

@@ -54,6 +54,13 @@ class ServerConfig:
     # Whole-request Content-Length ceiling (bytes). Slightly above max_raw_bytes
     # so the raw endpoint's own cap stays the binding limit on its path.
     max_request_bytes: int = 30_000_000
+    # Founder MCP gateway (spec: manthana-founder-mcp). OFF by default: the transport
+    # mount has lifespan/session-manager wiring that must be verified with a live MCP
+    # client before enabling, so it never risks the main app until proven.
+    enable_founder_mcp: bool = False
+    # Comma-separated Host allowlist for the MCP endpoint's DNS-rebinding check;
+    # must include the public domain behind the ALB. "*" disables the check.
+    mcp_allowed_hosts: str = "localhost,127.0.0.1,testserver"
 
     def __post_init__(self) -> None:
         # An empty admin token or JWT secret is an auth bypass: hmac.compare_digest
@@ -121,6 +128,10 @@ class ServerConfig:
             max_request_bytes=int(
                 env("MANTHANA_SERVER_MAX_REQUEST_BYTES", str(cls.max_request_bytes))
             ),
+            enable_founder_mcp=(
+                env("MANTHANA_SERVER_ENABLE_FOUNDER_MCP", "") in ("1", "true", "yes")
+            ),
+            mcp_allowed_hosts=env("MANTHANA_SERVER_MCP_ALLOWED_HOSTS", cls.mcp_allowed_hosts),
         )
 
 

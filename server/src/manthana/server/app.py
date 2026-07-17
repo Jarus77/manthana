@@ -131,7 +131,34 @@ def create_app(
     object_store: ObjectStore,
     provider: LLMProvider,
 ) -> FastAPI:
-    app = FastAPI(title="Manthana Server")
+    # Founder MCP gateway (spec: manthana-founder-mcp) — OFF by default. When enabled,
+    # its streamable-HTTP session manager needs its lifespan run by the parent app, and
+    # the token-auth wrapper becomes the tenant boundary. Built before FastAPI() so the
+    # session-manager lifespan can be attached.
+    mcp_asgi: Any = None
+    lifespan: Any = None
+    if config.enable_founder_mcp:
+        from contextlib import asynccontextmanager
+
+        from .founder_mcp import available as mcp_available
+        from .founder_mcp import build_founder_mcp, founder_mcp_asgi
+
+        if not mcp_available():
+            raise RuntimeError(
+                "MANTHANA_SERVER_ENABLE_FOUNDER_MCP set but the 'mcp' extra is missing "
+                "— install: uv sync --extra mcp"
+            )
+        _mcp_server = build_founder_mcp(store, object_store, config)
+        mcp_asgi = founder_mcp_asgi(_mcp_server, config)
+
+        @asynccontextmanager
+        async def _mcp_lifespan(_app: FastAPI):  # noqa: ANN202 - FastAPI lifespan
+            async with _mcp_server.session_manager.run():
+                yield
+
+        lifespan = _mcp_lifespan
+
+    app = FastAPI(title="Manthana Server", lifespan=lifespan)
     install_hardening(app, config)
 
     def org_provider(org_id: str) -> LLMProvider:
@@ -605,6 +632,8 @@ def create_app(
         return {"proposals": out, "queued": len(out)}
 
     mount_ui(app, config, store, provider, object_store, provider_for=org_provider)
+    if mcp_asgi is not None:
+        app.mount("/mcp", mcp_asgi)
     return app
 
 
