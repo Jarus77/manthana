@@ -195,3 +195,29 @@ def test_raw_failure_marks_metadata_then_retries_raw() -> None:
     assert second.pushed == 0  # metadata already synced
     assert second.raw_uploaded == 1  # raw retried successfully
     assert "cw" in local.raw_synced_ids()
+
+
+def test_watch_sync_adapter_uploads_raw_by_default_path() -> None:
+    """The watcher's sync adapter (`manthana watch` → _sync_pushed) carries the
+    redacted raw transcript, not just the digest — release triggers raw upload
+    (decisions-doc contract; the founder MCP drill/grep layer needs the raw)."""
+    from manthana.agent.cli import _sync_pushed
+
+    server, _sstore, obj, token = _server()
+    local = Store.open_memory()
+    _session(local, "w", Mode.work)
+    _comp(local, "cw", "w", released=True)
+    local.add_turns(
+        [Turn(id="t0", session_id="w", actor="eng@x.com", seq=0, role=Role.user, content="hi")]
+    )
+    client = SyncClient("", token, client=server)
+    sync_fn = _sync_pushed(client, include_raw=True)  # how `watch` wires it (default)
+    assert sync_fn(local) == 1
+    assert obj.get("o1/t1/cw.jsonl") is not None  # raw landed without a manual --raw sync
+    # and the adapter without raw (opt-out path) does not upload raw
+    local2 = Store.open_memory()
+    _session(local2, "w2", Mode.work)
+    _comp(local2, "cw2", "w2", released=True)
+    sync_fn_noraw = _sync_pushed(client, include_raw=False)
+    assert sync_fn_noraw(local2) == 1
+    assert obj.get("o1/t1/cw2.jsonl") is None

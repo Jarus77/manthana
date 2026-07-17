@@ -56,11 +56,15 @@ def _verify_connection(base: str, token: str) -> tuple[bool, bool]:
         client.close()
 
 
-def _sync_pushed(client: SyncClient) -> Callable[[Store], int]:
-    """Adapt a SyncClient into the watcher's `sync_fn` (returns #pushed)."""
+def _sync_pushed(client: SyncClient, *, include_raw: bool = False) -> Callable[[Store], int]:
+    """Adapt a SyncClient into the watcher's `sync_fn` (returns #pushed).
+
+    ``include_raw=True`` completes the decisions-doc contract that release triggers
+    the (redacted) raw-transcript upload — the org server's drill-down/grep layer
+    needs the raw, not just the digest."""
 
     def _fn(store: Store) -> int:
-        return client.sync(store).pushed
+        return client.sync(store, include_raw=include_raw).pushed
 
     return _fn
 
@@ -292,6 +296,10 @@ def watch(
     auto_release: bool = True,
     release_min: float = 10.0,
     sync: bool = True,
+    sync_raw: bool = typer.Option(
+        True, "--sync-raw/--no-sync-raw",
+        help="also upload the redacted raw transcript of released sessions",
+    ),
 ) -> None:
     """Continuously ingest new/changed Claude Code transcripts (Ctrl-C to stop).
 
@@ -300,7 +308,8 @@ def watch(
     summarized; --no-auto-compact disables. Auto-releases each compaction --release-min
     minutes after it's built UNLESS you marked the session personal or held it (personal
     never leaves); --no-auto-release disables. With a server configured, auto-syncs
-    released compactions (--no-sync to disable).
+    released compactions + their redacted raw transcripts (--no-sync / --no-sync-raw
+    to disable; release triggers raw upload per the decisions-doc trust contract).
     """
     from manthana.agent.llm import default_provider
     from manthana.agent.sync_client import SyncClient
@@ -312,8 +321,8 @@ def watch(
     sync_fn: Callable[[Store], int] | None = None
     if sync and base and token:
         client = SyncClient(base, token)
-        sync_fn = _sync_pushed(client)
-        sync_state = "auto-sync on"
+        sync_fn = _sync_pushed(client, include_raw=sync_raw)
+        sync_state = "auto-sync on" + (" (+raw)" if sync_raw else "")
     else:
         sync_state = "auto-sync off (no server)" if sync else "auto-sync disabled"
     # Don't auto-compact in the background without a real model (a Mock would write
