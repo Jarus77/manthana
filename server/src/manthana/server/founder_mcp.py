@@ -215,8 +215,10 @@ def build_founder_mcp(
     token's org. Returns the FastMCP instance; the caller mounts
     ``streamable_http_app()`` (wrapped by ``founder_mcp_asgi``) and runs its
     session-manager lifespan. Import-guarded — call only when ``available()``."""
-    from mcp.server.fastmcp import FastMCP
-    from mcp.server.transport_security import TransportSecuritySettings
+    from mcp.server.fastmcp import FastMCP  # type: ignore[import-not-found]
+    from mcp.server.transport_security import (  # type: ignore[import-not-found]
+        TransportSecuritySettings,
+    )
 
     # DNS-rebinding protection validates the Host header. Behind the ALB the public
     # host is the deploy's own domain; allow it (+ localhost for local runs/tests).

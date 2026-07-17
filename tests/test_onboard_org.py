@@ -68,7 +68,7 @@ def test_onboard_org_bound_email_invites(tmp_path: Path) -> None:
         open_invite=False, quota_usd=-1.0, expires_days=14,
     )
     invites = store.list_invites("acme")
-    assert sorted(i.actor for i in invites) == ["a@acme.com", "b@acme.com"]
+    assert sorted(i.actor or "" for i in invites) == ["a@acme.com", "b@acme.com"]
     assert all(i.uses_left == 1 for i in invites)
     assert "a@acme.com →" in block
     assert "server default" in block  # no quota override requested

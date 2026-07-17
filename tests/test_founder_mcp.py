@@ -11,7 +11,13 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from manthana.schemas import EngineeringCompaction, FrictionPoint, Outcome, Surface
+from manthana.schemas import (
+    EngineeringCompaction,
+    FrictionCategory,
+    FrictionPoint,
+    Outcome,
+    Surface,
+)
 from manthana.server import ServerConfig, ServerStore, create_app
 from manthana.server.auth import issue_founder_token
 from manthana.server.founder_mcp import (
@@ -44,7 +50,9 @@ def _comp(cid: str, actor: str, project: str, intent: str, sid: str | None = Non
         task_intent=intent,
         approach="a",
         outcome=Outcome.success,
-        friction_points=[FrictionPoint(category="tool_error", description="flaky webhook")],
+        friction_points=[
+            FrictionPoint(category=FrictionCategory.tool_error, description="flaky webhook")
+        ],
         est_cost_usd=0.4,
         tier_used="sonnet",
         released=True,
