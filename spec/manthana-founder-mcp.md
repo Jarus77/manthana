@@ -73,8 +73,17 @@ Tools (mirror local-disk exploration → no accuracy drop):
    To enable on a deploy: rebuild image with `--extra mcp`, set
    `MANTHANA_SERVER_ENABLE_FOUNDER_MCP=1` and `MANTHANA_SERVER_MCP_ALLOWED_HOSTS=api.latentspaces.in`.
    Founder connects: `claude mcp add --transport http manthana https://api.latentspaces.in/mcp/ --header "Authorization: Bearer <founder token>"`.
-2. **Agent egress change (NEXT):** batched background auto-compaction of all
-   non-personal sessions; loosen `eligible_for_sync`; sync summary + secret-scrubbed raw.
+2. **Agent egress change — DONE (2026-07-18), smaller than scoped.** Discovery: the
+   auto pipeline was ALREADY default-on in the shipped agent (`manthana watch`:
+   auto_compact settled 10m quiet → auto_release after a 10-min opt-out window,
+   personal/held excluded → auto-sync each cycle) — `eligible_for_sync` needed no
+   loosening; release.py's opt-out window IS the "everything except personal" model.
+   The only gap: the watcher's sync adapter didn't upload raw. Fixed:
+   `_sync_pushed(include_raw=True)` is now the `watch` default (`--no-sync-raw` to
+   opt out), completing the decisions-doc "release triggers raw upload" contract.
+   NOTE: pilot engineers run the v0.4.0 release wheels — they get this (and the
+   whole founder-MCP era) only after a new release is cut and they re-run the
+   installer.
 3. **Per-org `privacy_mode`** + founder=manager merge (gate the k-anon path).
 4. **Onboarding copy update:** engineers told all non-personal Claude Code sessions
    are auto-shared with their founder.

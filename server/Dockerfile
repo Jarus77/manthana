@@ -25,7 +25,7 @@ COPY . /app
 # driver, S3, real LLM provider, and semantic embeddings (CPU-only torch — the
 # CUDA build would add gigabytes for GPUs a Fargate task doesn't have).
 RUN uv sync --all-packages --frozen \
- && uv pip install "psycopg[binary]>=3.2" "boto3>=1.35" "anthropic>=0.40" \
+ && uv pip install "psycopg[binary]>=3.2" "boto3>=1.35" "anthropic>=0.40" "mcp>=1.0" \
  && uv pip install --index-url https://download.pytorch.org/whl/cpu torch \
  && uv pip install "sentence-transformers>=3.0"
 

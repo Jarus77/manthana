@@ -1244,7 +1244,7 @@ wheels = [
 
 [[package]]
 name = "manthana"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "agent" }
 dependencies = [
     { name = "fastapi" },
@@ -1290,7 +1290,7 @@ provides-extras = ["vec", "embeddings", "optimize", "mcp"]
 
 [[package]]
 name = "manthana-collectors"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "collectors" }
 dependencies = [
     { name = "manthana-schemas" },
@@ -1301,7 +1301,7 @@ requires-dist = [{ name = "manthana-schemas", editable = "schemas" }]
 
 [[package]]
 name = "manthana-schemas"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "schemas" }
 dependencies = [
     { name = "pydantic" },
@@ -1312,7 +1312,7 @@ requires-dist = [{ name = "pydantic", specifier = ">=2.7" }]
 
 [[package]]
 name = "manthana-server"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "server" }
 dependencies = [
     { name = "fastapi" },
@@ -1329,6 +1329,9 @@ dependencies = [
 llm = [
     { name = "anthropic" },
 ]
+mcp = [
+    { name = "mcp" },
+]
 postgres = [
     { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
@@ -1344,6 +1347,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "manthana-schemas", editable = "schemas" },
     { name = "manthana-skills", editable = "skills" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0" },
     { name = "pgvector", marker = "extra == 'postgres'", specifier = ">=0.3" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "pyjwt", specifier = ">=2.9" },
@@ -1352,11 +1356,11 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
-provides-extras = ["postgres", "s3", "llm"]
+provides-extras = ["postgres", "s3", "llm", "mcp"]
 
 [[package]]
 name = "manthana-skills"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "skills" }
 dependencies = [
     { name = "manthana-schemas" },
