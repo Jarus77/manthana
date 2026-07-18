@@ -76,8 +76,8 @@ def sessionize(
 ) -> list[tuple[Session, list[Turn]]]:
     """Group ordered turns into Sessions with their (re-sequenced) turns.
 
-    ``summary_at_index`` is the global turn index of Claude's newest compaction
-    summary (from ``FileMeta.compact_summary_at``). Only the ONE slice that
+    ``summary_at_index`` is the global turn index of the surface's newest
+    context summary. Only the ONE slice that
     contains that index is flagged ``has_compact_summary`` — so a long file split
     into many slices yields a single summary-based compaction (the whole-arc one)
     rather than the same cumulative summary bleeding onto every slice.

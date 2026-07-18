@@ -91,9 +91,9 @@ Modules:
 - `collectors/sessionize.py`: boundary inference — splits turns into `Session` objects on >30min gap, >6h cap, or explicit stop signal; chains resumed sessions via `resumed_from`.
 - `collectors/identity.py`: resolve engineer actor (from `$MANTHANA_ACTOR`, git email, or OS user).
 - `collectors/project.py`: infer project name (`git rev-parse --show-toplevel` or cwd basename).
-- `collectors/codex.py`: stub (Codex JSONL format not yet verified on current Codex; registered but non-functional in v1).
+- `collectors/codex.py`: reads active/archived Codex rollout JSONL; normalizes messages, tool calls/results, token usage, metadata, and native context compactions while skipping duplicate display events and private reasoning.
 
-**Flow:** `ingest_file(path) → ClaudeCodeCollector.read(path) → sessionize → [infer_project, resolve_actor] → Store.upsert_session + add_turns`
+**Flow:** `ingest_file(path, collector) → collector.read(path) → sessionize → [infer_project, resolve_actor] → Store.upsert_session + add_turns`
 
 **Grounding:** 425 sessions, 28,622 turns from real machine data; end-to-end tested on actual `~/.claude/projects/`.
 

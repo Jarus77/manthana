@@ -6,7 +6,7 @@ updated every phase. Companion to `manthana.md` (vision), `manthana-decisions.md
 (locked decisions — wins on conflict), `manthana-action.md` (actions), and
 `ECC_clone_instruction.md` (reuse).*
 
-Last updated: 2026-06-19 — slice (§11) + server (§12,§13) + sync (§14,§15) + skill miner (§16,§17) + miner→server (§18) + dashboard control plane (§19).
+Last updated: 2026-07-18 — Codex rollout collector + multi-surface capture/watch.
 
 ---
 
@@ -15,8 +15,8 @@ Last updated: 2026-06-19 — slice (§11) + server (§12,§13) + sync (§14,§15
 - **Scope:** Foundation + vertical slice (capture → store → compact → view →
   act), local side only. No server yet.
 - **Process:** phase-by-phase, with review between phases.
-- **Surfaces:** Claude Code first (built/tested against real transcripts); Codex
-  as a registered stub until local sample data exists.
+- **Surfaces:** Claude Code and Codex rollout JSONL, both built against verified
+  transcript schemas; Cursor remains deferred.
 - **ECC reuse:** clone locally for reference; copy specific *literals* verbatim
   with per-literal attribution; re-express *patterns* in idiomatic Python; full
   attribution in `NOTICE` + `LICENSES/MIT-ECC.txt`. (ECC cloned to a sibling dir
@@ -165,8 +165,10 @@ local agent; the server uses async later.
 - **`infer_project`** (`collectors/project.py`): `git rev-parse --show-toplevel`
   with cwd-basename fallback. **`resolve_actor`** (`collectors/identity.py`):
   `$MANTHANA_ACTOR` → global git email → OS user.
-- **`CodexCollector`** (`collectors/codex.py`): registered stub (`parse` raises;
-  no verified local format).
+- **`CodexCollector`** (`collectors/codex.py`): discovers active and archived
+  rollout JSONL; normalizes canonical messages, custom/function tool calls and
+  results, incremental token usage, project/session metadata, and Codex context
+  compactions while suppressing duplicate display events and private reasoning.
 - **`manthana.agent.capture`**: `ingest_file` / `ingest_all` tie collector →
   `sessionize` → `Store`. New sessions default to Work mode (Phase 3 adds the
   toggle + redaction). Grounding: `ingest_all` over this machine's real data
@@ -279,9 +281,9 @@ aggregate with <4 distinct released-compaction contributors.
 - **Server-side `LLMProvider`** for founder-narrative generation: the server has
   no engineer Claude account. Dev = mock provider; **v1.5 = org provisions a
   server API key**. Tracked here and in `manthana-decisions.md`.
-- **Codex format:** spec's `~/.codex/sessions/` path is stale on current Codex
-  (SQLite-based, no JSONL on this machine). Codex collector is a registered stub
-  until sample data exists.
+- **Codex format (resolved 2026-07-18):** Codex Desktop 0.144/0.145 stores
+  rollout JSONL under dated `~/.codex/sessions/` directories and
+  `~/.codex/archived_sessions/`; both are covered by the collector and tests.
 - **Python 3.14 wheels:** project pinned to 3.12 because heavy deps
   (torch/sentence-transformers, Phase: skill miner) may lack 3.14 wheels;
   embeddings will be an optional extra so the core installs without them.
@@ -292,9 +294,10 @@ aggregate with <4 distinct released-compaction contributors.
   personal-mode invariant, CI. Green.
 - ✅ **Phase 1 — Local SQLite store** (§4a): SQLModel tables, versioned
   migrations, `Store` CRUD, sqlite-vec wired optional. Green (15 tests).
-- ✅ **Phase 2 — Claude Code collector** (§4b): JSONL parse + flatten,
-  sessionization, project/actor inference, capture pipeline, Codex stub.
-  Green (22 tests); verified on real data.
+- ✅ **Phase 2 — Claude Code + Codex collectors** (§4b): JSONL parse + flatten,
+  sessionization, project/actor inference, multi-surface capture/watch pipeline,
+  token usage, tool pairing, and native context summaries. Verified against both
+  transcript schemas.
 - ✅ **Phase 3 — Redaction + Work/Personal mode** (§4c): verbatim ECC secret
   patterns + PII, Redactor (copies), config, mode toggle wired to the sync gate,
   CLI (capture/sessions/mode). Green (29 tests).

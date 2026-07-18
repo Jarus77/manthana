@@ -52,7 +52,8 @@
 
 - **v1 surfaces:** Claude Code CLI, Codex CLI; IDE collector (Cursor first) deferred to v1.5; web collector deferred to v2
 - **v1 assumption:** full access to raw transcripts at known paths (`~/.claude/projects/*.jsonl`, `~/.codex/sessions/`, etc.); no permission negotiation in v1
-  - *Correction (2026-06-19): on current Codex the `~/.codex/sessions/` JSONL path is stale — Codex stores SQLite and no JSONL transcripts were found on the verified machine. Claude Code (`~/.claude/projects/<slug>/<sessionId>.jsonl`, format verified against real data) is the v1 capture surface; the Codex collector is a registered stub until local sample data exists.*
+  - *Historical note (2026-06-19): no Codex rollout JSONL was present on the first verified machine, so the initial collector shipped as a stub.*
+  - *Update (2026-07-18): Codex Desktop 0.144/0.145 rollout JSONL was verified at `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` plus `~/.codex/archived_sessions/`. The collector now handles messages, tool calls/results, token counts, metadata, and context compactions.*
 - **Project inference:** `git rev-parse --show-toplevel` with cwd basename fallback; no `manthana init` required per project
 - **Session boundary rule:** a session is a contiguous block of turns. New session triggered by:
   1. >30 minute gap since last turn in current session, OR
@@ -185,8 +186,8 @@ for the code-level mapping (file paths, schema reference, ECC reuse map).*
   capture → store → compact → view → act). No server in this engagement.
   Phase-by-phase review between phases.
 - **Surfaces this build:** Claude Code first (built against real transcripts at
-  `~/.claude/projects/`); Codex registered as a stub until local sample data
-  exists.
+  `~/.claude/projects/`); Codex initially registered as a stub, then implemented
+  against verified rollout JSONL on 2026-07-18.
 - **Monorepo realized as a `uv` workspace** of four distributions sharing the
   PEP 420 namespace `manthana`: `manthana-schemas`, `manthana-collectors`,
   `manthana` (agent + CLI), `manthana-server`. Build backend `hatchling`.

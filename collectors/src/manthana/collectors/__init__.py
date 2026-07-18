@@ -17,7 +17,7 @@ from .sessionize import sessionize
 def register_builtin(actor: str | None = None) -> None:
     """Register the v1 built-in collectors into the shared registry."""
     register(ClaudeCodeCollector(actor=actor))
-    register(CodexCollector())
+    register(CodexCollector(actor=actor))
 
 
 __all__ = [

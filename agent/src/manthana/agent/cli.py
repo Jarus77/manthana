@@ -278,7 +278,7 @@ def doctor() -> None:
 
 @app.command()
 def capture() -> None:
-    """Ingest all local Claude Code transcripts into the store."""
+    """Ingest all local Claude Code and Codex transcripts into the store."""
     store = Store.open()
     results = ingest_all(store)
     sessions = sum(r.session_count for r in results)
@@ -301,15 +301,14 @@ def watch(
         help="also upload the redacted raw transcript of released sessions",
     ),
 ) -> None:
-    """Continuously ingest new/changed Claude Code transcripts (Ctrl-C to stop).
+    """Continuously ingest new/changed Claude Code and Codex transcripts.
 
     Auto-compacts Work sessions whose transcript has been quiet for --settle-min minutes
-    (re-compacting after a resume); --summarized-only restricts to sessions Claude already
-    summarized; --no-auto-compact disables. Auto-releases each compaction --release-min
-    minutes after it's built UNLESS you marked the session personal or held it (personal
-    never leaves); --no-auto-release disables. With a server configured, auto-syncs
-    released compactions + their redacted raw transcripts (--no-sync / --no-sync-raw
-    to disable; release triggers raw upload per the decisions-doc trust contract).
+    (re-compacting after a resume); --summarized-only restricts to sessions whose coding
+    surface already summarized them; --no-auto-compact disables. Auto-releases each
+    compaction --release-min minutes after it's built UNLESS you marked the session
+    personal or held it (personal never leaves); --no-auto-release disables. With a
+    server configured, auto-syncs released compactions + their redacted raw transcripts.
     """
     from manthana.agent.llm import default_provider
     from manthana.agent.sync_client import SyncClient

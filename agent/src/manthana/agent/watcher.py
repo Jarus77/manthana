@@ -1,4 +1,4 @@
-"""Auto-capture daemon: poll the Claude Code transcript dir and ingest changes.
+"""Auto-capture daemon: poll Claude Code and Codex transcripts for changes.
 
 ``watch`` is a stdlib polling loop (deliberately no ``watchdog`` dependency). It
 tracks each transcript's mtime and re-ingests only new/changed files via the
@@ -20,10 +20,10 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from manthana.collectors import ClaudeCodeCollector
+from manthana.collectors import ClaudeCodeCollector, CodexCollector
 
 from .actions import Dispatcher, TriggerEvent, default_dispatcher
-from .capture import IngestResult, ingest_file
+from .capture import IngestResult, ReadableCollector, ingest_file
 from .compact import compact_settled
 from .llm import LLMProvider
 from .release import auto_release as _auto_release
@@ -32,7 +32,7 @@ from .store import Store
 _log = logging.getLogger(__name__)
 
 
-def _scan(collector: ClaudeCodeCollector) -> dict[str, float]:
+def _scan(collector: ReadableCollector) -> dict[str, float]:
     """Map each discovered transcript to its mtime (raced/removed files skipped)."""
     out: dict[str, float] = {}
     try:
@@ -53,7 +53,7 @@ def _scan(collector: ClaudeCodeCollector) -> dict[str, float]:
 def watch(
     store: Store,
     *,
-    collector: ClaudeCodeCollector | None = None,
+    collector: ReadableCollector | None = None,
     interval: float = 5.0,
     auto_compact: bool = False,
     summarized_only: bool = False,
@@ -86,20 +86,29 @@ def watch(
     (sync throttle); ``wall_clock`` is wall time (settle/release windows vs file mtime).
     Returns the final ``{path: mtime}`` map.
     """
-    collector = collector or ClaudeCodeCollector()
+    active_collectors: list[ReadableCollector] = (
+        [collector]
+        if collector is not None
+        else [ClaudeCodeCollector(), CodexCollector()]
+    )
     emit = log or _log.info
     seen: dict[str, float] = {}
     last_sync: float | None = None
     last_auto: float | None = None
     cycle = 0
     while iterations is None or cycle < iterations:
-        current = _scan(collector)
+        current: dict[str, float] = {}
+        owners: dict[str, ReadableCollector] = {}
+        for active_collector in active_collectors:
+            discovered = _scan(active_collector)
+            current.update(discovered)
+            owners.update({source: active_collector for source in discovered})
         changed = [path for path, mtime in current.items() if seen.get(path) != mtime]
         if changed:
             sessions = turns = ok = 0
             for src in changed:
                 try:
-                    result = ingest(store, src, collector=collector)
+                    result = ingest(store, src, collector=owners[src])
                 except Exception:  # noqa: BLE001 - one bad transcript must not kill the loop
                     _log.exception("watch: failed to ingest %s", src)
                     seen.pop(src, None)  # forget it so it retries even if mtime is unchanged

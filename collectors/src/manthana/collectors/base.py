@@ -8,8 +8,8 @@ orchestration-centric (worker states); Manthana's canonical model is the flat
 ``Turn`` / ``Session`` pair, so the adapters turn raw transcripts into ``Turn``s
 rather than ECC's canonical session.
 
-v1 registers the Claude Code collector (Phase 2) and a Codex stub; v1.5 adds
-Cursor without touching this seam.
+v1 registers the Claude Code and Codex rollout collectors; v1.5 adds Cursor
+without touching this seam.
 
 SPDX-License-Identifier: Apache-2.0
 """

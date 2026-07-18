@@ -1,7 +1,7 @@
 """Capture pipeline: transcripts -> normalized Sessions/Turns -> local store.
 
-Ties the Claude Code collector to the SQLite store. New sessions default to Work
-mode (decisions doc); the Work/Personal toggle and redaction land in Phase 3.
+Ties the Claude Code and Codex collectors to the SQLite store. New sessions
+default to Work mode.
 
 SPDX-License-Identifier: Apache-2.0
 """
@@ -10,8 +10,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from manthana.collectors import ClaudeCodeCollector, infer_project, resolve_actor, sessionize
-from manthana.schemas import Mode, Session, Surface
+from manthana.collectors import (
+    ClaudeCodeCollector,
+    CodexCollector,
+    infer_project,
+    resolve_actor,
+    sessionize,
+)
+from manthana.schemas import Mode, Session
 
 from .store import Store
 
@@ -30,15 +36,18 @@ class IngestResult:
         return sum(s.turn_count for s in self.sessions)
 
 
+ReadableCollector = ClaudeCodeCollector | CodexCollector
+
+
 def ingest_file(
     store: Store,
     source: str,
     *,
     actor: str | None = None,
     mode: Mode = Mode.work,
-    collector: ClaudeCodeCollector | None = None,
+    collector: ReadableCollector | None = None,
 ) -> IngestResult:
-    """Parse one Claude Code transcript and persist its Session(s) and Turns."""
+    """Parse one supported transcript and persist its Session(s) and Turns."""
     actor = actor or resolve_actor()
     collector = collector or ClaudeCodeCollector(actor=actor)
     turns, meta = collector.read(source)
@@ -46,7 +55,7 @@ def ingest_file(
 
     sessions = sessionize(
         turns,
-        surface=Surface.claude_code,
+        surface=collector.surface,
         actor=actor,
         project=project,
         repo_root=repo_root,
@@ -71,14 +80,19 @@ def ingest_all(
     *,
     actor: str | None = None,
     mode: Mode = Mode.work,
+    collectors: list[ReadableCollector] | None = None,
 ) -> list[IngestResult]:
-    """Discover and ingest every Claude Code transcript on this machine."""
+    """Discover and ingest every Claude Code and Codex transcript on this machine."""
     actor = actor or resolve_actor()
-    collector = ClaudeCodeCollector(actor=actor)
+    active = collectors or [
+        ClaudeCodeCollector(actor=actor),
+        CodexCollector(actor=actor),
+    ]
     return [
         ingest_file(store, source, actor=actor, mode=mode, collector=collector)
+        for collector in active
         for source in collector.discover()
     ]
 
 
-__all__ = ["ingest_file", "ingest_all", "IngestResult"]
+__all__ = ["ingest_file", "ingest_all", "IngestResult", "ReadableCollector"]

@@ -43,7 +43,7 @@ class Session(BaseModel):
     )
     has_compact_summary: bool = Field(
         default=False,
-        description="Transcript carries Claude's own compaction summary (cheap to compact)",
+        description="Transcript carries a surface-native context summary (cheap to compact)",
     )
     tags: dict[str, str] = Field(
         default_factory=dict,

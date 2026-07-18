@@ -58,7 +58,7 @@
     },
     "has_compact_summary": {
       "default": false,
-      "description": "Transcript carries Claude's own compaction summary (cheap to compact)",
+      "description": "Transcript carries a surface-native context summary (cheap to compact)",
       "title": "Has Compact Summary",
       "type": "boolean"
     },

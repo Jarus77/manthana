@@ -10,7 +10,7 @@ import os
 import time
 from datetime import UTC, datetime
 
-from manthana.schemas import EngineeringCompaction, Mode
+from manthana.schemas import EngineeringCompaction, Mode, Surface
 
 from .compactor import Compactor
 from .llm import LLMError, LLMProvider, default_provider
@@ -19,17 +19,21 @@ from .store import Store
 _log = logging.getLogger(__name__)
 
 
-def _claude_summary_for(session: object) -> str | None:
-    """Claude's own compaction summary for a session, read on demand from its
-    transcript (cheap scan) — None unless the session was flagged as carrying one."""
+def _native_summary_for(session: object) -> str | None:
+    """Read a surface-native context summary on demand when one was captured."""
     if not getattr(session, "has_compact_summary", False):
         return None
     source = getattr(session, "source_path", None)
     if not source:
         return None
-    from manthana.collectors import ClaudeCodeCollector
+    from manthana.collectors import ClaudeCodeCollector, CodexCollector
 
-    summary = ClaudeCodeCollector().read_summary(source)
+    collector = (
+        CodexCollector()
+        if getattr(session, "surface", None) is Surface.codex
+        else ClaudeCodeCollector()
+    )
+    summary = collector.read_summary(source)
     return summary.text if summary else None
 
 
@@ -41,8 +45,8 @@ def compact_session(
 ) -> EngineeringCompaction | None:
     """Compact one stored session and persist the result. None if not found.
 
-    When the session carries Claude's own compaction summary, that is used as the
-    (cheap) input instead of the full transcript.
+    When the session carries a surface-native compaction summary, that is used
+    as the (cheap) input instead of the full transcript.
     """
     session = store.get_session(session_id)
     if session is None:
@@ -50,7 +54,7 @@ def compact_session(
     turns = store.get_turns(session_id)
     provider = provider or default_provider()
     compaction = Compactor(provider).compact(
-        session, turns, claude_summary=_claude_summary_for(session)
+        session, turns, claude_summary=_native_summary_for(session)
     )
     # Re-compaction (resume): carry over the engineer's local trust flags — `hold` MUST
     # survive (it's the auto-release opt-out), and a previously-released digest stays
