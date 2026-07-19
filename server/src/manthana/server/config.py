@@ -48,6 +48,12 @@ class ServerConfig:
     # Mark console cookies Secure (HTTPS-only). Off by default so local/dev HTTP
     # logins keep working; MUST be enabled on any public TLS deployment.
     cookie_secure: bool = False
+    # Public base URL of this deployment (no trailing slash), e.g.
+    # "https://api.latentspaces.in". Used ONLY to print shareable links (the wiki
+    # login link a founder sends a new engineer) — never for routing or auth, so
+    # a wrong value produces a bad link, never a security hole. Defaults to
+    # localhost so a self-hosted dev instance still prints something usable.
+    public_url: str = "http://127.0.0.1:8000"
     # Whole-request Content-Length ceiling (bytes). Slightly above max_raw_bytes
     # so the raw endpoint's own cap stays the binding limit on its path.
     max_request_bytes: int = 30_000_000
@@ -86,6 +92,25 @@ class ServerConfig:
     # Comma-separated Host allowlist for the MCP endpoint's DNS-rebinding check;
     # must include the public domain behind the ALB. "*" disables the check.
     mcp_allowed_hosts: str = "localhost,127.0.0.1,testserver"
+    # ── knowledge consolidation (compactions → org-wiki notes) ───────────
+    # Turns enriched digests into typed KnowledgeNotes (decisions, conventions,
+    # gotchas, benchmarks) via one cheap adjudication call per session. OFF by
+    # default, same posture as enable_enrichment: it spends real money in a
+    # background loop. The pass is directly callable/testable regardless.
+    enable_consolidation: bool = False
+    # Bulk adjudication, not reasoning — same tier logic as enrich_model.
+    consolidate_model: str = "claude-haiku-4-5"
+    consolidate_max_tokens: int = 2048
+    consolidate_interval_seconds: int = 300
+    # Per-org / whole-pass ceilings (mirror the enrichment bounds).
+    consolidate_batch_per_org: int = 25
+    consolidate_max_batch: int = 200
+    # Candidate retrieval: how many live notes one adjudication sees (top-k by
+    # cosine, plus entity-overlap hits), and how many notes the retrieval scans.
+    consolidate_top_k: int = 8
+    consolidate_note_scan: int = 500
+    # A compaction whose adjudication keeps failing is abandoned, never retried.
+    consolidate_max_attempts: int = 3
     # ── org skill mining bounds ──────────────────────────────────────────
     # Mining is O(n^2) in clustering plus one model call per cluster, so an
     # unbounded run over a large org held the request open until the gateway timed
@@ -165,6 +190,34 @@ class ServerConfig:
             raise ValueError(
                 f"enrich_max_age_days must be >= 1, got {self.enrich_max_age_days}"
             )
+        # Consolidation bounds — same rationale as the enrichment bounds above.
+        if not 1 <= self.consolidate_max_tokens <= 100_000:
+            raise ValueError(
+                f"consolidate_max_tokens must be 1..100000, got {self.consolidate_max_tokens}"
+            )
+        if self.consolidate_interval_seconds < 1:
+            raise ValueError(
+                "consolidate_interval_seconds must be >= 1, "
+                f"got {self.consolidate_interval_seconds}"
+            )
+        if self.consolidate_batch_per_org < 1:
+            raise ValueError(
+                f"consolidate_batch_per_org must be >= 1, got {self.consolidate_batch_per_org}"
+            )
+        if self.consolidate_max_batch < 1:
+            raise ValueError(
+                f"consolidate_max_batch must be >= 1, got {self.consolidate_max_batch}"
+            )
+        if self.consolidate_top_k < 1:
+            raise ValueError(f"consolidate_top_k must be >= 1, got {self.consolidate_top_k}")
+        if self.consolidate_note_scan < 1:
+            raise ValueError(
+                f"consolidate_note_scan must be >= 1, got {self.consolidate_note_scan}"
+            )
+        if self.consolidate_max_attempts < 1:
+            raise ValueError(
+                f"consolidate_max_attempts must be >= 1, got {self.consolidate_max_attempts}"
+            )
 
     @classmethod
     def from_env(cls) -> ServerConfig:
@@ -187,6 +240,7 @@ class ServerConfig:
             ),
             max_raw_bytes=int(env("MANTHANA_SERVER_MAX_RAW_BYTES", str(cls.max_raw_bytes))),
             cookie_secure=env("MANTHANA_SERVER_COOKIE_SECURE", "") in ("1", "true", "yes"),
+            public_url=env("MANTHANA_SERVER_PUBLIC_URL", cls.public_url).rstrip("/"),
             max_request_bytes=int(
                 env("MANTHANA_SERVER_MAX_REQUEST_BYTES", str(cls.max_request_bytes))
             ),
@@ -214,6 +268,37 @@ class ServerConfig:
             ),
             enrich_max_age_days=int(
                 env("MANTHANA_SERVER_ENRICH_MAX_AGE_DAYS", str(cls.enrich_max_age_days))
+            ),
+            enable_consolidation=(
+                env("MANTHANA_SERVER_ENABLE_CONSOLIDATION", "") in ("1", "true", "yes")
+            ),
+            consolidate_model=env("MANTHANA_SERVER_CONSOLIDATE_MODEL", cls.consolidate_model),
+            consolidate_max_tokens=int(
+                env("MANTHANA_SERVER_CONSOLIDATE_MAX_TOKENS", str(cls.consolidate_max_tokens))
+            ),
+            consolidate_interval_seconds=int(
+                env("MANTHANA_SERVER_CONSOLIDATE_INTERVAL", str(cls.consolidate_interval_seconds))
+            ),
+            consolidate_batch_per_org=int(
+                env(
+                    "MANTHANA_SERVER_CONSOLIDATE_BATCH_PER_ORG",
+                    str(cls.consolidate_batch_per_org),
+                )
+            ),
+            consolidate_max_batch=int(
+                env("MANTHANA_SERVER_CONSOLIDATE_MAX_BATCH", str(cls.consolidate_max_batch))
+            ),
+            consolidate_top_k=int(
+                env("MANTHANA_SERVER_CONSOLIDATE_TOP_K", str(cls.consolidate_top_k))
+            ),
+            consolidate_note_scan=int(
+                env("MANTHANA_SERVER_CONSOLIDATE_NOTE_SCAN", str(cls.consolidate_note_scan))
+            ),
+            consolidate_max_attempts=int(
+                env(
+                    "MANTHANA_SERVER_CONSOLIDATE_MAX_ATTEMPTS",
+                    str(cls.consolidate_max_attempts),
+                )
             ),
             privacy_mode=env("MANTHANA_SERVER_PRIVACY_MODE", cls.privacy_mode),
             mcp_allowed_hosts=env("MANTHANA_SERVER_MCP_ALLOWED_HOSTS", cls.mcp_allowed_hosts),

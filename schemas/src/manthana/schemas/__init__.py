@@ -26,6 +26,9 @@ from .enums import (
     ConsentState,
     FrictionCategory,
     Mode,
+    NoteKind,
+    NoteSource,
+    NoteStatus,
     Outcome,
     QueueStatus,
     Role,
@@ -34,6 +37,7 @@ from .enums import (
 )
 from .friction import FrictionPoint
 from .invite import decode_invite, encode_invite
+from .knowledge import BODY_CHAR_CAP, KnowledgeNote, NoteEntities
 from .session import Session
 from .turn import Turn
 
@@ -50,6 +54,9 @@ __all__ = [
     "ActionAuditEntry",
     "ActionQueueItem",
     "ConsentEntry",
+    "KnowledgeNote",
+    "NoteEntities",
+    "BODY_CHAR_CAP",
     # enums
     "Surface",
     "Role",
@@ -64,6 +71,9 @@ __all__ = [
     "ConsentState",
     "ActionOutcome",
     "QueueStatus",
+    "NoteKind",
+    "NoteStatus",
+    "NoteSource",
     # onboarding
     "encode_invite",
     "decode_invite",

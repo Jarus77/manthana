@@ -259,3 +259,48 @@ Loader: `scripts/serve.sh` (`set -a; source .env; set +a; uv run manthana-server
 serve`). Documented in `README.md` → "Running the server". Decided after an API
 key was pasted on a `!` command line during the live LLM-provider demo (rotate
 any key that touches a command line / shared transcript).
+
+### Org wiki — two wikis, no k-anon in the wiki layer (2026-07-20)
+
+Full spec: **`spec/manthana-org-wiki.md`** (locked). The short version, because
+two of these reverse earlier locks:
+
+- **Two wikis, not one.** The engineer's laptop dashboard is a *personal* wiki
+  (projects → sessions → full compaction cards → local search) that sees
+  everything including personal-mode and unreleased work, and is **zero-LLM**.
+  The org server hosts the *shared* wiki (notes + live rollups + Q&A + teaching).
+- **REVERSES "k-anonymity everywhere" for the wiki layer.** The k-anon floor made
+  the founder's flagship question ("what is Suraj working on and what did he
+  decide?") unanswerable for a consented ~10-person startup. The new pages/Q&A
+  paths (`pages.py`, `ask.py`, `wiki_ui.py`) apply **no** floor and treat Person
+  pages as first-class. The original contract survives untouched in `founder.py` /
+  `/v1/founder/query`; **no new code threads `k_anon_floor`**.
+- **REVISES the "Founder query" section above** for the wiki path: `/v1/founder/ask`
+  answers from consolidated notes first and drills into session digests only when
+  the notes are thin. The grounded-citation rule is unchanged and still
+  non-optional — citations now resolve to note ids *or* compaction ids.
+- **Human notes outrank AI notes.** The consolidator may dispute a `source="human"`
+  note with evidence but can never supersede it (enforced in
+  `consolidate.apply_verdicts`, not in a prompt). This is the mechanism behind
+  "correct it once and it sticks for everyone".
+- **Auto-publish, revert later**, and history is append-only — including revert,
+  which writes a new version rather than rewinding.
+
+### Engineer console logins — the team teaches, not just the founder (2026-07-20)
+
+Resolves the v1 limitation logged with the org wiki. A third console scope,
+`engineer`, carries **org + actor** and grants the WIKI only (read, ask, and
+teach); the founder's oversight surfaces redirect it to `/ui/home`.
+
+- **`engineer` is NOT the `agent` scope.** An agent token is a laptop sync
+  credential in a config file; making it a browser login would turn file-read
+  into console access, and it has no human identity to attribute edits to. Each
+  `verify_*` rejects the other scopes (pinned both directions in tests).
+- **Notes are authored under the engineer's actor id**, so revision history shows
+  which colleague corrected what — teaching becomes attributable team behaviour
+  rather than anonymous curation.
+- **Founders mint their own team's logins** (`POST /v1/engineer-tokens` or the
+  console's "Team access" panel), scoped to their own org. Operator-only minting
+  would leave the shared context with a single reader.
+- Adds `MANTHANA_SERVER_PUBLIC_URL`, used **only** to print the shareable login
+  link — never for routing or auth.

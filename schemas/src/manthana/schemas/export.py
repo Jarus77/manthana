@@ -23,6 +23,7 @@ from .action import Action, ActionAuditEntry, ActionQueueItem
 from .compaction import BaseCompaction, EngineeringCompaction
 from .consent import ConsentEntry
 from .friction import FrictionPoint
+from .knowledge import KnowledgeNote
 from .session import Session
 from .turn import Turn
 
@@ -36,6 +37,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "action_audit_entry": ActionAuditEntry,
     "action_queue_item": ActionQueueItem,
     "consent_entry": ConsentEntry,
+    "knowledge_note": KnowledgeNote,
 }
 
 

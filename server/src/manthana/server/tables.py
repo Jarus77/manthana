@@ -216,6 +216,63 @@ class PurgeAuditRow(SQLModel, table=True):
     data: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))  # selector + sample ids
 
 
+class KnowledgeNoteRow(SQLModel, table=True):
+    """One version of an org-wiki KnowledgeNote (append-only; versions are rows).
+
+    Same document-store pattern as ``released_compaction``: typed index columns
+    for page projections + the authoritative ``data`` JSON. ``project`` is the
+    denormalized first ``entities.projects`` slug ("" = org-wide) — the
+    Project-page index. New TABLE so ``create_all`` upgrades existing DBs.
+    """
+
+    __tablename__ = "knowledge_note"  # type: ignore[assignment]
+    id: str = Field(primary_key=True)  # org-namespaced: org::kn-xxxx
+    org_id: str = Field(index=True)
+    note_id: str = Field(index=True)
+    kind: str = Field(index=True)
+    scope: str = Field(index=True)  # "org" | "project:<slug>"
+    project: str = Field(default="", index=True)
+    status: str = Field(index=True)
+    source: str = Field(index=True)
+    updated_at: str = Field(index=True)  # UTC ISO — drives the "this week" feed
+    created_at: str
+    data: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
+
+
+class KnowledgeNoteVectorRow(SQLModel, table=True):
+    """Cached embedding for a KnowledgeNote (mirror of the compaction vector
+    cache). Derived/regenerable; keyed on (dim, text_hash) for staleness."""
+
+    __tablename__ = "knowledge_note_vector"  # type: ignore[assignment]
+    id: str = Field(primary_key=True)  # org-namespaced: org::note_id
+    org_id: str = Field(index=True)
+    note_id: str = Field(index=True)
+    dim: int
+    text_hash: str = Field(index=True)
+    vec: list[float] = Field(sa_column=Column(JSON, nullable=False))
+
+
+class ConsolidationStateRow(SQLModel, table=True):
+    """Per-compaction bookkeeping for the knowledge-consolidation pass.
+
+    INVERTED vs enrichment_state: consolidation writes a ``done`` row for every
+    successfully processed compaction — that row is how the pass finds
+    unprocessed work (enriched AND no done-row), since ``source`` flips to
+    "full"/"claude_summary" on enrichment and can't double as the consolidation
+    marker. ``failed`` rows carry bounded ``attempts``; ``abandoned`` is
+    terminal. New TABLE so ``create_all`` upgrades existing DBs.
+    """
+
+    __tablename__ = "consolidation_state"  # type: ignore[assignment]
+    id: str = Field(primary_key=True)  # org-namespaced: org::compaction_id
+    org_id: str = Field(index=True)
+    compaction_id: str = Field(index=True)
+    state: str = Field(default="done", index=True)  # done | failed | abandoned
+    attempts: int = Field(default=0)
+    detail: str = Field(default="")
+    updated_at: str
+
+
 SERVER_TABLES = [
     OrgRow,
     TeamRow,
@@ -232,6 +289,9 @@ SERVER_TABLES = [
     OrgPrivacyRow,
     EnrichmentStateRow,
     PurgeAuditRow,
+    KnowledgeNoteRow,
+    KnowledgeNoteVectorRow,
+    ConsolidationStateRow,
 ]
 
 __all__ = [
@@ -250,5 +310,8 @@ __all__ = [
     "OrgPrivacyRow",
     "EnrichmentStateRow",
     "PurgeAuditRow",
+    "KnowledgeNoteRow",
+    "KnowledgeNoteVectorRow",
+    "ConsolidationStateRow",
     "SERVER_TABLES",
 ]

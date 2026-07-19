@@ -223,6 +223,27 @@ def make_enrich_provider(config: ServerConfig) -> LLMProvider:
     return MockProvider("{}")
 
 
+def make_consolidate_provider(config: ServerConfig) -> LLMProvider:
+    """Provider for knowledge consolidation (compactions → org-wiki notes).
+
+    Mirror of ``make_enrich_provider``: bulk adjudication runs on a cheap model
+    (``consolidate_model``), separate from the founder-narrative tier. Same
+    degrade-don't-crash contract.
+    """
+    if config.llm_provider == "anthropic":
+        try:
+            inner = AnthropicProvider(
+                model=config.consolidate_model, max_tokens=config.consolidate_max_tokens
+            )
+        except Exception as exc:  # noqa: BLE001 - missing SDK/key → degrade, don't crash boot
+            _log.warning(
+                "anthropic consolidation provider unavailable (%s); falling back to mock", exc
+            )
+            return MockProvider("{}")
+        return ResilientProvider(inner)
+    return MockProvider("{}")
+
+
 __all__ = [
     "LLMProvider",
     "MockProvider",
@@ -231,4 +252,5 @@ __all__ = [
     "ResilientProvider",
     "make_provider",
     "make_enrich_provider",
+    "make_consolidate_provider",
 ]

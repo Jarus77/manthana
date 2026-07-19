@@ -30,26 +30,30 @@ from manthana.schemas import CompactionAdapter
 from pydantic import BaseModel, ValidationError
 
 from .analyzer import analyze_counterfactual_costs
+from .ask import ask
 from .auth import (
     AuthError,
     TeamClaims,
+    issue_engineer_token,
     issue_founder_token,
     issue_team_token,
     verify_founder_token,
     verify_team_token,
 )
 from .config import ServerConfig
+from .consolidate import consolidate_org, consolidate_provider_for, run_consolidation_pass
 from .digest import build_weekly_digest
 from .enrich import enrich_org, enrich_provider_for, run_enrichment_pass
 from .founder import run_query, team_topics, thread
 from .hardening import install_hardening
-from .llm import LLMProvider, make_enrich_provider, make_provider
+from .llm import LLMProvider, make_consolidate_provider, make_enrich_provider, make_provider
 from .metering import MeteredProvider, QuotaExceededError, month_key
 from .mining import FAILED, QUOTA, run_mining
 from .purge import PurgeSelector, purge
 from .storage import ObjectStore, make_object_store
 from .store import ServerStore
 from .ui import mount_ui
+from .wiki_ui import mount_wiki_ui
 
 
 class CreateOrg(BaseModel):
@@ -96,6 +100,11 @@ class FounderQueryBody(BaseModel):
     source: str | None = None  # None=all (default), "full", or "claude_summary"
 
 
+class AskBody(BaseModel):
+    org_id: str
+    query: str
+
+
 class MineSkillsBody(BaseModel):
     org_id: str
 
@@ -110,6 +119,12 @@ class SetPrivacyBody(BaseModel):
 
 class FounderTokenBody(BaseModel):
     org_id: str
+    expires_days: int = 365
+
+
+class EngineerTokenBody(BaseModel):
+    org_id: str
+    actor: str  # the engineer's org email — becomes their note-authorship identity
     expires_days: int = 365
 
 
@@ -178,11 +193,17 @@ def create_app(
     # org so it counts against the same monthly cap as the founder pipeline.
     enrich_provider = make_enrich_provider(config) if config.enable_enrichment else None
 
+    # Knowledge consolidation: same posture — a batched background pass turning
+    # enriched digests into org-wiki notes, on its own cheap-model provider.
+    consolidate_provider = (
+        make_consolidate_provider(config) if config.enable_consolidation else None
+    )
+
     lifespan: Any = None
-    if _mcp_server is not None or enrich_provider is not None:
-        # Compose both lifespans with an AsyncExitStack so enabling enrichment can
-        # never disturb the MCP session manager (or vice-versa) — each is entered
-        # only when its own feature is on, and both unwind in order on shutdown.
+    if _mcp_server is not None or enrich_provider is not None or consolidate_provider is not None:
+        # Compose the lifespans with an AsyncExitStack so enabling one background
+        # feature can never disturb another — each is entered only when its own
+        # feature is on, and all unwind in order on shutdown.
         from contextlib import AsyncExitStack, asynccontextmanager
 
         @asynccontextmanager
@@ -193,6 +214,9 @@ def create_app(
                 if enrich_provider is not None:
                     task = asyncio.create_task(_enrichment_loop(enrich_provider))
                     stack.callback(task.cancel)
+                if consolidate_provider is not None:
+                    ctask = asyncio.create_task(_consolidation_loop(consolidate_provider))
+                    stack.callback(ctask.cancel)
                 yield
 
         lifespan = _lifespan
@@ -215,6 +239,24 @@ def create_app(
                 raise
             except Exception:  # noqa: BLE001 - a bad pass must not kill the loop
                 _log.exception("enrichment pass failed; will retry next interval")
+
+    async def _consolidation_loop(inner: LLMProvider) -> None:
+        """Sibling of ``_enrichment_loop``: periodic, off-thread, error-swallowing.
+        Runs on its own interval so a consolidation backlog can't delay enrichment
+        (which feeds it) or vice-versa."""
+        provider_for = consolidate_provider_for(store, config, inner)
+        while True:
+            try:
+                await asyncio.sleep(config.consolidate_interval_seconds)
+                stats = await asyncio.to_thread(
+                    run_consolidation_pass, store, config, provider_for
+                )
+                if stats.consolidated or stats.failed:
+                    _log.info("consolidation pass: %s", stats.as_dict())
+            except asyncio.CancelledError:  # shutdown
+                raise
+            except Exception:  # noqa: BLE001 - a bad pass must not kill the loop
+                _log.exception("consolidation pass failed; will retry next interval")
 
     app = FastAPI(title="Manthana Server", lifespan=lifespan)
     install_hardening(app, config)
@@ -429,6 +471,36 @@ def create_app(
             "coverage": result.coverage.__dict__ if result.coverage else None,
         }
 
+    @app.post("/v1/founder/ask")
+    def founder_ask(
+        body: AskBody,
+        check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
+    ) -> dict[str, Any]:
+        """Ask the org wiki. Answers from consolidated notes first, drilling into
+        session digests only when the notes don't cover the question. No k-anon
+        gate on this path (see ask.py / pages.py)."""
+        check_org(body.org_id)
+        result = ask(
+            store, config, org_id=body.org_id, query=body.query,
+            provider=org_provider(body.org_id),
+        )
+        store.record_founder_query(
+            org_id=body.org_id,
+            query=body.query,
+            insufficient=result.insufficient_data,
+            citations=result.citations,
+            individual=True,  # the wiki path can always name people
+        )
+        return {
+            "filter": result.filter.model_dump(),
+            "narrative": result.narrative,
+            "note_citations": result.note_citations,
+            "compaction_citations": result.compaction_citations,
+            "insufficient_data": result.insufficient_data,
+            "coverage": result.coverage_note(),
+            "drilled": result.drilled,
+        }
+
     @app.get("/v1/founder/topics")
     def founder_topics(
         org_id: str,
@@ -544,6 +616,29 @@ def create_app(
         )
         return {"token": token, "org_id": body.org_id}
 
+    @app.post("/v1/engineer-tokens")
+    def mint_engineer_token(
+        body: EngineerTokenBody,
+        check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
+    ) -> dict[str, str]:
+        """Mint a wiki login for one named engineer.
+
+        Deliberately NOT admin-only: a founder must be able to onboard their own
+        team to the shared context without routing every hire through the
+        operator, or the wiki stays a single-reader tool. Scoped to the caller's
+        own org (``require_founder_access`` + ``check_org``), and it grants the
+        WIKI only — read and teach, never the oversight surfaces.
+        """
+        check_org(body.org_id)
+        actor = body.actor.strip()
+        if not actor:
+            raise HTTPException(status_code=422, detail="actor is required")
+        token = issue_engineer_token(
+            config.jwt_secret, org_id=body.org_id, actor=actor,
+            expires_days=max(1, body.expires_days),
+        )
+        return {"token": token, "org_id": body.org_id, "actor": actor}
+
     @app.get("/v1/founder/digest")
     def founder_digest(
         org_id: str,
@@ -658,6 +753,54 @@ def create_app(
             config,
             org_id=org_id,
             limit=config.enrich_batch_per_org,
+        )
+        return stats.as_dict()
+
+    @app.get("/v1/admin/consolidation")
+    def consolidation_status(
+        org_id: str, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """Consolidation backlog for an org: what's waiting to become notes, what
+        got stuck, and the current note counts by status."""
+        notes = store.query_notes(org_id, exclude_superseded=False)
+        by_status: dict[str, int] = {}
+        for n in notes:
+            by_status[str(n.status)] = by_status.get(str(n.status), 0) + 1
+        return {
+            "org_id": org_id,
+            "enabled": config.enable_consolidation,
+            "model": config.consolidate_model,
+            "unconsolidated": store.count_unconsolidated(org_id),
+            "notes": by_status,
+            "stuck": [
+                {
+                    "compaction_id": r.compaction_id,
+                    "state": r.state,
+                    "attempts": r.attempts,
+                    "detail": r.detail,
+                    "updated_at": r.updated_at,
+                }
+                for r in store.list_consolidation_state(org_id)
+                if r.state != "done"
+            ],
+        }
+
+    @app.post("/v1/admin/consolidation/run")
+    def consolidation_run(
+        org_id: str, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """Run one consolidation pass for a single org now, instead of waiting for
+        the background interval. Same bounded batch and same metering."""
+        inner = consolidate_provider if consolidate_provider is not None else provider
+        stats = consolidate_org(
+            store,
+            MeteredProvider(
+                inner, store, org_id,
+                store.get_org_quota(org_id) or config.llm_monthly_cap_usd,
+            ),
+            config,
+            org_id=org_id,
+            limit=config.consolidate_batch_per_org,
         )
         return stats.as_dict()
 
@@ -790,6 +933,9 @@ def create_app(
         return {"proposals": run.proposals, "queued": run.queued, "coverage": run.as_dict()}
 
     mount_ui(app, config, store, provider, object_store, provider_for=org_provider)
+    # The wiki console shares mount_ui's cookie session (path='/ui'), so it must
+    # be mounted on the same app and under the same path prefix.
+    mount_wiki_ui(app, config, store, provider, provider_for=org_provider)
     if mcp_asgi is not None:
         app.mount("/mcp", mcp_asgi)
     return app

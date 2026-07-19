@@ -115,6 +115,48 @@ class QueueStatus(StrEnum):
     rejected = "rejected"
 
 
+class NoteKind(StrEnum):
+    """What kind of durable claim a KnowledgeNote makes.
+
+    Notes hold only durable knowledge — never activity/status ("what is X working
+    on" is a live rollup over recent compactions, so it can't go stale).
+    ``faq`` is reserved: demand mining populates it in a later phase.
+    """
+
+    decision = "decision"
+    convention = "convention"
+    gotcha = "gotcha"
+    failure_pattern = "failure_pattern"
+    procedure_ref = "procedure_ref"
+    faq = "faq"
+    benchmark = "benchmark"
+
+
+class NoteStatus(StrEnum):
+    """Lifecycle of a KnowledgeNote (auto-publish, revert later).
+
+    AI-mined notes go live immediately as ``candidate`` (rendered with an
+    "unreviewed" badge); recurrence or a human confirm promotes to
+    ``established``. ``disputed`` = contradicting evidence arrived (badge, never
+    a silent rewrite). ``stale`` = evidence purged out from under an AI note.
+    ``superseded`` = replaced by a newer version (versions are rows; never delete).
+    """
+
+    candidate = "candidate"
+    established = "established"
+    disputed = "disputed"
+    stale = "stale"
+    superseded = "superseded"
+
+
+class NoteSource(StrEnum):
+    """Who authored a note version. Human notes have top authority: AI may
+    dispute them with evidence but can never supersede them."""
+
+    ai = "ai"
+    human = "human"
+
+
 __all__ = [
     "Surface",
     "Role",
@@ -129,4 +171,7 @@ __all__ = [
     "ConsentState",
     "ActionOutcome",
     "QueueStatus",
+    "NoteKind",
+    "NoteStatus",
+    "NoteSource",
 ]

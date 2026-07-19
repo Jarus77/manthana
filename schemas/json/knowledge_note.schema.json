@@ -1,0 +1,270 @@
+{
+  "$defs": {
+    "NoteEntities": {
+      "additionalProperties": false,
+      "description": "What a note is *about* \u2014 drives page matching and candidate retrieval.",
+      "properties": {
+        "concepts": {
+          "description": "Free concepts",
+          "items": {
+            "type": "string"
+          },
+          "title": "Concepts",
+          "type": "array"
+        },
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Files",
+          "type": "array"
+        },
+        "libraries": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Libraries",
+          "type": "array"
+        },
+        "projects": {
+          "description": "Project slugs",
+          "items": {
+            "type": "string"
+          },
+          "title": "Projects",
+          "type": "array"
+        }
+      },
+      "title": "NoteEntities",
+      "type": "object"
+    },
+    "NoteKind": {
+      "description": "What kind of durable claim a KnowledgeNote makes.\n\nNotes hold only durable knowledge \u2014 never activity/status (\"what is X working\non\" is a live rollup over recent compactions, so it can't go stale).\n``faq`` is reserved: demand mining populates it in a later phase.",
+      "enum": [
+        "decision",
+        "convention",
+        "gotcha",
+        "failure_pattern",
+        "procedure_ref",
+        "faq",
+        "benchmark"
+      ],
+      "title": "NoteKind",
+      "type": "string"
+    },
+    "NoteSource": {
+      "description": "Who authored a note version. Human notes have top authority: AI may\ndispute them with evidence but can never supersede them.",
+      "enum": [
+        "ai",
+        "human"
+      ],
+      "title": "NoteSource",
+      "type": "string"
+    },
+    "NoteStatus": {
+      "description": "Lifecycle of a KnowledgeNote (auto-publish, revert later).\n\nAI-mined notes go live immediately as ``candidate`` (rendered with an\n\"unreviewed\" badge); recurrence or a human confirm promotes to\n``established``. ``disputed`` = contradicting evidence arrived (badge, never\na silent rewrite). ``stale`` = evidence purged out from under an AI note.\n``superseded`` = replaced by a newer version (versions are rows; never delete).",
+      "enum": [
+        "candidate",
+        "established",
+        "disputed",
+        "stale",
+        "superseded"
+      ],
+      "title": "NoteStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One durable, cited claim in the org knowledge base.",
+  "properties": {
+    "actors": {
+      "description": "Derived from evidence compactions' actors \u2014 powers Person pages",
+      "items": {
+        "type": "string"
+      },
+      "title": "Actors",
+      "type": "array"
+    },
+    "author": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Actor id / \"founder\" / \"admin\" for human notes",
+      "title": "Author"
+    },
+    "body": {
+      "description": "Markdown, target <300 tokens",
+      "title": "Body",
+      "type": "string"
+    },
+    "confidence": {
+      "default": 0.5,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "confirmed_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Human endorsement badge without changing source",
+      "title": "Confirmed By"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "disputed_by": {
+      "description": "Compaction ids of contradicting evidence",
+      "items": {
+        "type": "string"
+      },
+      "title": "Disputed By",
+      "type": "array"
+    },
+    "entities": {
+      "$ref": "#/$defs/NoteEntities"
+    },
+    "evidence": {
+      "description": "Compaction ids grounding this claim",
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "id": {
+      "description": "Stable note id (kn-<hex12>)",
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/NoteKind"
+    },
+    "last_confirmed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Confirmed At"
+    },
+    "links": {
+      "description": "Related note ids (schema seam; unpopulated in v1)",
+      "items": {
+        "type": "string"
+      },
+      "title": "Links",
+      "type": "array"
+    },
+    "metric": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Metric"
+    },
+    "org_id": {
+      "title": "Org Id",
+      "type": "string"
+    },
+    "scope": {
+      "default": "org",
+      "description": "\"org\" | \"project:<slug>\"",
+      "title": "Scope",
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/NoteSource",
+      "default": "ai"
+    },
+    "status": {
+      "$ref": "#/$defs/NoteStatus",
+      "default": "candidate"
+    },
+    "superseded_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Superseded By"
+    },
+    "supersedes": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Previous version's note id",
+      "title": "Supersedes"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "value": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Value"
+    },
+    "version": {
+      "default": 1,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "id",
+    "org_id",
+    "kind",
+    "title",
+    "body",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "KnowledgeNote",
+  "type": "object"
+}

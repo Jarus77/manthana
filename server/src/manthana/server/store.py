@@ -19,7 +19,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from manthana.schemas import BaseCompaction, CompactionAdapter
+from manthana.schemas import BaseCompaction, CompactionAdapter, KnowledgeNote, NoteStatus
 from sqlalchemy import func, text
 from sqlalchemy.engine import Engine
 from sqlmodel import Session as DBSession
@@ -29,9 +29,12 @@ from .db import create_db_engine, init_db
 from .tables import (
     ActionQueueRow,
     ActorRow,
+    ConsolidationStateRow,
     EnrichmentStateRow,
     FounderQueryAuditRow,
     InviteRow,
+    KnowledgeNoteRow,
+    KnowledgeNoteVectorRow,
     LlmUsageRow,
     OrgConsentRow,
     OrgPrivacyRow,
@@ -530,6 +533,276 @@ class ServerStore:
         """Compaction ids the pass must stop retrying."""
         return {r.compaction_id for r in self.list_enrichment_state(org_id, state="abandoned")}
 
+    # ── knowledge notes (org wiki; versions are rows, never deleted) ──────
+    @staticmethod
+    def _note_project(note: KnowledgeNote) -> str:
+        """Denormalized Project-page index: first entities slug, else the scope
+        slug, else "" (org-wide)."""
+        if note.entities.projects:
+            return note.entities.projects[0]
+        if note.scope.startswith("project:"):
+            return note.scope.removeprefix("project:")
+        return ""
+
+    def _note_row(self, note: KnowledgeNote) -> KnowledgeNoteRow:
+        return KnowledgeNoteRow(
+            id=_pk(note.org_id, note.id),
+            org_id=note.org_id,
+            note_id=note.id,
+            kind=str(note.kind),
+            scope=note.scope,
+            project=self._note_project(note),
+            status=str(note.status),
+            source=str(note.source),
+            updated_at=_utc_iso(note.updated_at),
+            created_at=_utc_iso(note.created_at),
+            data=note.model_dump(mode="json"),
+        )
+
+    def upsert_note(self, note: KnowledgeNote) -> None:
+        with DBSession(self._engine) as db:
+            db.merge(self._note_row(note))
+            db.commit()
+
+    def get_note(self, note_id: str, org_id: str) -> KnowledgeNote | None:
+        with DBSession(self._engine) as db:
+            row = db.get(KnowledgeNoteRow, _pk(org_id, note_id))
+            if row is None:
+                return None
+            return KnowledgeNote.model_validate(row.data)
+
+    def query_notes(
+        self,
+        org_id: str,
+        *,
+        kind: str | None = None,
+        status: str | None = None,
+        source: str | None = None,
+        project: str | None = None,
+        scope: str | None = None,
+        since: str | None = None,
+        exclude_superseded: bool = True,
+        limit: int | None = None,
+    ) -> list[KnowledgeNote]:
+        """Live notes for an org, newest-updated first. ``exclude_superseded``
+        (the default) returns only current versions — history is fetched
+        explicitly via ``note_history``."""
+        with DBSession(self._engine) as db:
+            stmt = select(KnowledgeNoteRow).where(KnowledgeNoteRow.org_id == org_id)
+            if kind is not None:
+                stmt = stmt.where(KnowledgeNoteRow.kind == kind)
+            if status is not None:
+                stmt = stmt.where(KnowledgeNoteRow.status == status)
+            elif exclude_superseded:
+                stmt = stmt.where(KnowledgeNoteRow.status != str(NoteStatus.superseded))
+            if source is not None:
+                stmt = stmt.where(KnowledgeNoteRow.source == source)
+            if project is not None:
+                stmt = stmt.where(func.lower(KnowledgeNoteRow.project) == project.lower())
+            if scope is not None:
+                stmt = stmt.where(KnowledgeNoteRow.scope == scope)
+            since_norm = _normalize_since(since)
+            if since_norm is not None:
+                stmt = stmt.where(col(KnowledgeNoteRow.updated_at) >= since_norm)
+            stmt = stmt.order_by(KnowledgeNoteRow.updated_at.desc())  # type: ignore[attr-defined]
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            return [KnowledgeNote.model_validate(row.data) for row in db.exec(stmt)]
+
+    def supersede_note(self, old_id: str, new_note: KnowledgeNote, org_id: str) -> None:
+        """Insert the new version and retire the old one in ONE transaction, so a
+        crash can never leave two live versions of the same claim. Append-only:
+        the old row survives with ``status="superseded"`` + a forward pointer."""
+        if new_note.supersedes != old_id:
+            new_note = new_note.model_copy(update={"supersedes": old_id})
+        with DBSession(self._engine) as db:
+            old = db.get(KnowledgeNoteRow, _pk(org_id, old_id))
+            if old is None:
+                raise ValueError(f"note {old_id} not found in org {org_id}")
+            # The old version keeps its own updated_at — it wasn't edited, it was
+            # replaced; recency queries should surface the new version only.
+            old_note = KnowledgeNote.model_validate(old.data).model_copy(
+                update={"status": NoteStatus.superseded, "superseded_by": new_note.id}
+            )
+            old.status = str(NoteStatus.superseded)
+            old.data = old_note.model_dump(mode="json")
+            db.add(old)
+            db.merge(self._note_row(new_note))
+            db.commit()
+
+    _HISTORY_CAP = 50
+
+    def note_history(self, note_id: str, org_id: str) -> list[KnowledgeNote]:
+        """The version chain ending at ``note_id``, newest first (bounded walk)."""
+        out: list[KnowledgeNote] = []
+        current: str | None = note_id
+        while current is not None and len(out) < self._HISTORY_CAP:
+            note = self.get_note(current, org_id)
+            if note is None:
+                break
+            out.append(note)
+            current = note.supersedes
+        return out
+
+    # ── note vectors (semantic retrieval cache for the wiki/Q&A layer) ────
+    def note_vector_meta(self, org_id: str) -> dict[str, tuple[int, str]]:
+        with DBSession(self._engine) as db:
+            stmt = select(KnowledgeNoteVectorRow).where(KnowledgeNoteVectorRow.org_id == org_id)
+            return {r.note_id: (r.dim, r.text_hash) for r in db.exec(stmt)}
+
+    def upsert_note_vector(
+        self, org_id: str, note_id: str, *, dim: int, text_hash: str, vec: list[float]
+    ) -> None:
+        with DBSession(self._engine) as db:
+            db.merge(
+                KnowledgeNoteVectorRow(
+                    id=_pk(org_id, note_id),
+                    org_id=org_id,
+                    note_id=note_id,
+                    dim=dim,
+                    text_hash=text_hash,
+                    vec=vec,
+                )
+            )
+            db.commit()
+
+    def get_note_vectors(self, org_id: str, ids: list[str], *, dim: int) -> dict[str, list[float]]:
+        wanted = list(dict.fromkeys(ids))
+        out: dict[str, list[float]] = {}
+        with DBSession(self._engine) as db:
+            for i in range(0, len(wanted), 900):
+                chunk = wanted[i : i + 900]
+                stmt = (
+                    select(KnowledgeNoteVectorRow)
+                    .where(KnowledgeNoteVectorRow.org_id == org_id)
+                    .where(col(KnowledgeNoteVectorRow.note_id).in_(chunk))
+                    .where(KnowledgeNoteVectorRow.dim == dim)
+                )
+                for r in db.exec(stmt):
+                    out[r.note_id] = r.vec
+        return out
+
+    # ── consolidation bookkeeping (compactions → knowledge notes) ─────────
+    # INVERTED vs enrichment: a ``done`` row marks each processed compaction,
+    # because ``source`` flips on enrichment and can't double as this marker.
+    def consolidation_meta(self, org_id: str) -> dict[str, ConsolidationStateRow]:
+        with DBSession(self._engine) as db:
+            stmt = select(ConsolidationStateRow).where(ConsolidationStateRow.org_id == org_id)
+            return {r.compaction_id: r for r in db.exec(stmt)}
+
+    def list_unconsolidated(
+        self, org_id: str, *, limit: int = 25, skip_ids: set[str] | None = None
+    ) -> list[BaseCompaction]:
+        """Enriched, released compactions with no ``done``/``abandoned`` row,
+        newest first. ``failed`` rows stay eligible — the pass bounds retries via
+        the attempt counter. Bounded scan like enrichment."""
+        skip = skip_ids or set()
+        meta = self.consolidation_meta(org_id)
+        out: list[BaseCompaction] = []
+        with DBSession(self._engine) as db:
+            stmt = (
+                select(ReleasedCompactionRow)
+                .where(ReleasedCompactionRow.org_id == org_id)
+                .where(ReleasedCompactionRow.released == True)  # noqa: E712 - SQL boolean column
+                .order_by(ReleasedCompactionRow.started_at.desc())  # type: ignore[attr-defined]
+                .limit(self._ENRICH_SCAN_CAP)
+            )
+            for row in db.exec(stmt):
+                if row.data.get("source") == "pending":
+                    continue  # not enriched yet — nothing qualitative to consolidate
+                compaction = CompactionAdapter.validate_python(row.data)
+                state = meta.get(compaction.id)
+                if state is not None and state.state in ("done", "abandoned"):
+                    continue
+                if compaction.id in skip:
+                    continue
+                out.append(compaction)
+                if len(out) >= limit:
+                    break
+        return out
+
+    def count_unconsolidated(self, org_id: str) -> int:
+        """Bounded count behind the admin consolidation view."""
+        return len(self.list_unconsolidated(org_id, limit=self._ENRICH_SCAN_CAP))
+
+    def orgs_with_unconsolidated(self) -> list[str]:
+        """Orgs with at least one enriched-but-unconsolidated digest — a quiet
+        org costs the batch pass nothing."""
+        return sorted(
+            org.id
+            for org in self.list_orgs()
+            if self.list_unconsolidated(org.id, limit=1)
+        )
+
+    def mark_consolidated(self, org_id: str, compaction_id: str) -> None:
+        now = _now_iso()
+        with DBSession(self._engine) as db:
+            db.merge(
+                ConsolidationStateRow(
+                    id=_pk(org_id, compaction_id),
+                    org_id=org_id,
+                    compaction_id=compaction_id,
+                    state="done",
+                    updated_at=now,
+                )
+            )
+            db.commit()
+
+    def record_consolidation_failure(
+        self, org_id: str, compaction_id: str, *, detail: str = ""
+    ) -> int:
+        """Bump the attempt counter for a compaction that could NOT be
+        consolidated. Returns the new count so the caller can abandon it."""
+        now = _now_iso()
+        with DBSession(self._engine) as db:
+            row = db.get(ConsolidationStateRow, _pk(org_id, compaction_id))
+            if row is None:
+                row = ConsolidationStateRow(
+                    id=_pk(org_id, compaction_id),
+                    org_id=org_id,
+                    compaction_id=compaction_id,
+                    attempts=0,
+                    updated_at=now,
+                )
+            row.attempts += 1
+            row.state = "failed"
+            row.detail = detail[:500]
+            row.updated_at = now
+            db.add(row)
+            db.commit()
+            return row.attempts
+
+    def mark_consolidation_abandoned(
+        self, org_id: str, compaction_id: str, *, detail: str
+    ) -> None:
+        """Terminal: never picked up again (attempts exhausted)."""
+        now = _now_iso()
+        with DBSession(self._engine) as db:
+            row = db.get(ConsolidationStateRow, _pk(org_id, compaction_id))
+            if row is None:
+                row = ConsolidationStateRow(
+                    id=_pk(org_id, compaction_id),
+                    org_id=org_id,
+                    compaction_id=compaction_id,
+                    attempts=1,
+                    updated_at=now,
+                )
+            row.state = "abandoned"
+            row.detail = detail[:500]
+            row.updated_at = now
+            db.add(row)
+            db.commit()
+
+    def list_consolidation_state(
+        self, org_id: str, *, state: str | None = None, limit: int = 200
+    ) -> list[ConsolidationStateRow]:
+        with DBSession(self._engine) as db:
+            stmt = select(ConsolidationStateRow).where(ConsolidationStateRow.org_id == org_id)
+            if state is not None:
+                stmt = stmt.where(ConsolidationStateRow.state == state)
+            stmt = stmt.order_by(ConsolidationStateRow.updated_at.desc()).limit(limit)  # type: ignore[attr-defined]
+            return list(db.exec(stmt))
+
     # ── purge (admin-only; see purge.py for the selection predicate) ──────
     def delete_compactions(self, org_id: str, ids: list[str]) -> tuple[int, int]:
         """Delete compactions and everything DERIVED from them, in ONE transaction.
@@ -570,6 +843,41 @@ class ServerStore:
                 state = db.get(EnrichmentStateRow, pk)
                 if state is not None:
                     db.delete(state)
+                cstate = db.get(ConsolidationStateRow, pk)
+                if cstate is not None:
+                    db.delete(cstate)
+            # Knowledge notes cite compactions as evidence; a purged id must not
+            # keep grounding claims. Strip citations in the same transaction; an
+            # AI note left with no evidence goes ``stale`` (human notes stand on
+            # their author's authority, not their evidence).
+            purged = set(ids)
+            now = _now_iso()
+            note_stmt = select(KnowledgeNoteRow).where(KnowledgeNoteRow.org_id == org_id)
+            for note_row in db.exec(note_stmt):
+                data = note_row.data
+                evidence = [e for e in data.get("evidence", []) if e not in purged]
+                disputed = [d for d in data.get("disputed_by", []) if d not in purged]
+                if len(evidence) == len(data.get("evidence", [])) and len(disputed) == len(
+                    data.get("disputed_by", [])
+                ):
+                    continue
+                note = KnowledgeNote.model_validate(data)
+                update: dict[str, Any] = {
+                    "evidence": evidence,
+                    "disputed_by": disputed,
+                    "updated_at": _parse_iso(now),
+                }
+                if (
+                    not evidence
+                    and str(note.source) == "ai"
+                    and str(note.status) not in ("superseded",)
+                ):
+                    update["status"] = NoteStatus.stale
+                note = note.model_copy(update=update)
+                note_row.status = str(note.status)
+                note_row.updated_at = now
+                note_row.data = note.model_dump(mode="json")
+                db.add(note_row)
             db.commit()
         return removed, vectors
 

@@ -15,6 +15,16 @@ from __future__ import annotations
 from .cluster import CompactionCluster, cluster_compactions, community_detection, recurring
 from .embed import Embedder, HashingEmbedder, default_embedder
 from .miner import K_ANON_FLOOR, SkillMiner, SkillProposal, mine_org, write_proposal
+from .projections import (
+    ActorActivity,
+    ProjectRollup,
+    SessionCard,
+    activity_rollup,
+    filter_since,
+    project_rollups,
+    session_card,
+    session_cards,
+)
 from .provenance import Provenance, make_provenance
 from .provider import LLMProvider, SupportsRedaction
 from .skillmd import SkillDraft, render_skill_md, validate_draft
@@ -41,4 +51,12 @@ __all__ = [
     "make_provenance",
     "LLMProvider",
     "SupportsRedaction",
+    "ProjectRollup",
+    "SessionCard",
+    "ActorActivity",
+    "project_rollups",
+    "session_card",
+    "session_cards",
+    "activity_rollup",
+    "filter_since",
 ]
