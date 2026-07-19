@@ -27,6 +27,21 @@ from manthana.server.storage import InMemoryObjectStore
 # wraps long option names, so pin a wide terminal rather than assert width-dependent output.
 _WIDE = {"COLUMNS": "200"}
 
+
+def _param_opts(typer_app: object, command: str) -> set[str]:
+    """Every option string a CLI command declares (e.g. "--confirm").
+
+    Read off the Click command that Typer builds, so the assertion tests the real
+    parameter contract instead of whatever rich decided to render at the current
+    terminal width and tty-ness.
+    """
+    import typer.main
+
+    group = typer.main.get_command(typer_app)
+    cmd = group.commands[command]  # type: ignore[attr-defined]
+    return {opt for param in cmd.params for opt in param.opts}
+
+
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
 _SECRET = "AKIAIOSFODNN7EXAMPLE"
 
@@ -331,4 +346,6 @@ def test_resync_help_says_it_re_uploads_and_deletes_nothing_locally() -> None:
     out = CliRunner(env=_WIDE).invoke(cli_app, ["resync", "--help"]).stdout
     assert "RE-UPLOADS" in out
     assert "deletes nothing" in out
-    assert "--confirm" in out
+    # Declared parameters, not rendered help — rich lays the options panel out
+    # differently on a non-tty (CI), where the flag names don't reach stdout.
+    assert "--confirm" in _param_opts(cli_app, "resync")

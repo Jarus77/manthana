@@ -27,6 +27,21 @@ from manthana.server.storage import InMemoryObjectStore
 # wraps long option names, so pin a wide terminal rather than assert width-dependent output.
 _WIDE = {"COLUMNS": "200"}
 
+
+def _param_opts(typer_app: object, command: str) -> set[str]:
+    """Every option string a CLI command declares (e.g. "--confirm").
+
+    Read off the Click command that Typer builds, so the assertion tests the real
+    parameter contract instead of whatever rich decided to render at the current
+    terminal width and tty-ness.
+    """
+    import typer.main
+
+    group = typer.main.get_command(typer_app)
+    cmd = group.commands[command]  # type: ignore[attr-defined]
+    return {opt for param in cmd.params for opt in param.opts}
+
+
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
 ADMIN = {"X-Admin-Token": "adm"}
 
@@ -556,9 +571,13 @@ def test_agent_cli_accepts_structural_junk_and_dry_runs_by_default() -> None:
     from manthana.agent.cli import app as cli_app
     from typer.testing import CliRunner
 
-    # The flag is offered, and the unfiltered-purge refusal names it — so an
-    # operator who runs a bare `manthana purge` is told the selector exists.
-    assert "--structural-junk" in CliRunner(env=_WIDE).invoke(cli_app, ["purge", "--help"]).stdout
+    # The flag is offered — asserted against the command's DECLARED parameters,
+    # not against rendered --help: rich lays the options panel out differently on
+    # a non-tty (CI), where the flag names don't survive into stdout.
+    assert "--structural-junk" in _param_opts(cli_app, "purge")
+    # …and the unfiltered-purge refusal names it, so an operator who runs a bare
+    # `manthana purge` is told the selector exists. This one is body text, which
+    # does render identically everywhere.
     assert "--structural-junk" in CliRunner(env=_WIDE).invoke(cli_app, ["purge"]).stdout
 
 
