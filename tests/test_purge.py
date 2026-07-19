@@ -23,6 +23,10 @@ from manthana.server.purge import (
 )
 from manthana.server.storage import InMemoryObjectStore
 
+# Help text is rendered by rich at the terminal width; CI runs at 80 columns and
+# wraps long option names, so pin a wide terminal rather than assert width-dependent output.
+_WIDE = {"COLUMNS": "200"}
+
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
 ADMIN = {"X-Admin-Token": "adm"}
 
@@ -554,8 +558,8 @@ def test_agent_cli_accepts_structural_junk_and_dry_runs_by_default() -> None:
 
     # The flag is offered, and the unfiltered-purge refusal names it — so an
     # operator who runs a bare `manthana purge` is told the selector exists.
-    assert "--structural-junk" in CliRunner().invoke(cli_app, ["purge", "--help"]).stdout
-    assert "--structural-junk" in CliRunner().invoke(cli_app, ["purge"]).stdout
+    assert "--structural-junk" in CliRunner(env=_WIDE).invoke(cli_app, ["purge", "--help"]).stdout
+    assert "--structural-junk" in CliRunner(env=_WIDE).invoke(cli_app, ["purge"]).stdout
 
 
 def test_agent_and_server_purge_logic_stays_in_sync() -> None:

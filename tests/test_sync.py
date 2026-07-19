@@ -23,6 +23,10 @@ from manthana.server.auth import issue_team_token
 from manthana.server.llm import ScriptedProvider
 from manthana.server.storage import InMemoryObjectStore
 
+# Help text is rendered by rich at the terminal width; CI runs at 80 columns and
+# wraps long option names, so pin a wide terminal rather than assert width-dependent output.
+_WIDE = {"COLUMNS": "200"}
+
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
 _SECRET = "AKIAIOSFODNN7EXAMPLE"
 
@@ -324,7 +328,7 @@ def test_resync_help_says_it_re_uploads_and_deletes_nothing_locally() -> None:
     from manthana.agent.cli import app as cli_app
     from typer.testing import CliRunner
 
-    out = CliRunner().invoke(cli_app, ["resync", "--help"]).stdout
+    out = CliRunner(env=_WIDE).invoke(cli_app, ["resync", "--help"]).stdout
     assert "RE-UPLOADS" in out
     assert "deletes nothing" in out
     assert "--confirm" in out
