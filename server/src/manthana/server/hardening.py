@@ -37,11 +37,10 @@ _WINDOW_SECONDS = 60.0
 RATE_LIMITS: dict[tuple[str, str], int] = {
     ("POST", "/v1/enroll"): 10,
     ("POST", "/ui/login"): 10,
-    ("POST", "/ui/manager/login"): 10,
     ("POST", "/v1/founder/query"): 30,
-    ("POST", "/v1/manager/query"): 30,
+    ("POST", "/v1/founder/thread"): 30,
+    ("POST", "/v1/founder/drill"): 30,
     ("POST", "/ui/query"): 30,
-    ("POST", "/ui/manager/query"): 30,
 }
 
 

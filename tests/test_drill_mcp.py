@@ -13,12 +13,12 @@ from manthana.agent.insights import drill_raw
 from manthana.agent.store import Store
 from manthana.schemas import EngineeringCompaction, Outcome, Role, Surface, Turn
 from manthana.server import ServerConfig, ServerStore, create_app
+from manthana.server.auth import issue_founder_token
 from manthana.server.llm import ScriptedProvider
 from manthana.server.storage import InMemoryObjectStore
 
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
 ADMIN = {"X-Admin-Token": "adm"}
-MGR = {"X-Manager-Token": "mgr"}
 
 
 def _comp(
@@ -49,10 +49,10 @@ def test_engineer_drill_returns_own_turns() -> None:
     assert drill_raw(store, "ghost") == []
 
 
-# ── org drill: manager-only, audited, redacted raw; founder has no path ──────
-def _server() -> tuple[TestClient, ServerStore, InMemoryObjectStore]:
+# ── org drill: founder-scoped, audited, redacted raw ────────────────────────
+def _server(privacy: str = "open") -> tuple[TestClient, ServerStore, InMemoryObjectStore]:
     config = ServerConfig(
-        jwt_secret="x" * 40, admin_token="adm", manager_token="mgr", k_anon_floor=1
+        jwt_secret="x" * 40, admin_token="adm", k_anon_floor=1, privacy_mode=privacy
     )
     store = ServerStore.open("sqlite://")
     obj = InMemoryObjectStore()
@@ -60,7 +60,7 @@ def _server() -> tuple[TestClient, ServerStore, InMemoryObjectStore]:
     return TestClient(create_app(config, store, obj, ScriptedProvider([]))), store, obj
 
 
-def test_manager_drill_requires_token_returns_redacted_raw_and_audits() -> None:
+def test_founder_drill_requires_auth_returns_redacted_raw_and_audits() -> None:
     client, store, obj = _server()
     store.ingest_compaction(_comp("c0", "c0", released=True), org_id="o1", team_id="t1")
     # seed a released raw transcript (already redacted at sync) into the object store
@@ -69,28 +69,47 @@ def test_manager_drill_requires_token_returns_redacted_raw_and_audits() -> None:
     store.record_raw("c0", "o1", key)
 
     body = {"org_id": "o1", "compaction_id": "c0"}
-    assert client.post("/v1/manager/drill", json=body).status_code == 401  # no manager token
-    r = client.post("/v1/manager/drill", json=body, headers=MGR)
+    assert client.post("/v1/founder/drill", json=body).status_code == 401  # no credential
+    r = client.post("/v1/founder/drill", json=body, headers=ADMIN)
     assert r.status_code == 200
     turns = r.json()["turns"]
     assert turns and "[REDACTED:aws_key]" in turns[0]["content"]
-    # audited as an individual lookup
+    # audited as an individual lookup (privacy_mode="open" → named access)
     audit = client.get("/v1/admin/audit", params={"org_id": "o1"}, headers=ADMIN).json()["entries"]
     assert any(e["individual"] and "drill" in e["query"] for e in audit)
 
 
-def test_founder_has_no_drill_path() -> None:
-    client, *_ = _server()
-    r = client.post("/v1/founder/drill", json={"org_id": "o1", "compaction_id": "c0"})
-    assert r.status_code == 404  # no founder drill path exists
+def test_founder_drill_path_exists_and_enforces_org_isolation() -> None:
+    # The founder drill path is real now — but an org-scoped founder token may only
+    # reach ITS OWN org: drilling another tenant is a 403, never a read.
+    client, store, obj = _server()
+    store.create_org("o2", "Other")
+    store.ingest_compaction(_comp("c0", "c0", released=True), org_id="o1", team_id="t1")
+    key = "o1/t1/c0.jsonl"
+    obj.put(key, b'{"seq":0,"role":"assistant","content":"o1 secret"}\n')
+    store.record_raw("c0", "o1", key)
+
+    o2_token = issue_founder_token("x" * 40, org_id="o2")
+    o2 = {"Authorization": f"Bearer {o2_token}"}
+    cross = client.post(
+        "/v1/founder/drill", json={"org_id": "o1", "compaction_id": "c0"}, headers=o2
+    )
+    assert cross.status_code == 403  # founder token is not valid for this org
+
+    o1_token = issue_founder_token("x" * 40, org_id="o1")
+    own = client.post(
+        "/v1/founder/drill", json={"org_id": "o1", "compaction_id": "c0"},
+        headers={"Authorization": f"Bearer {o1_token}"},
+    )
+    assert own.status_code == 200 and own.json()["turns"][0]["content"] == "o1 secret"
 
 
 # ── person-relational: "A vs B" doesn't collapse to one actor ────────────────
-def test_manager_comparison_does_not_collapse_actor() -> None:
+def test_named_comparison_does_not_collapse_actor() -> None:
     from manthana.server.founder import run_query
 
     config = ServerConfig(
-        jwt_secret="x" * 40, admin_token="adm", manager_token="mgr", k_anon_floor=1
+        jwt_secret="x" * 40, admin_token="adm", k_anon_floor=1, privacy_mode="open"
     )
     store = ServerStore.open("sqlite://")
     store.create_org("o1", "Acme")

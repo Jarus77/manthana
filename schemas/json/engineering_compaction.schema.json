@@ -221,6 +221,18 @@
       "title": "Languages",
       "type": "array"
     },
+    "native_summary": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Native Summary"
+    },
     "outcome": {
       "$ref": "#/$defs/Outcome"
     },
@@ -286,8 +298,9 @@
       "type": "string"
     },
     "source": {
-      "default": "full",
+      "default": "pending",
       "enum": [
+        "pending",
         "full",
         "claude_summary"
       ],

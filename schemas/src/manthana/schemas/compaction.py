@@ -83,9 +83,22 @@ class BaseCompaction(BaseModel):
     prompt_version: str = Field(default="v0", description="Compaction prompt template version")
     schema_version: int = 1
     created_at: datetime | None = None
-    # How this compaction was produced: "full" (from the raw turns) or
-    # "claude_summary" (cheaply, from Claude Code's own compaction summary).
-    source: Literal["full", "claude_summary"] = "full"
+    # How this compaction was produced:
+    #   "pending"        — deterministic fields only; the qualitative fields have
+    #                      not been written yet and await server-side enrichment.
+    #   "claude_summary" — from the coding agent's own native compaction summary.
+    #   "full"           — from the raw turns.
+    # Agents never call an LLM (that recursed: every compaction call created a new
+    # Claude Code session, which was then itself captured and compacted). They emit
+    # "pending"; the server enriches on the operator's metered key.
+    source: Literal["pending", "full", "claude_summary"] = "pending"
+
+    # The coding agent's OWN compaction summary, when the session has one — Claude
+    # Code's ``isCompactSummary`` turn or Codex's ``compacted`` payload. Carried to
+    # the server so enrichment can digest this instead of the whole transcript.
+    # Redacted client-side like every other synced field. Only ~14% of sessions
+    # have one; the rest enrich from raw turns.
+    native_summary: str | None = None
 
 
 class EngineeringCompaction(BaseCompaction):

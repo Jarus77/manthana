@@ -64,7 +64,7 @@ def test_kanon_lone_cell_never_leaks_into_founder_narrative() -> None:
 
 # ── FIX #2: non-ASCII token must 401, not 500 ────────────────────────────────
 def _client(**kw):
-    config = _cfg(manager_token="mgr", **kw)
+    config = _cfg(**kw)
     store = ServerStore.open("sqlite://")
     store.create_org("o1", "Acme")
     return TestClient(create_app(config, store, InMemoryObjectStore(), ScriptedProvider([]))), store
@@ -76,7 +76,7 @@ def test_non_ascii_login_token_returns_401_not_500() -> None:
     # that raised TypeError → 500; now it must be a clean failed-auth (401). (The header
     # token path can't carry non-ASCII over HTTP, so the login form is the real vector.)
     r1 = client.post("/ui/login", data={"token": "münchen✓"})
-    r2 = client.post("/ui/manager/login", data={"token": "tökën"})
+    r2 = client.post("/ui/login", data={"token": "tökën"})
     assert r1.status_code == 401 and r2.status_code == 401
 
 
@@ -107,8 +107,8 @@ def test_embedder_failure_degrades_agent_and_server() -> None:
 
 
 # ── FIX #4/#5: drill tolerates malformed raw; upload caps + validates ────────
-def test_manager_drill_tolerates_malformed_blob() -> None:
-    config = _cfg(manager_token="mgr", k_anon_floor=1)
+def test_founder_drill_tolerates_malformed_blob() -> None:
+    config = _cfg(k_anon_floor=1)
     store = ServerStore.open("sqlite://")
     obj = InMemoryObjectStore()
     client = TestClient(create_app(config, store, obj, ScriptedProvider([])))
@@ -119,8 +119,8 @@ def test_manager_drill_tolerates_malformed_blob() -> None:
     obj.put(key, b'not valid json\n{"seq": 1, "content": "ok"}\n')
     store.record_raw("c0", "o1", key)
     r = client.post(
-        "/v1/manager/drill", json={"org_id": "o1", "compaction_id": "c0"},
-        headers={"X-Manager-Token": "mgr"},
+        "/v1/founder/drill", json={"org_id": "o1", "compaction_id": "c0"},
+        headers={"X-Admin-Token": "adm"},
     )
     assert r.status_code == 200  # malformed line skipped, not a 500
     turns = r.json()["turns"]

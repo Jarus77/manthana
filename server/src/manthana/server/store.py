@@ -29,6 +29,7 @@ from .db import create_db_engine, init_db
 from .tables import (
     ActionQueueRow,
     ActorRow,
+    EnrichmentStateRow,
     FounderQueryAuditRow,
     InviteRow,
     LlmUsageRow,
@@ -36,6 +37,7 @@ from .tables import (
     OrgPrivacyRow,
     OrgQuotaRow,
     OrgRow,
+    PurgeAuditRow,
     RawTranscriptRow,
     ReleasedCompactionRow,
     ReleasedCompactionVectorRow,
@@ -327,7 +329,7 @@ class ServerStore:
             # NL parser emits human casing ("ASR", "BIRD", "Success") while the stored
             # slug is lower/enum-cased, so an exact `==` silently returns nothing — which
             # reads as "no data" rather than a filter miss. actor stays exact (it's a
-            # resolved id on the manager path; the founder path suppresses per-person).
+            # resolved id on the named path; the k-anon path suppresses per-person).
             if project is not None:
                 stmt = stmt.where(func.lower(ReleasedCompactionRow.project) == project.lower())
             if outcome is not None:
@@ -372,6 +374,244 @@ class ServerStore:
                 )
             )
             db.commit()
+
+    # ── server-side enrichment (pending digests → qualitative fields) ─────
+    # ``source`` lives in the authoritative ``data`` JSON, not an index column —
+    # adding a column would not reach existing DBs (``create_all`` only creates
+    # whole tables), so the pending filter runs in Python over a BOUNDED scan of
+    # the most recent rows. That cap is what keeps one org's backlog from turning
+    # every pass into a full-table read.
+    _ENRICH_SCAN_CAP = 2000
+
+    def list_pending_for_enrichment(
+        self, org_id: str, *, limit: int = 25, skip_ids: set[str] | None = None
+    ) -> list[BaseCompaction]:
+        """Released digests still awaiting enrichment (``source == "pending"``),
+        newest first, excluding ``skip_ids`` (typically the aged-out/abandoned set).
+        """
+        skip = skip_ids or set()
+        out: list[BaseCompaction] = []
+        with DBSession(self._engine) as db:
+            stmt = (
+                select(ReleasedCompactionRow)
+                .where(ReleasedCompactionRow.org_id == org_id)
+                .where(ReleasedCompactionRow.released == True)  # noqa: E712 - SQL boolean column
+                .order_by(ReleasedCompactionRow.started_at.desc())  # type: ignore[attr-defined]
+                .limit(self._ENRICH_SCAN_CAP)
+            )
+            for row in db.exec(stmt):
+                if row.data.get("source") != "pending":
+                    continue
+                compaction = CompactionAdapter.validate_python(row.data)
+                if compaction.id in skip:
+                    continue
+                out.append(compaction)
+                if len(out) >= limit:
+                    break
+        return out
+
+    def count_pending_for_enrichment(self, org_id: str) -> int:
+        """How many released digests in this org are still ``source="pending"``
+        (bounded by the same scan cap). Powers the admin enrichment view."""
+        with DBSession(self._engine) as db:
+            stmt = (
+                select(ReleasedCompactionRow)
+                .where(ReleasedCompactionRow.org_id == org_id)
+                .where(ReleasedCompactionRow.released == True)  # noqa: E712 - SQL boolean column
+                .order_by(ReleasedCompactionRow.started_at.desc())  # type: ignore[attr-defined]
+                .limit(self._ENRICH_SCAN_CAP)
+            )
+            return sum(1 for row in db.exec(stmt) if row.data.get("source") == "pending")
+
+    def orgs_with_pending(self) -> list[str]:
+        """Orgs that have at least one pending digest. The batch pass iterates
+        these so a quiet org costs nothing."""
+        return sorted(
+            org.id for org in self.list_orgs() if self.count_pending_for_enrichment(org.id) > 0
+        )
+
+    def save_enriched(self, compaction: BaseCompaction, *, org_id: str) -> bool:
+        """Persist an enriched digest over its existing row.
+
+        Deliberately NOT ``ingest_compaction``: the row's tenancy (team_id) and
+        released state are preserved from what is already stored — enrichment
+        must never re-home a compaction or change who owns it. Returns False when
+        the row vanished (purged mid-pass), so the caller writes nothing.
+        """
+        with DBSession(self._engine) as db:
+            row = db.get(ReleasedCompactionRow, _pk(org_id, compaction.id))
+            if row is None or not row.released:
+                return False
+            # Refresh only the index columns that enrichment can legitimately move
+            # (outcome), plus the authoritative payload. actor/project/team/started_at
+            # are deterministic and stay exactly as ingested.
+            row.outcome = str(compaction.outcome)
+            row.data = compaction.model_dump(mode="json")
+            db.add(row)
+            db.commit()
+        return True
+
+    def get_enrichment_state(self, org_id: str, compaction_id: str) -> EnrichmentStateRow | None:
+        with DBSession(self._engine) as db:
+            return db.get(EnrichmentStateRow, _pk(org_id, compaction_id))
+
+    def record_enrichment_attempt(
+        self, org_id: str, compaction_id: str, *, state: str, detail: str = ""
+    ) -> int:
+        """Bump the attempt counter for a digest that could NOT be enriched and
+        record why. Returns the new attempt count so the caller can age it out."""
+        now = _now_iso()
+        with DBSession(self._engine) as db:
+            row = db.get(EnrichmentStateRow, _pk(org_id, compaction_id))
+            if row is None:
+                row = EnrichmentStateRow(
+                    id=_pk(org_id, compaction_id),
+                    org_id=org_id,
+                    compaction_id=compaction_id,
+                    attempts=0,
+                    first_seen_at=now,
+                    updated_at=now,
+                )
+            row.attempts += 1
+            row.state = state
+            row.detail = detail[:500]
+            row.updated_at = now
+            db.add(row)
+            db.commit()
+            return row.attempts
+
+    def mark_enrichment_abandoned(self, org_id: str, compaction_id: str, *, detail: str) -> None:
+        """Terminal state: never picked up again. Set when attempts or age are
+        exhausted (raw never arrived / permanently failed)."""
+        now = _now_iso()
+        with DBSession(self._engine) as db:
+            row = db.get(EnrichmentStateRow, _pk(org_id, compaction_id))
+            if row is None:
+                row = EnrichmentStateRow(
+                    id=_pk(org_id, compaction_id),
+                    org_id=org_id,
+                    compaction_id=compaction_id,
+                    attempts=1,
+                    first_seen_at=now,
+                    updated_at=now,
+                )
+            row.state = "abandoned"
+            row.detail = detail[:500]
+            row.updated_at = now
+            db.add(row)
+            db.commit()
+
+    def clear_enrichment_state(self, org_id: str, compaction_id: str) -> None:
+        """Drop the bookkeeping row once the digest enriched successfully — the
+        digest's own ``source`` is the record from then on."""
+        with DBSession(self._engine) as db:
+            row = db.get(EnrichmentStateRow, _pk(org_id, compaction_id))
+            if row is not None:
+                db.delete(row)
+                db.commit()
+
+    def list_enrichment_state(
+        self, org_id: str, *, state: str | None = None, limit: int = 200
+    ) -> list[EnrichmentStateRow]:
+        with DBSession(self._engine) as db:
+            stmt = select(EnrichmentStateRow).where(EnrichmentStateRow.org_id == org_id)
+            if state is not None:
+                stmt = stmt.where(EnrichmentStateRow.state == state)
+            stmt = stmt.order_by(EnrichmentStateRow.updated_at.desc()).limit(limit)  # type: ignore[attr-defined]
+            return list(db.exec(stmt))
+
+    def abandoned_enrichment_ids(self, org_id: str) -> set[str]:
+        """Compaction ids the pass must stop retrying."""
+        return {r.compaction_id for r in self.list_enrichment_state(org_id, state="abandoned")}
+
+    # ── purge (admin-only; see purge.py for the selection predicate) ──────
+    def delete_compactions(self, org_id: str, ids: list[str]) -> tuple[int, int]:
+        """Delete compactions and everything DERIVED from them, in ONE transaction.
+
+        Three tables move together — the released compaction row, its
+        raw-transcript record, and its cached embedding vector — because leaving
+        any one behind orphans it: a stale vector keeps the digest answering
+        semantic search after it was purged, and a stale raw record points the
+        founder drill path at a blob that no longer exists.
+
+        Object-store blobs are NOT deleted here; the caller removes those first
+        and abandons this call if any blob deletion fails (see ``purge.purge``).
+
+        Returns ``(compactions_deleted, vectors_deleted)``.
+        """
+        removed = 0
+        vectors = 0
+        with DBSession(self._engine) as db:
+            for compaction_id in ids:
+                pk = _pk(org_id, compaction_id)
+                row = db.get(ReleasedCompactionRow, pk)
+                if row is not None:
+                    db.delete(row)
+                    removed += 1
+                vec = db.get(ReleasedCompactionVectorRow, pk)
+                if vec is not None:
+                    db.delete(vec)
+                    vectors += 1
+                raw = db.exec(
+                    select(RawTranscriptRow)
+                    .where(RawTranscriptRow.compaction_id == compaction_id)
+                    .where(RawTranscriptRow.org_id == org_id)
+                ).first()
+                if raw is not None:
+                    db.delete(raw)
+                # Enrichment bookkeeping is derived too — drop it so a purged id
+                # can't resurface as a permanently "waiting" ghost.
+                state = db.get(EnrichmentStateRow, pk)
+                if state is not None:
+                    db.delete(state)
+            db.commit()
+        return removed, vectors
+
+    def record_purge_audit(
+        self,
+        *,
+        org_id: str,
+        dry_run: bool,
+        matched: int,
+        deleted: int,
+        selector: dict[str, Any],
+        sample_ids: list[str],
+        actor: str = "admin",
+        error: str | None = None,
+    ) -> str:
+        """Append an audit row for a purge. Dry runs are audited too — knowing
+        someone probed for deletable rows is itself of governance interest, and it
+        ties a later confirmed delete back to the preview it was based on."""
+        audit_id = f"pg-{uuid.uuid4().hex[:12]}"
+        with DBSession(self._engine) as db:
+            db.merge(
+                PurgeAuditRow(
+                    id=audit_id,
+                    org_id=org_id,
+                    dry_run=dry_run,
+                    matched=matched,
+                    deleted=deleted,
+                    created_at=_now_iso(),
+                    data={
+                        "selector": selector,
+                        "sample_ids": sample_ids,
+                        "actor": actor,
+                        "error": error,
+                    },
+                )
+            )
+            db.commit()
+        return audit_id
+
+    def list_purge_audit(self, org_id: str, *, limit: int = 100) -> list[PurgeAuditRow]:
+        with DBSession(self._engine) as db:
+            stmt = (
+                select(PurgeAuditRow)
+                .where(PurgeAuditRow.org_id == org_id)
+                .order_by(PurgeAuditRow.created_at.desc())  # type: ignore[attr-defined]
+                .limit(limit)
+            )
+            return list(db.exec(stmt))
 
     # ── action queue (seam) ──────────────────────────────────────────────
     def enqueue_action(
@@ -420,7 +660,7 @@ class ServerStore:
     ) -> str:
         """Append an audit row for a founder query (governance / transparency).
 
-        ``individual=True`` marks a manager view query that could name a person —
+        ``individual=True`` marks a query that could name a person —
         the accountability record for the privacy escalation."""
         audit_id = f"fq-{uuid.uuid4().hex[:12]}"
         with DBSession(self._engine) as db:

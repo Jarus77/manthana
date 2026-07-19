@@ -201,6 +201,28 @@ def make_provider(config: ServerConfig) -> LLMProvider:
     return MockProvider("{}")
 
 
+def make_enrich_provider(config: ServerConfig) -> LLMProvider:
+    """Provider for server-side digest enrichment (arch: enrichment pass).
+
+    Deliberately SEPARATE from ``make_provider``: enrichment is bulk structured
+    summarization and runs on a cheap model (``enrich_model``), while the founder
+    narrative may stay on a stronger tier. Same degrade-don't-crash contract — a
+    missing SDK/key falls back to the mock so the server still boots.
+    """
+    if config.llm_provider == "anthropic":
+        try:
+            inner = AnthropicProvider(
+                model=config.enrich_model, max_tokens=config.enrich_max_tokens
+            )
+        except Exception as exc:  # noqa: BLE001 - missing SDK/key → degrade, don't crash boot
+            _log.warning(
+                "anthropic enrichment provider unavailable (%s); falling back to mock", exc
+            )
+            return MockProvider("{}")
+        return ResilientProvider(inner)
+    return MockProvider("{}")
+
+
 __all__ = [
     "LLMProvider",
     "MockProvider",
@@ -208,4 +230,5 @@ __all__ = [
     "AnthropicProvider",
     "ResilientProvider",
     "make_provider",
+    "make_enrich_provider",
 ]

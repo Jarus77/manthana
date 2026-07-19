@@ -62,7 +62,7 @@ class Rollup:
     total_cost_usd: float  # API list-price equivalent, NOT subscription spend
     total_tokens: int
     # Sessions per named engineer — populated ONLY on the named/individual path
-    # (manager view, or a founder whose org runs privacy_mode="open"). Empty on the
+    # (a founder whose org runs privacy_mode="open"). Empty on the
     # de-identified path so names can never leak through the aggregate.
     by_engineer: dict[str, int] = field(default_factory=dict)
 
@@ -243,7 +243,7 @@ def parse_filter(
 def _resolve_actor(store: ServerStore, org_id: str, name: str | None) -> str | None:
     """Map an NL name fragment ("Suraj") to a real actor id ("suraj@acme.demo").
 
-    Manager path only. Unique case-insensitive match against the org's known
+    Named/individual path only. Unique case-insensitive match against the org's known
     actors (id or local-part or display name); ambiguous / no match → unchanged
     (so the query simply finds nothing rather than guessing wrong).
     """
@@ -348,10 +348,10 @@ def run_query(
     since: str | None = None,
     until: str | None = None,
 ) -> FounderResult:
-    """``allow_individual`` is the **manager view**: it skips the k-anonymity floor
-    so a query that resolves to a single named person returns results. It must only
-    be set behind manager auth, and every such call is audited by the caller. The
-    default (founder console) path is unchanged: per-person queries are suppressed.
+    """``allow_individual`` is the **named view**: it skips the k-anonymity floor
+    so a query that resolves to a single named person returns results. It is set only
+    for orgs whose privacy_mode is "open", and every such call is audited by the
+    caller. The de-identified path is unchanged: per-person queries are suppressed.
     ``now`` anchors relative-date parsing (defaults to the wall clock; injectable for tests).
     ``since``/``until`` (ISO dates) FORCE the time window, overriding whatever the query
     parsed — used by the weekly digest so every section covers the same period."""
@@ -387,7 +387,7 @@ def run_query(
         compactions = [c for c in compactions if getattr(c, "source", "full") == source]
     rollup, kept_cells = _rollup(compactions, config.k_anon_floor)
 
-    # Global k-anonymity floor — SKIPPED only for the audited manager view.
+    # Global k-anonymity floor — SKIPPED only for the audited named view.
     if not allow_individual and rollup.distinct_contributors < config.k_anon_floor:
         return FounderResult(
             filter=spec, rollup=None, narrative=INSUFFICIENT, citations=[], insufficient_data=True
@@ -482,7 +482,7 @@ def team_topics(
     """Emergent topic clusters over released compactions, plus a coverage signal.
 
     ``named=False`` (founder) gates to >= k_anon_floor distinct contributors — the
-    caller renders the ``deidentified()`` view. ``named=True`` (manager) keeps
+    caller renders the ``deidentified()`` view. ``named=True`` (privacy_mode="open") keeps
     single-contributor topics with names, and must be audited by the caller. Clustering
     caps at DEFAULT_MAX_ITEMS (O(n^2)); the returned Coverage flags that truncation so a
     missing topic is never silently indistinguishable from "no topic" (no silent
@@ -495,8 +495,8 @@ def team_topics(
 
 
 def thread(store: ServerStore, org_id: str, session_id: str) -> list[Any]:
-    """The arc of one transcript across its released slices (manager view; a thread is
-    one contributor, so the founder path is correctly empty under k-anon)."""
+    """The arc of one transcript across its released slices (named view; a thread is
+    one contributor, so it is correctly empty under k-anon)."""
     base = thread_key(session_id)
     comps = [
         c

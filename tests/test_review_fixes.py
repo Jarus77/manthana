@@ -7,16 +7,13 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 from manthana.agent.actions import Dispatcher
 from manthana.agent.actions.base import ActionContext, ActionResult, TriggerEvent
 from manthana.agent.capture import ingest_file
-from manthana.agent.compactor import Compactor
 from manthana.agent.cost import estimate_cost, resolve_tier
-from manthana.agent.llm import MockProvider
 from manthana.agent.store import Store
 from manthana.collectors import sessionize
 from manthana.schemas import (
@@ -25,7 +22,6 @@ from manthana.schemas import (
     ActionOutcome,
     ActionShape,
     ConsentClass,
-    Outcome,
     Role,
     Session,
     Surface,
@@ -140,11 +136,14 @@ def test_list_sessions_orders_chronologically_across_offsets() -> None:
 
 
 # ── Finding 5: _extract_json survives prose with stray braces ───────────────
-def test_compactor_extracts_json_amid_prose_braces() -> None:
+# Retargeted from the compactor to `insights`: the compactor no longer parses model
+# output at all (it is deterministic now), but `manthana ask` still does, so the
+# stray-brace regression stays covered where the code actually lives.
+def test_extract_json_amid_prose_braces() -> None:
+    from manthana.agent.insights import _extract_json
+
     raw = 'Here is a set {like this}: {"task_intent": "found it", "outcome": "success"}'
-    comp = Compactor(MockProvider(raw)).compact(_session(), [])
-    assert comp.task_intent == "found it"
-    assert comp.outcome is Outcome.success
+    assert _extract_json(raw) == {"task_intent": "found it", "outcome": "success"}
 
 
 # ── Finding 6: unknown model prices as sonnet with a consistent tier ────────
@@ -156,9 +155,6 @@ def test_unknown_model_prices_as_sonnet_with_consistent_tier() -> None:
 
 
 # ── Finding 7: list fields drop booleans (bool is an int subclass) ──────────
-def test_compactor_drops_booleans_from_list_fields() -> None:
-    raw = json.dumps(
-        {"task_intent": "x", "outcome": "success", "files_touched": [True, False, "real.py"]}
-    )
-    comp = Compactor(MockProvider(raw)).compact(_session(), [])
-    assert comp.files_touched == ["real.py"]
+# Obsolete on the agent: the compactor no longer coerces model-supplied lists, so
+# there is no bool-in-list path left to guard. files_touched now comes only from
+# real tool calls — covered by test_compactor.py's deterministic files test.

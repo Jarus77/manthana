@@ -137,7 +137,7 @@ acts to reduce it. Do NOT overclaim the dollar figure — let token volume carry
 
 ---
 
-## 4. DEMO PART 2 — The Founder & Manager side (5–7 min)
+## 4. DEMO PART 2 — The Founder side (5–7 min)
 
 **Set up the framing:** "Switch hats — I'm the founder now. I do NOT see transcripts or
 personal sessions. I see only released, redacted, **k-anonymized** digests, and I get
@@ -159,18 +159,19 @@ It walks the whole permission story over real, multi-contributor data:
 |---|----------|--------------|-----|
 | 1 | "Where did the team spend time on **LLM-evaluation**?" | grounded, **cited** rollup | project aggregate, ≥4 contributors |
 | 2 | "What **kept failing** recently across the team?" | grounded, **cited** friction | friction aggregate |
-| 3 | "What did **Suraj** work on this week?" *(founder)* | **INSUFFICIENT DATA** | k-anon won't single out a person |
-| 4 | "What did **Suraj** work on this week?" *(manager)* | grounded, cited — **and LOGGED** | audited escalation |
+| 3 | "What did **Suraj** work on this week?" *(org on `k_anon`)* | **INSUFFICIENT DATA** | k-anon won't single out a person |
+| 4 | "What did **Suraj** work on this week?" *(org on `open`)* | grounded, cited — **and LOGGED** | audited named access |
 
-**Say (the killer line):** "Watch this — as a **founder** I literally *cannot* ask 'what
-did Suraj do' — the system refuses, because singling out a person breaks the privacy
-contract. As a **manager** with a separate token, I can — but **every such lookup is
-logged**. That's the whole pitch: **privacy by default, accountable escalation.** Not
+**Say (the killer line):** "Watch this — with the org on `k_anon` I literally *cannot*
+ask 'what did Suraj do' — the system refuses, because singling out a person breaks the
+privacy contract. An org that opts into `open` can — but **every such lookup is
+logged**. That's the whole pitch: **privacy by default, accountable named access.** Not
 surveillance."
 
 ### Map of YOUR example questions → the right surface
-- "What did Suraj/Tarun/Atharva work on this week?" → **Manager view** (named, audited);
-  founder view refuses it. One at a time *or* all (drop the name → team aggregate).
+- "What did Suraj/Tarun/Atharva work on this week?" → **founder view on an `open` org**
+  (named, audited); a `k_anon` org refuses it. One at a time *or* all (drop the name →
+  team aggregate).
 - "Where was time spent on LLM-eval?" / "What kept failing in the last 30 sessions?" →
   **Founder** aggregate (cited).
 - "Show me sessions where I abandoned the approach" → **Engineer's own** view, on your
@@ -180,14 +181,15 @@ surveillance."
 ```bash
 export MANTHANA_SERVER_DB_URL="sqlite:///./manthana-demo.db"
 export MANTHANA_SERVER_JWT_SECRET="$(python -c 'import secrets;print(secrets.token_hex(24))')"
-export MANTHANA_SERVER_ADMIN_TOKEN="adm-demo"   MANTHANA_SERVER_MANAGER_TOKEN="mgr-demo"
+export MANTHANA_SERVER_ADMIN_TOKEN="adm-demo"
 export MANTHANA_SERVER_K_ANON=4
 # real narratives in the browser need a model: set MANTHANA_SERVER_LLM=anthropic + a FRESH key
 uv run manthana-server serve --port 8000
 ```
-- **Founder console** → http://127.0.0.1:8000/ui (admin token) — aggregate, k-anon.
-- **Manager view** → http://127.0.0.1:8000/ui/manager (manager token) — named queries,
-  each shows a "named query — logged" banner; they appear in the audit panel.
+- **Founder console** → http://127.0.0.1:8000/ui (admin or founder token) — aggregate and
+  k-anon by default; flip the org to named with
+  `PUT /v1/admin/orgs/{org_id}/privacy {"mode": "open"}`, and every named lookup lands in
+  the audit panel.
 *(More moving parts — rehearse it. The terminal runner above is the safe demo.)*
 
 > **The k-anon floor is 4 in this demo (production value)** — it's real, not lowered.
@@ -256,7 +258,7 @@ deploy stack. 204 tests.
 | 6 | Optimize tab | "It actively cuts my token usage via headroom." |
 | 7 | *switch hats* + `seed_demo_org.py` | "Now I'm the founder over a 12-person team — released + redacted + k-anon only." |
 | 8 | `python validation/demo_queries.py` | "Aggregates are cited; 'what did Suraj do' is **refused** for a founder…" |
-| 9 | (manager line) | "…but a **manager** can — and every named lookup is **logged**. Privacy by default, accountable escalation." |
+| 9 | (privacy-mode line) | "…but an org that opts into `open` can — and every named lookup is **logged**. Privacy by default, accountable named access." |
 | 10 | `manthana ask "my abandoned sessions"` | "And as the engineer, I query my OWN work freely." |
 | 11 | (tech) | "Dual-licensed, one trust chokepoint, grounding + k-anon enforced in code." |
 | 12 | (credibility) | "I validated on real data and fixed 5 defects. 200+ tests." |
@@ -265,7 +267,7 @@ deploy stack. 204 tests.
 - [ ] `uv run manthana insights --since 14d` returns data
 - [ ] `uv run manthana dashboard` opens at :8765
 - [ ] `uv run python validation/seed_demo_org.py` then `validation/demo_queries.py` runs
-- [ ] (browser option only) server boots, `/ui` and `/ui/manager` load
+- [ ] (browser option only) server boots and `/ui` loads
 - [ ] **Rotate the old Anthropic API key**; if using the browser narrative, put a fresh one in `.env`
 
 **If something fails live:** fall back to `validation/FINDINGS.md` and `docs/report/` —

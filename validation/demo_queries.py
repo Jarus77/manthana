@@ -1,4 +1,4 @@
-"""Live founder + manager demo over the seeded synthetic org.
+"""Live founder demo over the seeded synthetic org (k-anon vs open privacy modes).
 
 Run `validation/seed_demo_org.py` first. This drives the REAL server pipeline with
 the `claude` CLI (no API key) at the **production k-anon floor of 4**, and shows the
@@ -6,8 +6,8 @@ whole story:
 
   1. founder aggregate  — "where did the team spend time on LLM-eval?"   → cited
   2. founder friction   — "what kept failing recently?"                   → cited
-  3. founder per-person — "what did Suraj work on this week?"   → INSUFFICIENT (privacy)
-  4. MANAGER per-person — same question, manager view          → grounded, cited, LOGGED
+  3. k_anon per-person  — "what did Suraj work on this week?"   → INSUFFICIENT (privacy)
+  4. OPEN per-person    — same question, org waived anonymity  → grounded, cited, LOGGED
 
 (Engineer self-view — "show me MY abandoned sessions" — is demoed separately on your
 own real data: `uv run manthana ask "show my abandoned sessions"`.)
@@ -47,9 +47,7 @@ def main() -> None:
     if not Path("manthana-demo.db").exists():
         raise SystemExit("run `uv run python validation/seed_demo_org.py` first")
     store = ServerStore.open(DB_URL)
-    config = ServerConfig(
-        jwt_secret="x" * 40, admin_token="adm", manager_token="mgr", k_anon_floor=4
-    )
+    config = ServerConfig(jwt_secret="x" * 40, admin_token="adm", k_anon_floor=4)
     p = ClaudeCLIProvider()
     print(f"provider={p.name} available={p.available()}  org={ORG}  k_anon_floor=4")
 
@@ -65,18 +63,18 @@ def main() -> None:
                   query="what kept failing recently across the team?", provider=p),
     )
 
-    # 3: founder per-person — REFUSED by k-anon (the privacy guarantee)
+    # 3: per-person under privacy_mode="k_anon" — REFUSED (the privacy guarantee)
     q = "what did Suraj work on this week?"
-    _show(f"FOUNDER · per-person — {q}  (expect: refused)",
+    _show(f"FOUNDER · per-person (k_anon org) — {q}  (expect: refused)",
           run_query(store, config, org_id=ORG, query=q, provider=p))
 
-    # 4: manager per-person — ALLOWED + audited
-    _show(f"MANAGER · per-person — {q}  (allowed, LOGGED)",
+    # 4: per-person under privacy_mode="open" — ALLOWED + audited
+    _show(f"FOUNDER · per-person (open org) — {q}  (allowed, LOGGED)",
           run_query(store, config, org_id=ORG, query=q, provider=p, allow_individual=True))
     store.record_founder_query(
         org_id=ORG, query=q, insufficient=False, citations=[], individual=True
     )
-    print("\n(audit) manager lookup recorded as an individual query — see /v1/admin/audit")
+    print("\n(audit) named lookup recorded as an individual query — see /v1/admin/audit")
 
 
 if __name__ == "__main__":

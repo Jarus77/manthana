@@ -24,6 +24,11 @@ class ObjectStore(Protocol):
         """Fetch bytes for ``key`` (None if absent)."""
         ...
 
+    def delete(self, key: str) -> bool:
+        """Remove ``key``. True when it is gone afterwards (including when it was
+        already absent — delete is idempotent); False when the backend refused."""
+        ...
+
 
 class InMemoryObjectStore:
     def __init__(self) -> None:
@@ -35,6 +40,10 @@ class InMemoryObjectStore:
 
     def get(self, key: str) -> bytes | None:
         return self._objects.get(key)
+
+    def delete(self, key: str) -> bool:
+        self._objects.pop(key, None)
+        return True
 
 
 class S3ObjectStore:
@@ -78,6 +87,16 @@ class S3ObjectStore:
         except Exception:  # noqa: BLE001 - missing key / client error
             return None
         return resp["Body"].read()
+
+    def delete(self, key: str) -> bool:
+        # S3 DeleteObject is idempotent (deleting an absent key succeeds), so a
+        # raised exception here means a real failure — permissions, network — and
+        # the caller must NOT then drop the DB rows that point at this blob.
+        try:
+            self._client.delete_object(Bucket=self.bucket, Key=key)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - permissions / network: report, don't raise
+            return False
+        return True
 
 
 def make_object_store(config: ServerConfig) -> ObjectStore:

@@ -1,11 +1,19 @@
 """LLM provider abstraction.
 
-The compactor (and later the founder-query narrative) invoke the engineer's
-*existing* model access rather than a bundled API key (decisions doc): Claude
-Code via ``claude -p "<prompt>" --output-format json`` and Codex via
+These providers invoke the engineer's *existing* model access rather than a
+bundled API key (decisions doc): Claude Code via
+``claude -p "<prompt>" --output-format json`` and Codex via
 ``codex exec "<prompt>"``. ``complete()`` returns the model's result text
 (envelope-unwrapped for the Claude CLI). A deterministic ``MockProvider`` backs
 CI/tests so no model access or token spend is required.
+
+SCOPE — these are for USER-INITIATED commands only (``manthana ask``, skill
+mining): anything the engineer explicitly asks for and expects to spend tokens
+on. NOTHING automatic may reach them. Compaction in particular used to, and each
+``claude -p`` call wrote a new Claude Code transcript that the watcher then
+captured and compacted, recursing without bound. Compaction is now deterministic
+and model-free (see ``compactor/compactor.py``); do not reintroduce a provider
+into any background path.
 
 SPDX-License-Identifier: Apache-2.0
 """
@@ -134,8 +142,8 @@ def default_provider() -> LLMProvider:
     """Pick the engineer's available CLI, falling back to an empty Mock.
 
     Real use resolves to the Claude (then Codex) CLI; if neither exists the Mock
-    returns ``{}`` so the compactor degrades to a deterministic fallback instead
-    of crashing.
+    returns ``{}`` so callers degrade instead of crashing. Call this ONLY from
+    user-initiated commands — see the module docstring.
     """
     claude = ClaudeCLIProvider()
     if claude.available():

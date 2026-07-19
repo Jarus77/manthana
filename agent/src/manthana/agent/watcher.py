@@ -25,7 +25,6 @@ from manthana.collectors import ClaudeCodeCollector, CodexCollector
 from .actions import Dispatcher, TriggerEvent, default_dispatcher
 from .capture import IngestResult, ReadableCollector, ingest_file
 from .compact import compact_settled
-from .llm import LLMProvider
 from .release import auto_release as _auto_release
 from .store import Store
 
@@ -59,7 +58,6 @@ def watch(
     summarized_only: bool = False,
     settle_seconds: float = 600.0,
     max_per_cycle: int = 5,
-    provider: LLMProvider | None = None,
     iterations: int | None = None,
     ingest: Callable[..., IngestResult] = ingest_file,
     compact_fn: Callable[..., list[Any]] = compact_settled,
@@ -121,28 +119,26 @@ def watch(
         # Auto-compact SETTLED sessions + auto-release past-window digests. Run on a
         # throttle (the windows are minutes-scale; the scan covers the whole store, so we
         # don't redo it every 5s cycle), independent of `changed` so a session that *went*
-        # quiet is still picked up. ``max_per_cycle`` bounds the first-run backlog burst.
+        # quiet is still picked up. ``max_per_cycle`` bounds the first-run backlog burst —
+        # not for cost (compaction is local and free now), but to keep a single cycle from
+        # blocking the poll loop on a large backlog's store I/O.
         if (auto_compact or auto_release) and (
             last_auto is None or clock() - last_auto >= auto_min_interval
         ):
             if auto_compact:
                 try:
                     results = compact_fn(
-                        store, provider=provider, now=wall_clock(),
+                        store, now=wall_clock(),
                         settle_seconds=settle_seconds, summarized_only=summarized_only,
                         max_per_cycle=max_per_cycle,
                     )
                     if results:
-                        cost = sum(c or 0.0 for _, c in results)
-                        emit(
-                            f"compacted {len(results)} settled session(s) "
-                            f"(call cost ~${cost:.4f})"
-                        )
+                        emit(f"compacted {len(results)} settled session(s)")
                         # Fire post-compaction actions (auto-tag, loop warning, …) for each
                         # newly-(re)compacted session; the dispatcher's own gates handle
                         # personal-mode/consent/cooldown, and never raise.
                         disp = dispatcher or default_dispatcher(store)
-                        for comp, _cost in results:
+                        for comp in results:
                             disp.dispatch(
                                 TriggerEvent(
                                     "session_closed",

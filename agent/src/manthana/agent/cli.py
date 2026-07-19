@@ -254,9 +254,10 @@ def doctor() -> None:
     else:
         check(False, "server reachable", "not configured — run `manthana setup <invite>`")
 
+    # Only `manthana ask` spends tokens — compaction is deterministic and needs no model.
     prov = default_provider().name
     check(
-        prov != "mock", "model available (can compact)",
+        prov != "mock", "model available (for `manthana ask`)",
         "" if prov != "mock" else "no claude/codex CLI on PATH", critical=False,
     )
     if platform.system() == "Darwin":
@@ -310,7 +311,6 @@ def watch(
     personal or held it (personal never leaves); --no-auto-release disables. With a
     server configured, auto-syncs released compactions + their redacted raw transcripts.
     """
-    from manthana.agent.llm import default_provider
     from manthana.agent.sync_client import SyncClient
     from manthana.agent.watcher import watch as run_watch
 
@@ -324,11 +324,7 @@ def watch(
         sync_state = "auto-sync on" + (" (+raw)" if sync_raw else "")
     else:
         sync_state = "auto-sync off (no server)" if sync else "auto-sync disabled"
-    # Don't auto-compact in the background without a real model (a Mock would write
-    # empty compactions).
-    if auto_compact and default_provider().name == "mock":
-        typer.echo("no claude/codex CLI found — disabling auto-compaction")
-        auto_compact = False
+    # Compaction is deterministic and local — it needs no model, so it always runs.
     if not auto_compact:
         compact_state = "compact off"
     else:
@@ -454,7 +450,8 @@ def mode(session_id: str, value: str) -> None:
 def compact(session_id: str = typer.Argument(default="")) -> None:
     """Compact a session (or all pending Work sessions if no id is given).
 
-    Uses the engineer's own model access (claude -p / codex exec).
+    Deterministic and local — spends no tokens. The qualitative fields are filled
+    in server-side after the digest syncs.
     """
     store = Store.open()
     dispatcher = default_dispatcher(store)
@@ -486,6 +483,62 @@ def release(compaction_id: str = typer.Argument(default=...)) -> None:
     store = Store.open()
     ok = store.mark_released(compaction_id, released=True, released_at=datetime.now(UTC))
     typer.echo(f"released {compaction_id}" if ok else f"no such compaction: {compaction_id}")
+
+
+@app.command()
+def purge(
+    self_generated: bool = typer.Option(
+        False, "--self-generated", help="Manthana's own compaction sessions (the recursion junk)"
+    ),
+    source: str = typer.Option("", help="only this source: pending | full | claude_summary"),
+    contains: str = typer.Option("", help="only digests whose text contains this substring"),
+    confirm: bool = typer.Option(False, "--confirm", help="actually delete (default: dry run)"),
+) -> None:
+    """Delete local compactions matching a filter — DRY RUN unless --confirm.
+
+    Agents used to compact by shelling out to `claude -p`, which created a
+    transcript that was itself captured and compacted. Use --self-generated to
+    clear that junk out of your local store.
+
+    Deletes the compaction, its cached embedding vector, and its sync record
+    together. Sessions and turns are untouched, so `manthana compact` can
+    re-derive a digest if you purge one by mistake.
+    """
+    from manthana.agent.purge import matches
+
+    if not self_generated and not source and not contains:
+        typer.echo(
+            "refusing an unfiltered purge — pass --self-generated, --source, or --contains"
+        )
+        raise typer.Exit(code=1)
+
+    store = Store.open()
+    doomed = [
+        c
+        for c in store.list_compactions()
+        if matches(
+            c,
+            source=source or None,
+            contains=contains or None,
+            self_generated=self_generated,
+        )
+    ]
+    if not doomed:
+        typer.echo("nothing matched — no compactions deleted")
+        return
+
+    for c in doomed[:10]:
+        typer.echo(f"  {c.id}  [{c.source}]  {c.task_intent[:70]}")
+    if len(doomed) > 10:
+        typer.echo(f"  … and {len(doomed) - 10} more")
+
+    if not confirm:
+        typer.echo(f"\nDRY RUN: {len(doomed)} compaction(s) would be deleted. "
+                   f"Re-run with --confirm to delete.")
+        return
+
+    removed, vectors = store.delete_compactions([c.id for c in doomed])
+    typer.echo(f"\ndeleted {removed} compaction(s) and {vectors} cached vector(s)")
 
 
 @app.command()

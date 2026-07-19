@@ -15,8 +15,10 @@ pyright-clean and avoids ruff B008 (no function call in a default value).
 SPDX-License-Identifier: AGPL-3.0-or-later
 """
 
+import asyncio
 import hmac
 import json
+import logging
 import secrets
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -39,10 +41,12 @@ from .auth import (
 )
 from .config import ServerConfig
 from .digest import build_weekly_digest
+from .enrich import enrich_org, enrich_provider_for, run_enrichment_pass
 from .founder import run_query, team_topics, thread
 from .hardening import install_hardening
-from .llm import LLMProvider, make_provider
+from .llm import LLMProvider, make_enrich_provider, make_provider
 from .metering import MeteredProvider, QuotaExceededError, month_key
+from .purge import PurgeSelector, purge
 from .storage import ObjectStore, make_object_store
 from .store import ServerStore
 from .ui import mount_ui
@@ -109,14 +113,27 @@ class FounderTokenBody(BaseModel):
     expires_days: int = 365
 
 
-class ManagerThreadBody(BaseModel):
+class FounderThreadBody(BaseModel):
     org_id: str
     session_id: str
 
 
-class ManagerDrillBody(BaseModel):
+class FounderDrillBody(BaseModel):
     org_id: str
     compaction_id: str
+
+
+class PurgeBody(BaseModel):
+    org_id: str
+    # At least one selector is required — an unfiltered purge is refused.
+    source: str | None = None  # "pending" | "full" | "claude_summary"
+    contains: str | None = None  # substring of the digest's own text
+    self_generated: bool = False  # Manthana's own compaction sessions
+    # Dry run by DEFAULT. Deleting requires saying so explicitly.
+    confirm: bool = False
+
+
+_log = logging.getLogger(__name__)
 
 
 def _ct_eq(a: str, b: str) -> bool:
@@ -140,10 +157,8 @@ def create_app(
     # the token-auth wrapper becomes the tenant boundary. Built before FastAPI() so the
     # session-manager lifespan can be attached.
     mcp_asgi: Any = None
-    lifespan: Any = None
+    _mcp_server: Any = None
     if config.enable_founder_mcp:
-        from contextlib import asynccontextmanager
-
         from .founder_mcp import available as mcp_available
         from .founder_mcp import build_founder_mcp, founder_mcp_asgi
 
@@ -155,12 +170,48 @@ def create_app(
         _mcp_server = build_founder_mcp(store, object_store, config)
         mcp_asgi = founder_mcp_asgi(_mcp_server, config)
 
+    # Server-side enrichment: a batched BACKGROUND pass, never inline on ingest
+    # (ingest must stay fast). Runs on its own cheap-model provider, metered per
+    # org so it counts against the same monthly cap as the founder pipeline.
+    enrich_provider = make_enrich_provider(config) if config.enable_enrichment else None
+
+    lifespan: Any = None
+    if _mcp_server is not None or enrich_provider is not None:
+        # Compose both lifespans with an AsyncExitStack so enabling enrichment can
+        # never disturb the MCP session manager (or vice-versa) — each is entered
+        # only when its own feature is on, and both unwind in order on shutdown.
+        from contextlib import AsyncExitStack, asynccontextmanager
+
         @asynccontextmanager
-        async def _mcp_lifespan(_app: FastAPI):  # noqa: ANN202 - FastAPI lifespan
-            async with _mcp_server.session_manager.run():
+        async def _lifespan(_app: FastAPI):  # noqa: ANN202 - FastAPI lifespan
+            async with AsyncExitStack() as stack:
+                if _mcp_server is not None:
+                    await stack.enter_async_context(_mcp_server.session_manager.run())
+                if enrich_provider is not None:
+                    task = asyncio.create_task(_enrichment_loop(enrich_provider))
+                    stack.callback(task.cancel)
                 yield
 
-        lifespan = _mcp_lifespan
+        lifespan = _lifespan
+
+    async def _enrichment_loop(inner: LLMProvider) -> None:
+        """Periodic background pass. Runs the synchronous store/provider work in a
+        worker thread so it never blocks the event loop, and swallows per-pass
+        errors so a transient failure can't kill the loop for the process lifetime.
+        """
+        provider_for = enrich_provider_for(store, config, inner)
+        while True:
+            try:
+                await asyncio.sleep(config.enrich_interval_seconds)
+                stats = await asyncio.to_thread(
+                    run_enrichment_pass, store, object_store, config, provider_for
+                )
+                if stats.enriched or stats.failed:
+                    _log.info("enrichment pass: %s", stats.as_dict())
+            except asyncio.CancelledError:  # shutdown
+                raise
+            except Exception:  # noqa: BLE001 - a bad pass must not kill the loop
+                _log.exception("enrichment pass failed; will retry next interval")
 
     app = FastAPI(title="Manthana Server", lifespan=lifespan)
     install_hardening(app, config)
@@ -175,8 +226,8 @@ def create_app(
         return MeteredProvider(provider, store, org_id, cap)
 
     def privacy_open(org_id: str) -> bool:
-        """True when this org waived anonymization (founder == manager: named,
-        per-individual results). Per-org override wins over the server default."""
+        """True when this org waived anonymization (named, per-individual
+        results). Per-org override wins over the server default."""
         return (store.get_org_privacy(org_id) or config.privacy_mode) == "open"
 
     @app.exception_handler(QuotaExceededError)
@@ -187,13 +238,6 @@ def create_app(
         # constant-time comparison — admin token gates org/team/token mint + founder query
         if not _ct_eq(x_admin_token, config.admin_token):
             raise HTTPException(status_code=401, detail="invalid admin token")
-
-    def require_manager(x_manager_token: Annotated[str, Header()] = "") -> None:
-        # The manager view (per-individual, k-anon-bypassing) is a privilege above
-        # the founder console. Disabled unless a manager_token is configured; then
-        # gated by constant-time comparison.
-        if not config.manager_token or not _ct_eq(x_manager_token, config.manager_token):
-            raise HTTPException(status_code=401, detail="invalid or disabled manager token")
 
     def require_founder_access(
         x_admin_token: Annotated[str, Header()] = "",
@@ -338,7 +382,7 @@ def create_app(
         if len(encoded) > config.max_raw_bytes:
             raise HTTPException(status_code=413, detail="raw transcript too large")
         # Validate JSONL on the way in so the object store never holds un-parseable raw
-        # (the manager drill path then never trips on a malformed line).
+        # (the founder drill path then never trips on a malformed line).
         for line in body.content.splitlines():
             if not line.strip():
                 continue
@@ -358,42 +402,20 @@ def create_app(
         check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
     ) -> dict[str, Any]:
         check_org(body.org_id)
+        allow_individual = privacy_open(body.org_id)
         result = run_query(
             store, config, org_id=body.org_id, query=body.query,
             provider=org_provider(body.org_id), source=body.source,
-            allow_individual=privacy_open(body.org_id),
+            allow_individual=allow_individual,
         )
+        # ``individual`` is driven by allow_individual itself: whenever the query
+        # could resolve to a named person, the audit row says so.
         store.record_founder_query(
             org_id=body.org_id,
             query=body.query,
             insufficient=result.insufficient_data,
             citations=result.citations,
-        )
-        return {
-            "filter": result.filter.model_dump(),
-            "rollup": result.rollup.__dict__ if result.rollup else None,
-            "narrative": result.narrative,
-            "citations": result.citations,
-            "insufficient_data": result.insufficient_data,
-            "coverage": result.coverage.__dict__ if result.coverage else None,
-        }
-
-    @app.post("/v1/manager/query")
-    def manager_query(
-        body: FounderQueryBody, _: Annotated[None, Depends(require_manager)]
-    ) -> dict[str, Any]:
-        # Manager view: may resolve to a single named person (k-anon bypassed).
-        # ALWAYS audited as an individual query — the accountability record.
-        result = run_query(
-            store, config, org_id=body.org_id, query=body.query,
-            provider=org_provider(body.org_id), source=body.source, allow_individual=True,
-        )
-        store.record_founder_query(
-            org_id=body.org_id,
-            query=body.query,
-            insufficient=result.insufficient_data,
-            citations=result.citations,
-            individual=True,
+            individual=allow_individual,
         )
         return {
             "filter": result.filter.model_dump(),
@@ -414,58 +436,59 @@ def create_app(
         # contributors, names dropped) unless the org waived anonymization.
         named = privacy_open(org_id)
         tops, cov = team_topics(store, config, org_id, named=named)
-        return {
-            "topics": [
-                {**t.deidentified(), **({"contributors": sorted(t.contributors)} if named else {})}
-                for t in tops
-            ],
-            "coverage": {"matched": cov.matched, "used": cov.used, "truncated": cov.truncated},
-        }
-
-    @app.get("/v1/manager/topics")
-    def manager_topics(
-        org_id: str, _: Annotated[None, Depends(require_manager)]
-    ) -> dict[str, Any]:
-        tops, cov = team_topics(store, config, org_id, named=True)
         store.record_founder_query(
-            org_id=org_id, query="[topics]", insufficient=False, citations=[], individual=True
+            org_id=org_id, query="[topics]", insufficient=False, citations=[],
+            individual=named,
         )
         return {
             "topics": [
-                {**t.deidentified(), "contributors": sorted(t.contributors), "members": t.members}
+                {
+                    **t.deidentified(),
+                    **(
+                        {"contributors": sorted(t.contributors), "members": t.members}
+                        if named
+                        else {}
+                    ),
+                }
                 for t in tops
             ],
             "coverage": {"matched": cov.matched, "used": cov.used, "truncated": cov.truncated},
         }
 
-    @app.post("/v1/manager/thread")
-    def manager_thread(
-        body: ManagerThreadBody, _: Annotated[None, Depends(require_manager)]
+    @app.post("/v1/founder/thread")
+    def founder_thread(
+        body: FounderThreadBody,
+        check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
     ) -> dict[str, Any]:
+        """The arc of one session across its released slices. Org-scoped: a founder
+        token for another org gets 403. Named-ness follows the org's privacy mode."""
+        check_org(body.org_id)
+        named = privacy_open(body.org_id)
         comps = thread(store, body.org_id, body.session_id)
         store.record_founder_query(
             org_id=body.org_id,
             query=f"[thread] {body.session_id}",
             insufficient=not comps,
             citations=[c.id for c in comps],
-            individual=True,
+            individual=named,
         )
         return {
             "session_id": body.session_id,
             "arc": [
-                {"id": c.id, "actor": c.actor, "project": c.project,
+                {"id": c.id, "actor": c.actor if named else None, "project": c.project,
                  "intent": c.task_intent, "outcome": str(c.outcome)}
                 for c in comps
             ],
         }
 
-    @app.post("/v1/manager/drill")
-    def manager_drill(
-        body: ManagerDrillBody, _: Annotated[None, Depends(require_manager)]
+    @app.post("/v1/founder/drill")
+    def founder_drill(
+        body: FounderDrillBody,
+        check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
     ) -> dict[str, Any]:
-        # Tier-2 raw drill-down, MANAGER-ONLY + audited. Returns the released raw
+        # Tier-2 raw drill-down, org-scoped + audited. Returns the released raw
         # transcript, which was already redacted at sync (redact_turn per turn).
-        # The founder has no drill path — raw never reaches the founder view.
+        check_org(body.org_id)
         key = store.get_raw_key(body.compaction_id, body.org_id)
         turns: list[Any] = []
         if key:
@@ -474,7 +497,7 @@ def create_app(
                 for line in blob.decode("utf-8", "replace").splitlines():
                     if not line.strip():
                         continue
-                    try:  # tolerate a malformed line rather than 500 the manager
+                    try:  # tolerate a malformed line rather than 500 the caller
                         turns.append(json.loads(line))
                     except json.JSONDecodeError:
                         continue
@@ -483,7 +506,7 @@ def create_app(
             query=f"[drill] {body.compaction_id}",
             insufficient=not turns,
             citations=[body.compaction_id] if turns else [],
-            individual=True,
+            individual=privacy_open(body.org_id),
         )
         return {"compaction_id": body.compaction_id, "turns": turns}
 
@@ -539,7 +562,12 @@ def create_app(
         check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
     ) -> dict[str, Any]:
         """The org's founder-query audit trail (same shape as /v1/admin/audit) —
-        a founder can see who queried THEIR org, including manager-view lookups."""
+        a founder can see who queried THEIR org.
+
+        ``individual`` is true when the lookup could resolve to a named person:
+        it mirrors the ``allow_individual`` the query ran with, which is exactly
+        the org's privacy mode ('open' = named, 'k_anon' = de-identified). So the
+        flag stays truthful now that named access is the founder's own."""
         check_org(org_id)
         rows = store.list_founder_audit(org_id)
         return {
@@ -580,11 +608,122 @@ def create_app(
             ],
         }
 
+    @app.get("/v1/admin/enrichment")
+    def enrichment_status(
+        org_id: str, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """Enrichment backlog for an org, and the digests that are stuck.
+
+        A pending digest with neither a ``native_summary`` nor an uploaded raw
+        transcript WAITS rather than burning a model call — this endpoint is how
+        that state is observable, including the ones that aged out ("abandoned")
+        and will never be retried.
+        """
+        rows = store.list_enrichment_state(org_id)
+        return {
+            "org_id": org_id,
+            "enabled": config.enable_enrichment,
+            "model": config.enrich_model,
+            "pending": store.count_pending_for_enrichment(org_id),
+            "stuck": [
+                {
+                    "compaction_id": r.compaction_id,
+                    "state": r.state,
+                    "attempts": r.attempts,
+                    "detail": r.detail,
+                    "first_seen_at": r.first_seen_at,
+                    "updated_at": r.updated_at,
+                }
+                for r in rows
+            ],
+        }
+
+    @app.post("/v1/admin/enrichment/run")
+    def enrichment_run(
+        org_id: str, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """Run one enrichment pass for a single org now, instead of waiting for the
+        background interval. Same bounded batch and same metering."""
+        stats = enrich_org(
+            store,
+            object_store,
+            org_provider(org_id) if enrich_provider is None
+            else MeteredProvider(
+                enrich_provider, store, org_id,
+                store.get_org_quota(org_id) or config.llm_monthly_cap_usd,
+            ),
+            config,
+            org_id=org_id,
+            limit=config.enrich_batch_per_org,
+        )
+        return stats.as_dict()
+
+    @app.post("/v1/admin/purge")
+    def purge_compactions(
+        body: PurgeBody, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """Purge compactions for an org — DRY RUN unless ``confirm`` is true.
+
+        Admin-only, always audited, and refuses an unfiltered request. The dry run
+        returns the count plus a sample of what WOULD be deleted so the operator
+        can eyeball it before committing; ``confirm=true`` then deletes the rows,
+        their raw object-store blobs, and their cached embedding vectors together.
+        """
+        if body.source is not None and body.source not in ("pending", "full", "claude_summary"):
+            raise HTTPException(
+                status_code=422,
+                detail="source must be 'pending', 'full', or 'claude_summary'",
+            )
+        selector = PurgeSelector(
+            source=body.source,
+            contains=body.contains,
+            self_generated=body.self_generated,
+        )
+        # Reject an unfiltered request up front — it is a bad request (422), not a
+        # downstream failure, and checking here keeps it distinguishable from the
+        # blob-failure case below.
+        if selector.is_empty():
+            raise HTTPException(
+                status_code=422,
+                detail="refusing an unfiltered purge — set source, contains, or self_generated",
+            )
+        report = purge(
+            store, object_store, org_id=body.org_id, selector=selector,
+            confirm=body.confirm, actor="admin",
+        )
+        if report.error:
+            # Only reachable on an object-store failure, in which case NOTHING was
+            # deleted — surface it rather than reporting a success the operator
+            # cannot verify.
+            raise HTTPException(status_code=502, detail=report.error)
+        return report.as_dict()
+
+    @app.get("/v1/admin/purge-audit")
+    def purge_audit(
+        org_id: str, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """The org's purge audit trail — dry runs and confirmed deletes alike."""
+        return {
+            "entries": [
+                {
+                    "id": r.id,
+                    "dry_run": r.dry_run,
+                    "matched": r.matched,
+                    "deleted": r.deleted,
+                    "created_at": r.created_at,
+                    "selector": r.data.get("selector"),
+                    "actor": r.data.get("actor"),
+                    "error": r.data.get("error"),
+                }
+                for r in store.list_purge_audit(org_id)
+            ]
+        }
+
     @app.put("/v1/admin/orgs/{org_id}/privacy")
     def set_privacy(
         org_id: str, body: SetPrivacyBody, _: Annotated[None, Depends(require_admin)]
     ) -> dict[str, str]:
-        """Set an org's privacy posture: 'open' (named, founder==manager) or 'k_anon'."""
+        """Set an org's privacy posture: 'open' (named, per-individual) or 'k_anon'."""
         if body.mode not in ("open", "k_anon"):
             raise HTTPException(status_code=422, detail="mode must be 'open' or 'k_anon'")
         store.set_org_privacy(org_id, body.mode)

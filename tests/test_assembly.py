@@ -1,4 +1,4 @@
-"""Stage-2 assembly: threads + topics (k-anon split: founder de-identified, manager named).
+"""Stage-2 assembly: threads + topics (k-anon split: de-identified vs named per privacy mode).
 
 SPDX-License-Identifier: AGPL-3.0-or-later
 """
@@ -17,7 +17,6 @@ from manthana.skills.embed import HashingEmbedder
 
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
 ADMIN = {"X-Admin-Token": "adm"}
-MGR = {"X-Manager-Token": "mgr"}
 
 
 def _c(
@@ -67,7 +66,7 @@ def test_topics_k_anon_gate_and_dedup() -> None:
     founder = topics(comps, emb, min_contributors=4)  # founder view
     assert len(founder) == 1
     assert founder[0].contributors == {"e0@x", "e1@x", "e2@x", "e3@x"}
-    named = topics(comps, emb, min_contributors=1)  # manager / engineer view
+    named = topics(comps, emb, min_contributors=1)  # named / engineer view
     assert len(named) == 2  # the react single-contributor cluster shows too
 
 
@@ -78,10 +77,10 @@ def test_deidentified_drops_names() -> None:
     assert "contributors" not in d and "members" not in d  # no names/ids leak
 
 
-# ── server endpoints: founder de-identified vs manager named (+ audit) ───────
-def _app() -> tuple[TestClient, ServerStore]:
+# ── server endpoints: de-identified vs named per privacy mode (+ audit) ─────
+def _app(privacy: str = "k_anon") -> tuple[TestClient, ServerStore]:
     config = ServerConfig(
-        jwt_secret="x" * 40, admin_token="adm", manager_token="mgr", k_anon_floor=4
+        jwt_secret="x" * 40, admin_token="adm", k_anon_floor=4, privacy_mode=privacy
     )
     store = ServerStore.open("sqlite://")
     store.create_org("o1", "Acme")
@@ -101,29 +100,43 @@ def test_founder_topics_deidentified_and_kanon() -> None:
     assert "contributors" not in topics_out[0]  # de-identified
 
 
-def test_manager_topics_named_and_audited() -> None:
-    client, store = _app()
+def test_founder_topics_named_and_audited_when_privacy_open() -> None:
+    client, store = _app(privacy="open")
     for i in range(4):
         store.ingest_compaction(
             _c(f"pg{i}", f"e{i}@x", f"s{i}", "optimize postgres queries", released=True),
             org_id="o1", team_id="t1",
         )
-    assert client.get("/v1/manager/topics", params={"org_id": "o1"}).status_code == 401  # no token
-    out = client.get("/v1/manager/topics", params={"org_id": "o1"}, headers=MGR).json()["topics"]
-    assert out and "contributors" in out[0]  # named for the manager
+    assert client.get("/v1/founder/topics", params={"org_id": "o1"}).status_code == 401  # no cred
+    out = client.get("/v1/founder/topics", params={"org_id": "o1"}, headers=ADMIN).json()["topics"]
+    assert out and "contributors" in out[0]  # named when the org waived anonymization
     audit = client.get("/v1/admin/audit", params={"org_id": "o1"}, headers=ADMIN).json()["entries"]
     assert any(e["individual"] for e in audit)
 
 
-def test_manager_thread_returns_arc_and_audits() -> None:
-    client, store = _app()
+def test_founder_thread_returns_arc_and_audits() -> None:
+    client, store = _app(privacy="open")
     for sid in ("base", "base.2", "base.3"):
         store.ingest_compaction(
             _c(sid, "suraj@x", sid, f"work in {sid}", released=True), org_id="o1", team_id="t1"
         )
     r = client.post(
-        "/v1/manager/thread", json={"org_id": "o1", "session_id": "base.2"}, headers=MGR
+        "/v1/founder/thread", json={"org_id": "o1", "session_id": "base.2"}, headers=ADMIN
     ).json()
     assert [a["id"] for a in r["arc"]] == ["base", "base.2", "base.3"]  # full arc by thread_key
+    assert r["arc"][0]["actor"] == "suraj@x"  # named under privacy_mode="open"
     audit = client.get("/v1/admin/audit", params={"org_id": "o1"}, headers=ADMIN).json()["entries"]
     assert any(e["individual"] and "thread" in e["query"] for e in audit)
+
+
+def test_founder_thread_suppresses_actor_under_k_anon() -> None:
+    client, store = _app(privacy="k_anon")
+    store.ingest_compaction(
+        _c("base", "suraj@x", "base", "work", released=True), org_id="o1", team_id="t1"
+    )
+    r = client.post(
+        "/v1/founder/thread", json={"org_id": "o1", "session_id": "base"}, headers=ADMIN
+    ).json()
+    assert r["arc"] and r["arc"][0]["actor"] is None  # de-identified
+    audit = client.get("/v1/admin/audit", params={"org_id": "o1"}, headers=ADMIN).json()["entries"]
+    assert all(not e["individual"] for e in audit)

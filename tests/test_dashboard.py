@@ -1,7 +1,9 @@
 """Dashboard control-plane tests (FastAPI TestClient).
 
 Hermetic: compact uses a MockProvider (no claude / no tokens), skills write to a
-tmp dir (not real $HOME), and capture is monkeypatched (no real ~/.claude read).
+tmp dir (not real $HOME), capture is monkeypatched (no real ~/.claude read), and
+$MANTHANA_DATA_HOME is redirected per-test so agent config never resolves to the
+operator's real ~/.manthana/manthana.toml.
 
 SPDX-License-Identifier: Apache-2.0
 """
@@ -24,6 +26,18 @@ from manthana.schemas import EngineeringCompaction, Outcome, Role, Session, Surf
 
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
 _GOOD = json.dumps({"task_intent": "fix tests", "approach": "patch", "outcome": "success"})
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never resolve agent config from the operator's real ~/.manthana.
+
+    Clearing MANTHANA_SERVER_URL/TEAM_TOKEN is not enough: config falls back to
+    $MANTHANA_DATA_HOME/manthana.toml, so on a machine with a configured agent a
+    test asserting the UNconfigured path would read live server credentials and
+    see a redirect instead of the warning.
+    """
+    monkeypatch.setenv("MANTHANA_DATA_HOME", str(tmp_path / "datahome"))
 
 
 def _session(store: Store, sid: str = "s1") -> None:

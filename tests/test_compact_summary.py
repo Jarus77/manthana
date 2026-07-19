@@ -1,8 +1,9 @@
 """Reusing Claude Code's own compaction summaries.
 
 Covers: the collector captures the NEWEST summary + skips summary/boundary lines
-from turns; read_summary scans cheaply; the compactor uses the summary as a cheap
-input and tags source=claude_summary; compact_session reads it on demand.
+from turns; read_summary scans cheaply; the compactor CARRIES the summary text on
+the digest (``native_summary``) for server-side enrichment; compact_session reads
+it on demand from the transcript.
 
 SPDX-License-Identifier: Apache-2.0
 """
@@ -15,13 +16,10 @@ from pathlib import Path
 
 from manthana.agent.compact import compact_session
 from manthana.agent.compactor import Compactor
-from manthana.agent.compactor.prompt import build_prompt
-from manthana.agent.llm import MockProvider
 from manthana.agent.store import Store
 from manthana.collectors import ClaudeCodeCollector
 from manthana.schemas import Role, Session, Surface, Turn
-
-_GOOD = json.dumps({"task_intent": "ship it", "approach": "patched", "outcome": "success"})
+from manthana.server.enrich.prompt import build_prompt
 
 
 def _line(**kw: object) -> str:
@@ -103,16 +101,17 @@ def test_build_prompt_uses_summary_and_recent_turns_only() -> None:
     assert "t0" not in prompt  # old turn dropped (tail only)
 
 
-def test_compact_tags_source_claude_summary() -> None:
-    c = Compactor(MockProvider(_GOOD)).compact(_session(), _turns(), claude_summary="PRIOR STATE")
-    assert c.source == "claude_summary"
-    assert c.prompt_version.endswith("-summary")
+def test_compact_carries_native_summary() -> None:
+    c = Compactor().compact(_session(), _turns(), native_summary="PRIOR STATE")
+    assert c.native_summary == "PRIOR STATE"
+    # The agent doesn't digest it — it just ships it for the server to enrich from.
+    assert c.source == "pending"
 
 
-def test_compact_full_path_tags_source_full() -> None:
-    c = Compactor(MockProvider(_GOOD)).compact(_session(), _turns())
-    assert c.source == "full"
-    assert not c.prompt_version.endswith("-summary")
+def test_compact_without_summary_leaves_native_summary_none() -> None:
+    c = Compactor().compact(_session(), _turns())
+    assert c.native_summary is None
+    assert c.source == "pending"
 
 
 def test_summary_compaction_redacts_on_release_but_keeps_source() -> None:
@@ -145,8 +144,29 @@ def test_compact_session_uses_claude_summary(tmp_path: Path) -> None:
         )
     )
     store.add_turns(_turns("s1", n=3))
-    c = compact_session(store, "s1", provider=MockProvider(_GOOD))
-    assert c is not None and c.source == "claude_summary"
+    c = compact_session(store, "s1")
+    # The summary TEXT is read back off the transcript on demand and carried on the
+    # digest, so the server can enrich from it instead of the whole transcript.
+    assert c is not None
+    assert c.native_summary == "SUMMARY TWO: did X and Y"
+    assert c.source == "pending"
+
+
+def test_compact_session_without_summary_leaves_native_summary_none(tmp_path: Path) -> None:
+    f = tmp_path / "proj" / "plain.jsonl"
+    f.parent.mkdir(parents=True)
+    f.write_text(_line(type="user", uuid="u1", message={"role": "user", "content": "hi"}) + "\n")
+    store = Store.open_memory()
+    store.upsert_session(
+        Session(
+            id="s2", actor="e@x.com", surface=Surface.claude_code, project="demo",
+            started_at=datetime(2026, 6, 1, tzinfo=UTC), turn_count=2,
+            source_path=str(f), has_compact_summary=False,
+        )
+    )
+    store.add_turns(_turns("s2", n=3))
+    c = compact_session(store, "s2")
+    assert c is not None and c.native_summary is None
 
 
 def test_summary_attaches_to_only_the_slice_with_the_boundary() -> None:

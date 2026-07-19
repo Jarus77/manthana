@@ -188,15 +188,16 @@ def create_app(
     app = FastAPI(title="Manthana Dashboard")
     skills_path = skills_dir or _DEFAULT_SKILLS_DIR
 
-    # Sessions whose compaction is running in a background thread (the claude call
-    # is ~30-60s; the request returns immediately). Guarded by a lock since the
-    # worker thread and request handlers both touch it.
+    # Sessions whose compaction is running in a background thread. Compaction is
+    # deterministic now (fast), but it still touches the store, so keep it off the
+    # request path. Guarded by a lock since the worker thread and request handlers
+    # both touch it.
     compacting: set[str] = set()
     compacting_lock = threading.Lock()
 
     def _run_compaction(session_id: str) -> None:
         try:
-            compact_session(store, session_id, provider=provider)
+            compact_session(store, session_id)
         except Exception:
             # Background daemon thread: an uncaught exception here is invisible to
             # the request that started it, so log it explicitly (else a failed

@@ -148,7 +148,7 @@ def test_auto_compact_all_settled(tmp_path: Path) -> None:
     calls: list[bool] = []
 
     def fake_compact(
-        _store: object, *, provider: object = None, now: float = 0.0,
+        _store: object, *, now: float = 0.0,
         settle_seconds: float = 600.0, summarized_only: bool = False,
         max_per_cycle: int | None = None,
     ) -> list[object]:
@@ -174,7 +174,7 @@ def test_auto_compact_summarized_only(tmp_path: Path) -> None:
     seen: list[bool] = []
 
     def fake_compact(
-        _store: object, *, provider: object = None, now: float = 0.0,
+        _store: object, *, now: float = 0.0,
         settle_seconds: float = 600.0, summarized_only: bool = False,
         max_per_cycle: int | None = None,
     ) -> list[object]:
@@ -348,7 +348,7 @@ def test_no_compaction_by_default(tmp_path: Path) -> None:
     _calls, ingest = _recorder()
     compacted: list[bool] = []
 
-    def fake_compact(_store: object, *, provider: object = None) -> list[object]:
+    def fake_compact(_store: object, **_kw: object) -> list[object]:
         compacted.append(True)
         return []
 

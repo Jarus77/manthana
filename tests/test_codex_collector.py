@@ -13,7 +13,6 @@ from pathlib import Path
 
 from manthana.agent.capture import ingest_file
 from manthana.agent.compact import compact_session
-from manthana.agent.llm import MockProvider
 from manthana.agent.store import Store
 from manthana.collectors import CodexCollector
 from manthana.schemas import Role, Surface
@@ -120,17 +119,11 @@ def test_capture_persists_codex_surface_and_native_summary() -> None:
     assert session.has_compact_summary is True
     assert len(store.get_turns(SESSION_ID)) == 7
 
-    response = json.dumps(
-        {
-            "task_intent": "fix the parser",
-            "approach": "inspected and patched it",
-            "outcome": "success",
-        }
-    )
-    compaction = compact_session(store, SESSION_ID, provider=MockProvider(response))
+    compaction = compact_session(store, SESSION_ID)
     assert compaction is not None
-    # Compatibility value: this means a surface-native summary, including Codex.
-    assert compaction.source == "claude_summary"
+    assert compaction.source == "pending"  # agents never call a model
+    # Codex's own `compacted` payload is carried through for server-side enrichment.
+    assert compaction.native_summary is not None
 
 
 def test_patch_apply_end_yields_files_touched(tmp_path) -> None:

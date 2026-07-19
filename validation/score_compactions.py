@@ -42,7 +42,7 @@ SLATE = [
 ]
 
 FILE_TOOLS = {"Edit", "Write", "Read", "MultiEdit", "NotebookEdit"}
-MAX_TURNS_PROMPT = 400  # mirrors compactor/prompt.py _MAX_TURNS
+MAX_TURNS_PROMPT = 400  # mirrors server/enrich/prompt.py _MAX_TURNS
 
 
 @dataclass

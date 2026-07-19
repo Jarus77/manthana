@@ -352,6 +352,35 @@ class Store:
                     out[r.id] = r.vec
         return out
 
+    def delete_compactions(self, compaction_ids: Iterable[str]) -> tuple[int, int]:
+        """Delete compactions and everything derived from them, in ONE transaction.
+
+        Local mirror of the server's purge: the compaction row, its cached
+        embedding vector, and its sync-state record move together, so a purged
+        digest can't keep answering local semantic search or look "already
+        synced". Sessions and turns are left alone — they are the raw capture,
+        not the derived digest, and `capture` re-derives from them.
+
+        Returns ``(compactions_deleted, vectors_deleted)``.
+        """
+        removed = 0
+        vectors = 0
+        with DBSession(self._engine) as db:
+            for compaction_id in compaction_ids:
+                row = db.get(CompactionRow, compaction_id)
+                if row is not None:
+                    db.delete(row)
+                    removed += 1
+                vec = db.get(CompactionVectorRow, compaction_id)
+                if vec is not None:
+                    db.delete(vec)
+                    vectors += 1
+                state = db.get(SyncStateRow, compaction_id)
+                if state is not None:
+                    db.delete(state)
+            db.commit()
+        return removed, vectors
+
     def set_hold(self, compaction_id: str, *, hold: bool = True) -> bool:
         """Set the local auto-release opt-out flag on a compaction."""
         with DBSession(self._engine) as db:

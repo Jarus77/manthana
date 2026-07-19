@@ -1,11 +1,11 @@
-"""End-to-end founder/manager query validation — 10 queries, auto-scored.
+"""End-to-end founder query validation — 10 queries, auto-scored.
 
 Two halves (the user asked for cross-engineer queries, which single-actor real data
 can't supply, so cross-engineer runs against the synthetic 11-engineer org):
 
-  A. REAL data (your own 10 compactions) — self/manager per-person view, k-anon 1.
+  A. REAL data (your own 10 compactions) — self per-person view, k-anon 1.
   B. SYNTHETIC org (11 engineers, 5 projects) — founder aggregates at k-anon 4,
-     plus the founder-refuses-vs-manager-allows per-person contrast.
+     plus the k_anon-refuses-vs-open-allows per-person contrast.
 
 For each query it records: the parsed filter (vs an expected filter → (a) filter
 correct), the rollup, the narrative, and every citation verified against the visible
@@ -55,29 +55,30 @@ REAL_IDS = [
 class Q:
     """A scored query. ``expect`` keys are filter fields that SHOULD be set (with the
     expected value); ``forbid`` are fields that should stay null (the classic trap:
-    'what failed' must NOT set outcome=abandoned). ``manager`` runs the audited
-    individual view; ``expect_insufficient`` asserts k-anon refuses."""
+    'what failed' must NOT set outcome=abandoned). ``privacy_open`` runs the query as an
+    org whose privacy_mode is "open" (named, audited individual view) rather than the
+    default "k_anon"; ``expect_insufficient`` asserts k-anon refuses."""
 
     bank: str  # "REAL" | "SYNTH"
     query: str
     expect: dict[str, str] = field(default_factory=dict)
     forbid: list[str] = field(default_factory=list)
-    manager: bool = False
+    privacy_open: bool = False
     expect_insufficient: bool = False
     note: str = ""
 
 
 QUERIES = [
-    # ── A. REAL data — your own 10, MANAGER/self per-person view (k-anon 1) ───
-    # The founder path correctly REFUSES per-person actor queries; "what did I work
-    # on" is a self/manager lookup, so these run with allow_individual (the audited
-    # manager view the user chose). The abandoned-outcome demo lives in SYNTH (the
-    # real 10 contain zero abandoned sessions).
-    Q("REAL", "what did I work on recently?", manager=True,
+    # ── A. REAL data — your own 10, self per-person view (k-anon 1) ──────────
+    # A k_anon org correctly REFUSES per-person actor queries; "what did I work on"
+    # is a self lookup, so these run as an "open" org (allow_individual, audited).
+    # The abandoned-outcome demo lives in SYNTH (the real 10 contain zero abandoned
+    # sessions).
+    Q("REAL", "what did I work on recently?", privacy_open=True,
       note="broad self rollup; cites several"),
-    Q("REAL", "where did I hit the most friction or blockers recently?", manager=True,
+    Q("REAL", "where did I hit the most friction or blockers recently?", privacy_open=True,
       forbid=["outcome"], note="friction question — must NOT collapse to outcome filter"),
-    Q("REAL", "where did I spend time on LLM evaluation or benchmark work?", manager=True,
+    Q("REAL", "where did I spend time on LLM evaluation or benchmark work?", privacy_open=True,
       note="semantic; should cite the eval/benchmark sessions, not all 10"),
     # ── B. SYNTHETIC org — cross-engineer aggregates (k-anon 4) ──────────────
     Q("SYNTH", "where did the team spend time on LLM evaluation work?",
@@ -90,11 +91,11 @@ QUERIES = [
       expect={"project": "text-to-sql"}, note="project aggregate"),
     Q("SYNTH", "what went wrong in the ASR / speech work?", forbid=["outcome"],
       note="project-scoped friction; project≈asr, outcome null"),
-    # per-person: founder REFUSED, manager ALLOWED (same question)
+    # per-person: k_anon org REFUSED, open org ALLOWED (same question)
     Q("SYNTH", "what did Suraj work on this week?", expect={"actor": "suraj"},
-      expect_insufficient=True, note="FOUNDER per-person → k-anon refuses"),
+      expect_insufficient=True, note="K-ANON org per-person → k-anon refuses"),
     Q("SYNTH", "what did Suraj work on this week?", expect={"actor": "suraj"},
-      manager=True, note="MANAGER per-person → allowed + audited"),
+      privacy_open=True, note="OPEN org per-person → allowed + audited"),
 ]
 
 
@@ -157,10 +158,10 @@ def _run_bank(bank: str, store: ServerStore, config: ServerConfig, org: str,
     rows: list[dict[str, Any]] = []
     for i, q in enumerate([x for x in QUERIES if x.bank == bank], 1):
         print("\n" + "=" * 80)
-        tag = "MANAGER" if q.manager else "FOUNDER"
+        tag = "OPEN" if q.privacy_open else "K-ANON"
         print(f"[{bank} {i}] ({tag}) {q.query}")
         res = run_query(store, config, org_id=org, query=q.query,
-                        provider=provider, allow_individual=q.manager)
+                        provider=provider, allow_individual=q.privacy_open)
         fv, fd = _filter_score(res.filter, q)
         print(f"  (a) FILTER  [{fv}] {fd}")
         if res.insufficient_data:
@@ -190,7 +191,7 @@ def _run_bank(bank: str, store: ServerStore, config: ServerConfig, org: str,
 
 
 def _sheet(rows: list[dict[str, Any]]) -> str:
-    out = ["# Founder / Manager query scoring sheet",
+    out = ["# Founder query scoring sheet",
            "",
            "Auto-scored: **(a) filter correct** and **(b) citations accurate**. "
            "**(c) narrative useful** is for you to score 1–5.",
@@ -230,12 +231,11 @@ def main() -> None:
 
     rows: list[dict[str, Any]] = []
 
-    # ── A. REAL data (self/manager, k-anon 1) ────────────────────────────────
+    # ── A. REAL data (self view, k-anon 1) ───────────────────────────────────
     real = _load_real()
     print(f"\nloaded {len(real)} REAL compactions")
     rstore = ServerStore.open("sqlite://")
-    rconfig = ServerConfig(jwt_secret="x" * 40, admin_token="adm", manager_token="mgr",
-                           k_anon_floor=1)
+    rconfig = ServerConfig(jwt_secret="x" * 40, admin_token="adm", k_anon_floor=1)
     rstore.create_org("real", "You (real)")
     for c in real:
         rstore.ingest_compaction(c, org_id="real", team_id="t1")
@@ -243,8 +243,7 @@ def main() -> None:
 
     # ── B. SYNTHETIC org (cross-engineer, k-anon 4) ──────────────────────────
     dstore = ServerStore.open(DEMO_DB_URL)
-    dconfig = ServerConfig(jwt_secret="x" * 40, admin_token="adm", manager_token="mgr",
-                           k_anon_floor=4)
+    dconfig = ServerConfig(jwt_secret="x" * 40, admin_token="adm", k_anon_floor=4)
     # visible set for citation checks = all demo compactions
     con = sqlite3.connect("manthana-demo.db")
     demo_by_id: dict[str, Any] = {}

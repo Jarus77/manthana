@@ -1,5 +1,9 @@
 """High-level compaction orchestration: load a session, compact it, store it.
 
+Compaction here is deterministic and local — no LLM provider is involved on the
+agent at any point (see ``compactor.py`` for why). The qualitative fields are
+filled server-side later.
+
 SPDX-License-Identifier: Apache-2.0
 """
 
@@ -13,7 +17,6 @@ from datetime import UTC, datetime
 from manthana.schemas import EngineeringCompaction, Mode, Surface
 
 from .compactor import Compactor
-from .llm import LLMError, LLMProvider, default_provider
 from .store import Store
 
 _log = logging.getLogger(__name__)
@@ -37,25 +40,18 @@ def _native_summary_for(session: object) -> str | None:
     return summary.text if summary else None
 
 
-def compact_session(
-    store: Store,
-    session_id: str,
-    *,
-    provider: LLMProvider | None = None,
-) -> EngineeringCompaction | None:
+def compact_session(store: Store, session_id: str) -> EngineeringCompaction | None:
     """Compact one stored session and persist the result. None if not found.
 
-    When the session carries a surface-native compaction summary, that is used
-    as the (cheap) input instead of the full transcript.
+    When the session carries a surface-native compaction summary, its text is
+    carried on the digest (``native_summary``) so the server can enrich from it
+    instead of the whole transcript.
     """
     session = store.get_session(session_id)
     if session is None:
         return None
     turns = store.get_turns(session_id)
-    provider = provider or default_provider()
-    compaction = Compactor(provider).compact(
-        session, turns, claude_summary=_native_summary_for(session)
-    )
+    compaction = Compactor().compact(session, turns, native_summary=_native_summary_for(session))
     # Re-compaction (resume): carry over the engineer's local trust flags — `hold` MUST
     # survive (it's the auto-release opt-out), and a previously-released digest stays
     # released. Force the changed content to re-sync (sync dedups by id).
@@ -65,7 +61,7 @@ def compact_session(
         compaction.released = prev.released
         compaction.released_at = prev.released_at
         store.clear_synced(compaction.id)
-    compaction.call_cost_usd = getattr(provider, "last_cost_usd", None)
+    # call_cost_usd stays None: building a digest costs nothing now (no model call).
     store.upsert_compaction(compaction)
     return compaction
 
@@ -73,7 +69,6 @@ def compact_session(
 def compact_pending(
     store: Store,
     *,
-    provider: LLMProvider | None = None,
     limit: int | None = None,
     summarized_only: bool = False,
 ) -> list[EngineeringCompaction]:
@@ -81,11 +76,8 @@ def compact_pending(
 
     Personal-mode sessions are skipped (they never contribute to anything that
     could be released). With ``summarized_only`` set, only sessions that carry
-    Claude's own compaction summary are compacted (the cheap path used by the
-    auto-compact daemon). Each session is compacted via ``compact_session``, so the
-    summary is used as the input when present.
+    the surface's own compaction summary are compacted.
     """
-    provider = provider or default_provider()
     existing = {c.session_id for c in store.list_compactions()}
     out: list[EngineeringCompaction] = []
     for session in store.list_sessions(limit=limit):
@@ -93,7 +85,7 @@ def compact_pending(
             continue
         if summarized_only and not session.has_compact_summary:
             continue
-        compaction = compact_session(store, session.id, provider=provider)
+        compaction = compact_session(store, session.id)
         if compaction is not None:
             out.append(compaction)
     return out
@@ -108,27 +100,25 @@ def _as_utc(value: datetime | None) -> datetime | None:
 def compact_settled(
     store: Store,
     *,
-    provider: LLMProvider | None = None,
     now: float | None = None,
     settle_seconds: float = 600.0,
     mtime_of: object = os.path.getmtime,
     summarized_only: bool = False,
     max_per_cycle: int | None = None,
     limit: int | None = None,
-) -> list[tuple[EngineeringCompaction, float | None]]:
+) -> list[EngineeringCompaction]:
     """Auto-compact Work sessions whose transcript has been quiet for >= ``settle_seconds``
     and lack an up-to-date digest (none yet, OR stale because the transcript changed after
     the digest was built — i.e. a resume).
 
     Personal-mode sessions are skipped (they never leave the laptop). ``max_per_cycle``
-    caps how many NEW compactions run per call so a first-run backlog doesn't fire an
-    unbounded burst of (paid) CLI calls — the rest are picked up on later cycles. The
-    staleness signal is file-mtime > digest ``created_at`` (robust even when a session has
-    no ``ended_at``). Returns ``[(compaction, call_cost_usd)]`` (CLI-reported call cost)."""
-    provider = provider or default_provider()
+    caps how many NEW compactions run per call. This is no longer a cost bound (compaction
+    is local and free); it now bounds how long a single watcher cycle can block on store
+    I/O for a first-run backlog, keeping the poll loop responsive. The staleness signal is
+    file-mtime > digest ``created_at`` (robust even when a session has no ``ended_at``)."""
     now = time.time() if now is None else now
     existing = {c.session_id: c for c in store.list_compactions()}
-    out: list[tuple[EngineeringCompaction, float | None]] = []
+    out: list[EngineeringCompaction] = []
     for session in store.list_sessions(limit=limit):
         if max_per_cycle is not None and len(out) >= max_per_cycle:
             break  # per-cycle budget reached — remaining settled sessions wait for a later cycle
@@ -153,12 +143,12 @@ def compact_settled(
             if built is None or mtime <= built.timestamp():
                 continue
         try:
-            new = compact_session(store, session.id, provider=provider)
-        except LLMError:  # one failed/timed-out CLI call must not abort the whole cycle
+            new = compact_session(store, session.id)
+        except Exception:  # noqa: BLE001 - one bad session must not abort the whole cycle
             _log.exception("compact_settled: compaction failed for %s", session.id)
             continue
         if new is not None:
-            out.append((new, getattr(provider, "last_cost_usd", None)))
+            out.append(new)
     return out
 
 

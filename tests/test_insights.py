@@ -114,10 +114,13 @@ def test_ask_source_filter_full_only() -> None:
     store = Store.open_memory()
     _session(store, "s1", "alpha", datetime(2026, 6, 1, tzinfo=UTC))
     _session(store, "s2", "alpha", datetime(2026, 6, 1, tzinfo=UTC))
-    _comp(store, "comp-1", "s1", "alpha", "full work")  # source defaults to "full"
-    cheap = store.get_compaction("comp-1")  # build a claude_summary one for s2
-    assert cheap is not None
-    summary_comp = cheap.model_copy(
+    _comp(store, "comp-1", "s1", "alpha", "full work")
+    base = store.get_compaction("comp-1")
+    assert base is not None
+    # `source` now defaults to "pending" (agents emit deterministic digests), so the
+    # enriched values this filter selects on must be set explicitly.
+    store.upsert_compaction(base.model_copy(update={"source": "full"}))
+    summary_comp = base.model_copy(
         update={"id": "comp-2", "session_id": "s2", "source": "claude_summary"}
     )
     store.upsert_compaction(summary_comp)

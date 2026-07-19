@@ -1,11 +1,18 @@
-"""v0 compaction prompt template.
+"""Compaction prompt template (server-side enrichment).
 
 A fixed template plus the session's normalized turns serialized as compact JSON;
 the model is instructed to return a single ``EngineeringCompaction``-shaped JSON
-object (decisions doc). Treated as a v0 prompt to refine after the first ~20 real
-compactions. Turn content is bounded to keep the prompt size sane.
+object (decisions doc). Turn content is bounded to keep the prompt size sane.
 
-SPDX-License-Identifier: Apache-2.0
+MOVED HERE FROM THE AGENT. Agents never call a model — they emit deterministic
+``source="pending"`` digests and the server fills the qualitative fields on the
+operator's metered key. The template lives in the server package because the
+server must not depend on the agent package (see server/pyproject.toml).
+``PROMPT_VERSION`` is stamped onto every enriched digest so output stays
+traceable to a template version; the agent stamps the same constant on the
+deterministic digest it emits.
+
+SPDX-License-Identifier: AGPL-3.0-or-later
 """
 
 from __future__ import annotations

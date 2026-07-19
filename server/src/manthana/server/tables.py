@@ -152,7 +152,7 @@ class LlmUsageRow(SQLModel, table=True):
 
 class OrgPrivacyRow(SQLModel, table=True):
     """Per-org privacy posture. ``open`` = consenting org: the founder sees named,
-    per-individual results (founder==manager). ``k_anon`` = the original contract:
+    per-individual results. ``k_anon`` = the original contract:
     de-identified, floor-gated aggregates. New TABLE so ``create_all`` upgrades
     existing DBs; absent row → the server default."""
 
@@ -169,6 +169,53 @@ class OrgQuotaRow(SQLModel, table=True):
     monthly_cap_usd: float | None = Field(default=None)
 
 
+class EnrichmentStateRow(SQLModel, table=True):
+    """Per-compaction bookkeeping for the server-side enrichment pass.
+
+    A digest arrives ``source="pending"`` with only its deterministic fields; the
+    enrichment pass fills the qualitative ones. Metadata and raw upload are
+    SEPARATE requests, so a pending digest may have neither a ``native_summary``
+    nor a raw transcript yet — it must WAIT rather than burn a model call on
+    nothing. This row is that waiting state, made observable:
+
+      ``attempts``  — bounded by config.enrich_max_attempts
+      ``state``     — "waiting" (no input yet) | "failed" (call/parse failed)
+                      | "abandoned" (attempts or age exhausted — never retried)
+      ``detail``    — last reason, for the admin enrichment view
+      ``first_seen_at`` — age-out clock (config.enrich_max_age_days)
+
+    Rows exist only for digests that did NOT enrich on the first try; a
+    successfully enriched digest leaves no row (its ``source`` is the record).
+    New TABLE so ``create_all`` upgrades existing DBs.
+    """
+
+    __tablename__ = "enrichment_state"  # type: ignore[assignment]
+    id: str = Field(primary_key=True)  # org-namespaced: org::compaction_id
+    org_id: str = Field(index=True)
+    compaction_id: str = Field(index=True)
+    attempts: int = Field(default=0)
+    state: str = Field(default="waiting", index=True)
+    detail: str = Field(default="")
+    first_seen_at: str
+    updated_at: str
+
+
+class PurgeAuditRow(SQLModel, table=True):
+    """Audit trail of admin purges — what predicate ran, how much it matched, and
+    how much it actually deleted. A dry run is audited too (``dry_run=True``,
+    ``deleted=0``): knowing someone probed for deletable rows is itself of
+    governance interest, and it makes the confirm step traceable to its preview."""
+
+    __tablename__ = "purge_audit"  # type: ignore[assignment]
+    id: str = Field(primary_key=True)
+    org_id: str = Field(index=True)
+    dry_run: bool = Field(index=True)
+    matched: int = Field(default=0)
+    deleted: int = Field(default=0)
+    created_at: str = Field(index=True)
+    data: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))  # selector + sample ids
+
+
 SERVER_TABLES = [
     OrgRow,
     TeamRow,
@@ -183,6 +230,8 @@ SERVER_TABLES = [
     LlmUsageRow,
     OrgQuotaRow,
     OrgPrivacyRow,
+    EnrichmentStateRow,
+    PurgeAuditRow,
 ]
 
 __all__ = [
@@ -199,5 +248,7 @@ __all__ = [
     "LlmUsageRow",
     "OrgQuotaRow",
     "OrgPrivacyRow",
+    "EnrichmentStateRow",
+    "PurgeAuditRow",
     "SERVER_TABLES",
 ]

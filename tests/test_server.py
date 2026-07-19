@@ -166,10 +166,10 @@ def test_founder_query_requires_admin() -> None:
     assert client.post("/v1/founder/query", json={"org_id": "o1", "query": "x"}).status_code == 401
 
 
-# ── manager view (per-individual, k-anon-bypassing, audited) ─────────────────
-def test_manager_view_requires_token_bypasses_kanon_and_audits() -> None:
+# ── named founder view (privacy_mode="open": per-individual, k-anon-bypassing, audited) ──
+def test_founder_open_privacy_bypasses_kanon_and_audits() -> None:
     config = ServerConfig(
-        jwt_secret="x" * 40, admin_token="adm", manager_token="mgr", k_anon_floor=4
+        jwt_secret="x" * 40, admin_token="adm", k_anon_floor=4, privacy_mode="open"
     )
     store = ServerStore.open("sqlite://")
     obj = InMemoryObjectStore()
@@ -179,12 +179,8 @@ def test_manager_view_requires_token_bypasses_kanon_and_audits() -> None:
         store.ingest_compaction(_comp(f"s{i}", "suraj@acme.demo"), org_id="o1", team_id="t1")
 
     body = {"org_id": "o1", "query": "what did suraj work on?"}
-    assert client.post("/v1/manager/query", json=body).status_code == 401  # no token
-    assert (
-        client.post("/v1/manager/query", json=body, headers={"X-Manager-Token": "nope"}).status_code
-        == 401  # wrong token
-    )
-    r = client.post("/v1/manager/query", json=body, headers={"X-Manager-Token": "mgr"})
+    assert client.post("/v1/founder/query", json=body).status_code == 401  # no credential
+    r = client.post("/v1/founder/query", json=body, headers=ADMIN)
     assert r.status_code == 200 and r.json()["insufficient_data"] is False  # k-anon bypassed
     # the per-person lookup is audited as an individual query
     entries = client.get(
@@ -193,18 +189,25 @@ def test_manager_view_requires_token_bypasses_kanon_and_audits() -> None:
     assert entries and entries[0]["individual"] is True
 
 
-def test_manager_view_disabled_when_no_token() -> None:
-    client, *_ = _make()  # config has no manager_token
+def test_founder_kanon_privacy_suppresses_and_audit_flag_is_false() -> None:
+    client, _config, store, _obj = _make(ScriptedProvider(["{}", "the work [s0]"]))
+    store.create_org("o1", "Acme")  # default privacy_mode="k_anon"
+    for i in range(2):
+        store.ingest_compaction(_comp(f"s{i}", "suraj@acme.demo"), org_id="o1", team_id="t1")
     r = client.post(
-        "/v1/manager/query",
-        json={"org_id": "o1", "query": "x"},
-        headers={"X-Manager-Token": "anything"},
+        "/v1/founder/query",
+        json={"org_id": "o1", "query": "what did suraj work on?"},
+        headers=ADMIN,
     )
-    assert r.status_code == 401
+    assert r.status_code == 200 and r.json()["insufficient_data"] is True  # floor holds
+    entries = client.get(
+        "/v1/admin/audit", params={"org_id": "o1"}, headers=ADMIN
+    ).json()["entries"]
+    assert entries and entries[0]["individual"] is False  # not a named lookup
 
 
-def test_manager_token_empty_string_rejected() -> None:
+def test_privacy_mode_invalid_value_rejected() -> None:
     import pytest
 
     with pytest.raises(ValueError):
-        ServerConfig(jwt_secret="x" * 40, admin_token="adm", manager_token="")
+        ServerConfig(jwt_secret="x" * 40, admin_token="adm", privacy_mode="")

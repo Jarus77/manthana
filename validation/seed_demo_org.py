@@ -1,4 +1,4 @@
-"""Seed a SYNTHETIC demo org for the founder/manager demo — deterministic, no LLM.
+"""Seed a SYNTHETIC demo org for the founder demo — deterministic, no LLM.
 
 Creates ~12 named engineers across 5 projects with varied outcomes, realistic
 friction, tokens/cost, and dates spread over the last ~4 weeks, into an ISOLATED

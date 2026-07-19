@@ -6,7 +6,7 @@ friction, the outcome, the cost), and turns that into two things:
 
 - **for the engineer** — a queryable memory of your own work, real-time "you've done this
   before" surfacing, loop warnings, and lower token spend;
-- **for the founder/manager** — grounded, citation-backed visibility into what the team is
+- **for the founder** — grounded, citation-backed visibility into what the team is
   doing, what's failing, and where money goes — **without spying on anyone**.
 
 The trust contract is the point: **the employee owns the local store and raw transcripts; the

@@ -27,9 +27,6 @@ class ServerConfig:
     db_url: str = "sqlite:///./manthana-server.db"
     jwt_secret: str = _DEV_JWT_SECRET
     admin_token: str = _DEV_ADMIN_TOKEN
-    # Optional: enables the audited per-individual manager view. None = disabled
-    # (the founder console stays k-anon-only). Distinct from admin_token.
-    manager_token: str | None = None
     k_anon_floor: int = K_ANON_FLOOR_DEFAULT
     object_store: str = "memory"  # "memory" | "s3"
     s3_bucket: str | None = None
@@ -46,7 +43,7 @@ class ServerConfig:
     # Per-org overrides live in the org_quota table (PUT /v1/admin/orgs/{id}/quota).
     llm_monthly_cap_usd: float = 0.0
     # Hard ceiling on an uploaded raw transcript (bytes) — bounds memory on the
-    # privileged manager drill path. Default 25 MB.
+    # privileged founder drill path. Default 25 MB.
     max_raw_bytes: int = 25_000_000
     # Mark console cookies Secure (HTTPS-only). Off by default so local/dev HTTP
     # logins keep working; MUST be enabled on any public TLS deployment.
@@ -59,9 +56,33 @@ class ServerConfig:
     # client before enabling, so it never risks the main app until proven.
     enable_founder_mcp: bool = False
     # Default privacy posture for orgs with no explicit override (org_privacy table).
-    # "open" = consenting org: the founder sees named, per-individual results
-    # (founder==manager). "k_anon" = de-identified, floor-gated aggregates.
+    # "open" = consenting org: the founder sees named, per-individual results.
+    # "k_anon" = de-identified, floor-gated aggregates.
     privacy_mode: str = "k_anon"
+    # ── server-side digest enrichment ────────────────────────────────────
+    # Agents emit deterministic ``source="pending"`` digests; the server fills the
+    # qualitative fields on the operator's metered key. OFF by default (same posture
+    # as enable_founder_mcp): enabling it starts a background loop that spends real
+    # money, so it must be an explicit operator decision. The pass itself is directly
+    # callable/testable regardless of this flag.
+    enable_enrichment: bool = False
+    # Cheap model for enrichment — this is bulk structured summarization, not
+    # reasoning. Haiku 4.5 is $1/$5 per Mtok, which lands enrichment around a cent
+    # or two per session. Separate from llm_model (the founder-narrative model) so
+    # the narrative can stay on a stronger tier.
+    enrich_model: str = "claude-haiku-4-5"
+    enrich_max_tokens: int = 2048
+    # Seconds between background passes.
+    enrich_interval_seconds: int = 300
+    # Per-org cap for one pass — a deliberate ceiling so a single org's backlog
+    # cannot starve every other tenant.
+    enrich_batch_per_org: int = 25
+    # Whole-pass ceiling across all orgs.
+    enrich_max_batch: int = 200
+    # A pending digest whose raw never arrived must not retry forever: it is
+    # abandoned after this many attempts, or once it is this old.
+    enrich_max_attempts: int = 5
+    enrich_max_age_days: int = 7
     # Comma-separated Host allowlist for the MCP endpoint's DNS-rebinding check;
     # must include the public domain behind the ALB. "*" disables the check.
     mcp_allowed_hosts: str = "localhost,127.0.0.1,testserver"
@@ -82,10 +103,6 @@ class ServerConfig:
                 "MANTHANA_SERVER_ADMIN_TOKEN and MANTHANA_SERVER_JWT_SECRET "
                 "(copy .env.example to .env)"
             )
-        # An empty manager_token would auth-bypass (compare_digest("","")=True); a
-        # None disables the manager view entirely, which is the safe default.
-        if self.manager_token is not None and not self.manager_token:
-            raise ValueError("manager_token must be non-empty when set (or leave it unset/None)")
         if self.privacy_mode not in ("open", "k_anon"):
             raise ValueError(f"privacy_mode must be 'open' or 'k_anon', got {self.privacy_mode!r}")
         if self.llm_provider not in ("mock", "anthropic"):
@@ -108,6 +125,32 @@ class ServerConfig:
             raise ValueError(f"max_raw_bytes must be >= 1, got {self.max_raw_bytes}")
         if self.max_request_bytes < 1:
             raise ValueError(f"max_request_bytes must be >= 1, got {self.max_request_bytes}")
+        # Enrichment bounds. A non-positive batch/attempt/age would either spin the
+        # background loop hot or retry a never-arriving raw forever; a non-positive
+        # interval would busy-loop. (enrich_model is deliberately NOT whitelisted,
+        # same reasoning as llm_model.)
+        if not 1 <= self.enrich_max_tokens <= 100_000:
+            raise ValueError(
+                f"enrich_max_tokens must be 1..100000, got {self.enrich_max_tokens}"
+            )
+        if self.enrich_interval_seconds < 1:
+            raise ValueError(
+                f"enrich_interval_seconds must be >= 1, got {self.enrich_interval_seconds}"
+            )
+        if self.enrich_batch_per_org < 1:
+            raise ValueError(
+                f"enrich_batch_per_org must be >= 1, got {self.enrich_batch_per_org}"
+            )
+        if self.enrich_max_batch < 1:
+            raise ValueError(f"enrich_max_batch must be >= 1, got {self.enrich_max_batch}")
+        if self.enrich_max_attempts < 1:
+            raise ValueError(
+                f"enrich_max_attempts must be >= 1, got {self.enrich_max_attempts}"
+            )
+        if self.enrich_max_age_days < 1:
+            raise ValueError(
+                f"enrich_max_age_days must be >= 1, got {self.enrich_max_age_days}"
+            )
 
     @classmethod
     def from_env(cls) -> ServerConfig:
@@ -116,7 +159,6 @@ class ServerConfig:
             db_url=env("MANTHANA_SERVER_DB_URL", cls.db_url),
             jwt_secret=env("MANTHANA_SERVER_JWT_SECRET", cls.jwt_secret),
             admin_token=env("MANTHANA_SERVER_ADMIN_TOKEN", cls.admin_token),
-            manager_token=env("MANTHANA_SERVER_MANAGER_TOKEN", None),
             k_anon_floor=int(env("MANTHANA_SERVER_K_ANON", str(cls.k_anon_floor))),
             object_store=env("MANTHANA_SERVER_OBJECT_STORE", cls.object_store),
             s3_bucket=env("MANTHANA_SERVER_S3_BUCKET", None),
@@ -136,6 +178,28 @@ class ServerConfig:
             ),
             enable_founder_mcp=(
                 env("MANTHANA_SERVER_ENABLE_FOUNDER_MCP", "") in ("1", "true", "yes")
+            ),
+            enable_enrichment=(
+                env("MANTHANA_SERVER_ENABLE_ENRICHMENT", "") in ("1", "true", "yes")
+            ),
+            enrich_model=env("MANTHANA_SERVER_ENRICH_MODEL", cls.enrich_model),
+            enrich_max_tokens=int(
+                env("MANTHANA_SERVER_ENRICH_MAX_TOKENS", str(cls.enrich_max_tokens))
+            ),
+            enrich_interval_seconds=int(
+                env("MANTHANA_SERVER_ENRICH_INTERVAL", str(cls.enrich_interval_seconds))
+            ),
+            enrich_batch_per_org=int(
+                env("MANTHANA_SERVER_ENRICH_BATCH_PER_ORG", str(cls.enrich_batch_per_org))
+            ),
+            enrich_max_batch=int(
+                env("MANTHANA_SERVER_ENRICH_MAX_BATCH", str(cls.enrich_max_batch))
+            ),
+            enrich_max_attempts=int(
+                env("MANTHANA_SERVER_ENRICH_MAX_ATTEMPTS", str(cls.enrich_max_attempts))
+            ),
+            enrich_max_age_days=int(
+                env("MANTHANA_SERVER_ENRICH_MAX_AGE_DAYS", str(cls.enrich_max_age_days))
             ),
             privacy_mode=env("MANTHANA_SERVER_PRIVACY_MODE", cls.privacy_mode),
             mcp_allowed_hosts=env("MANTHANA_SERVER_MCP_ALLOWED_HOSTS", cls.mcp_allowed_hosts),

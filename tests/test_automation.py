@@ -9,13 +9,11 @@ import json
 from datetime import UTC, datetime
 
 from manthana.agent.compact import compact_session, compact_settled
-from manthana.agent.llm import MockProvider
 from manthana.agent.release import auto_release
 from manthana.agent.store import Store
 from manthana.schemas import EngineeringCompaction, Mode, Outcome, Role, Session, Surface, Turn
 
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
-_GOOD = json.dumps({"task_intent": "did the thing", "approach": "this way", "outcome": "success"})
 
 
 def _session(sid: str, *, mode: Mode = Mode.work, ended: datetime = _T0) -> Session:
@@ -45,11 +43,11 @@ def test_settle_window_gates_compaction() -> None:
     store = Store.open_memory()
     _seed_session(store, "s1")
     # not settled: file modified 100s ago, window 600s → skipped
-    out = compact_settled(store, provider=MockProvider(_GOOD), now=1000.0,
+    out = compact_settled(store, now=1000.0,
                           settle_seconds=600.0, mtime_of=lambda _p: 900.0)
     assert out == [] and store.get_compaction("comp-s1") is None
     # settled: quiet 700s → compacted
-    out = compact_settled(store, provider=MockProvider(_GOOD), now=1000.0,
+    out = compact_settled(store, now=1000.0,
                           settle_seconds=600.0, mtime_of=lambda _p: 300.0)
     assert len(out) == 1 and store.get_compaction("comp-s1") is not None
 
@@ -57,7 +55,7 @@ def test_settle_window_gates_compaction() -> None:
 def test_personal_sessions_are_never_auto_compacted() -> None:
     store = Store.open_memory()
     _seed_session(store, "s1", mode=Mode.personal)
-    out = compact_settled(store, provider=MockProvider(_GOOD), now=1000.0,
+    out = compact_settled(store, now=1000.0,
                           settle_seconds=600.0, mtime_of=lambda _p: 0.0)
     assert out == [] and store.get_compaction("comp-s1") is None
 
@@ -70,12 +68,12 @@ def test_fresh_digest_not_recompacted_but_stale_resume_is() -> None:
     now = built.timestamp() + 10_000  # well past the settle window
     # file last modified BEFORE the digest was built → up-to-date → skip
     assert compact_settled(
-        store, provider=MockProvider(_GOOD), now=now, settle_seconds=600.0,
+        store, now=now, settle_seconds=600.0,
         mtime_of=lambda _p: built.timestamp() - 100,
     ) == []
     # file modified AFTER the digest (a resume) → stale → re-compact
     out = compact_settled(
-        store, provider=MockProvider(_GOOD), now=now, settle_seconds=600.0,
+        store, now=now, settle_seconds=600.0,
         mtime_of=lambda _p: built.timestamp() + 100,
     )
     assert len(out) == 1  # stale digest re-compacted
@@ -86,7 +84,7 @@ def test_max_per_cycle_caps_backlog_burst() -> None:
     for i in range(5):
         _seed_session(store, f"s{i}")
     out = compact_settled(
-        store, provider=MockProvider(_GOOD), now=1000.0, settle_seconds=0.0,
+        store, now=1000.0, settle_seconds=0.0,
         mtime_of=lambda _p: 0.0, max_per_cycle=2,
     )
     assert len(out) == 2  # only 2 of 5 settled sessions compacted this cycle
@@ -95,14 +93,14 @@ def test_max_per_cycle_caps_backlog_burst() -> None:
 def test_recompaction_preserves_hold_released_and_forces_resync() -> None:
     store = Store.open_memory()
     _seed_session(store, "s1")
-    assert compact_session(store, "s1", provider=MockProvider(_GOOD)) is not None
+    assert compact_session(store, "s1") is not None
     # engineer holds + releases it, and it gets synced
     store.set_hold("comp-s1", hold=True)
     store.mark_released("comp-s1", released=True, released_at=datetime.now(UTC))
     store.mark_synced("comp-s1", datetime.now(UTC))
     assert "comp-s1" in store.synced_ids()
     # resume → re-compact: the trust flags must survive, and sync must be re-armed
-    compact_session(store, "s1", provider=MockProvider(_GOOD))
+    compact_session(store, "s1")
     got = store.get_compaction("comp-s1")
     assert got is not None and got.hold is True and got.released is True
     assert "comp-s1" not in store.synced_ids()  # cleared → updated content re-syncs

@@ -1,4 +1,9 @@
-"""Compactor tests (deterministic via MockProvider).
+"""Compactor tests — the agent's compaction is deterministic and model-free.
+
+The agent must NEVER invoke an LLM (a ``claude -p`` call wrote a transcript that
+the watcher captured and compacted, recursing without bound). These tests pin the
+deterministic contract: source="pending", grounded task_intent, empty qualitative
+fields, and every derived/counted field intact.
 
 SPDX-License-Identifier: Apache-2.0
 """
@@ -10,11 +15,9 @@ from datetime import UTC, datetime, timedelta
 
 from manthana.agent.compact import compact_session
 from manthana.agent.compactor import Compactor
-from manthana.agent.llm import MockProvider
 from manthana.agent.store import Store
 from manthana.schemas import (
     EngineeringCompaction,
-    FrictionCategory,
     Outcome,
     Role,
     Session,
@@ -23,22 +26,6 @@ from manthana.schemas import (
 )
 
 _T0 = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
-
-_GOOD = json.dumps(
-    {
-        "task_intent": "fix parser bug",
-        "approach": "read then patch",
-        "artifacts": ["patch"],
-        "outcome": "success",
-        "reusable_pattern": True,
-        "friction_points": [
-            {"category": "tool_error", "description": "first read failed", "turn_refs": ["3"]}
-        ],
-        "files_touched": ["parser.py"],
-        "languages": ["python"],
-        "tests_added": ["test_parser"],
-    }
-)
 
 
 def _session() -> Session:
@@ -70,77 +57,106 @@ def _turns() -> list[Turn]:
     ]
 
 
-def test_compact_produces_engineering_compaction() -> None:
-    comp = Compactor(MockProvider(_GOOD)).compact(_session(), _turns())
+def test_compact_produces_deterministic_pending_compaction() -> None:
+    comp = Compactor().compact(_session(), _turns())
     assert isinstance(comp, EngineeringCompaction)
     assert comp.kind == "engineering"
-    assert comp.task_intent == "fix parser bug"
-    assert comp.outcome is Outcome.success
-    assert comp.reusable_pattern is True
-    assert comp.files_touched == ["parser.py"]
-    assert comp.friction_points[0].category is FrictionCategory.tool_error
-    # cost/tier come from OUR token data, not the LLM
+    # Qualitative fields are UNWRITTEN — the server fills them on its metered key.
+    assert comp.source == "pending"
+    assert comp.approach == ""
+    assert comp.outcome is Outcome.partial
+    assert comp.artifacts == []
+    assert comp.friction_points == []
+    assert comp.languages == [] and comp.frameworks == []
+    assert comp.prs_opened == [] and comp.tests_added == []
+    assert comp.dead_end_branches == []
+    assert comp.reusable_pattern is False
+    # task_intent is grounded in the first user turn, not inferred by a model.
+    assert comp.task_intent == "fix the parser"
+    # Deterministic fields are all present and unchanged.
+    assert comp.id == "comp-s1"
+    assert comp.session_id == "s1"
+    assert comp.actor == "eng@example.com"
+    assert comp.surface is Surface.claude_code
+    assert comp.project == "demo"
     assert comp.tier_used == "opus"
     assert comp.est_cost_usd == 15.0
+    assert comp.total_tokens == 1_000_000
     assert comp.duration_seconds == 300.0
     assert comp.prompt_version == "v2"
-    assert comp.id == "comp-s1"
+    assert comp.created_at is not None
+    # Nothing was spent building it.
+    assert comp.call_cost_usd is None
 
 
-def test_malformed_output_falls_back_gracefully() -> None:
-    comp = Compactor(MockProvider("not json at all")).compact(_session(), _turns())
-    assert comp.outcome is Outcome.partial  # safe default
-    assert comp.task_intent == "fix the parser"  # from first user turn
-    assert comp.tier_used == "opus"  # cost still computed
+def test_compact_never_invokes_a_provider(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The regression guard for the recursion bug: no subprocess, no provider.
+
+    Anything shelling out (``claude -p`` / ``codex exec``) would create a new
+    transcript that the watcher then compacts — the unbounded loop we removed.
+    """
+    import subprocess
+
+    from manthana.agent.llm import provider as prov
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise AssertionError("compaction must never shell out to a model CLI")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    monkeypatch.setattr(prov, "default_provider", _boom)
+    comp = Compactor().compact(_session(), _turns())
+    assert comp.source == "pending"
+    # The compactor holds no provider at all — the seam is gone, not just unused.
+    assert not hasattr(Compactor(), "provider")
 
 
-def test_extract_json_tolerates_prose_and_fences() -> None:
-    wrapped = f"Sure, here is the digest:\n```json\n{_GOOD}\n```\nHope that helps!"
-    comp = Compactor(MockProvider(wrapped)).compact(_session(), _turns())
-    assert comp.outcome is Outcome.success
-    assert comp.task_intent == "fix parser bug"
+def test_native_summary_carried_when_present() -> None:
+    comp = Compactor().compact(_session(), _turns(), native_summary="PRIOR STATE: did X")
+    assert comp.native_summary == "PRIOR STATE: did X"
+    # It's carried for the server, not interpreted here — source stays "pending".
+    assert comp.source == "pending"
+
+
+def test_native_summary_none_when_absent() -> None:
+    assert Compactor().compact(_session(), _turns()).native_summary is None
 
 
 def test_compact_session_persists_to_store() -> None:
     store = Store.open_memory()
     store.upsert_session(_session())
     store.add_turns(_turns())
-    comp = compact_session(store, "s1", provider=MockProvider(_GOOD))
+    comp = compact_session(store, "s1")
     assert comp is not None
     fetched = store.get_compaction("comp-s1")
     assert isinstance(fetched, EngineeringCompaction)
-    assert fetched.files_touched == ["parser.py"]
+    assert fetched.source == "pending"
+    assert fetched.task_intent == "fix the parser"
 
 
 def test_compact_session_unknown_returns_none() -> None:
-    store = Store.open_memory()
-    assert compact_session(store, "ghost", provider=MockProvider(_GOOD)) is None
+    assert compact_session(Store.open_memory(), "ghost") is None
 
 
-# ── Fix #3: files_touched is deterministic from tool calls ───────────────────
+# ── files_touched stays complete: it comes from real tool calls, not a model ──
 def test_files_touched_deterministic_from_tool_calls() -> None:
     turns = [
         Turn(id="t0", session_id="s1", actor="e", seq=0, role=Role.assistant,
              tool_name="Edit", tool_input={"file_path": "/repo/src/app.py"}),
         Turn(id="t1", session_id="s1", actor="e", seq=1, role=Role.assistant,
              tool_name="Read", tool_input={"file_path": "/repo/data/train.csv"}),
+        # a repeat must not duplicate, and a non-file tool contributes nothing
+        Turn(id="t2", session_id="s1", actor="e", seq=2, role=Role.assistant,
+             tool_name="Edit", tool_input={"file_path": "/repo/src/app.py"}),
+        Turn(id="t3", session_id="s1", actor="e", seq=3, role=Role.assistant,
+             tool_name="Bash", tool_input={"command": "ls /repo/secret.py"}),
     ]
-    # LLM misses app.py, adds a real Bash-opened path + two dataset descriptions.
-    payload = json.dumps({
-        "task_intent": "x", "outcome": "success",
-        "files_touched": ["notes.md", "patents (5.4GB)", "Mongo: db (n=1)"],
-    })
-    comp = Compactor(MockProvider(payload)).compact(_session(), turns)
-    assert "/repo/src/app.py" in comp.files_touched  # tool-call file the LLM missed
-    assert "/repo/data/train.csv" in comp.files_touched
-    assert "notes.md" in comp.files_touched  # LLM-only but looks like a path
-    assert "patents (5.4GB)" not in comp.files_touched  # description filtered out
-    assert not any("Mongo" in f for f in comp.files_touched)  # description filtered out
+    comp = Compactor().compact(_session(), turns)
+    assert comp.files_touched == ["/repo/src/app.py", "/repo/data/train.csv"]
 
 
-# ── Fix #4: long sessions keep the head AND the tail (the ending) ────────────
+# ── the prompt template survives for server-side enrichment ──────────────────
 def test_serialize_turns_keeps_head_and_tail_on_long_sessions() -> None:
-    from manthana.agent.compactor.prompt import serialize_turns
+    from manthana.server.enrich.prompt import serialize_turns
 
     turns = [
         Turn(id=f"t{i}", session_id="s", actor="e", seq=i, role=Role.user, content=f"turn-{i}")

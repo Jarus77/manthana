@@ -371,9 +371,10 @@ def test_parse_filter_does_not_force_outcome_on_failure_query() -> None:
     assert spec.outcome is None
 
 
-def test_manager_view_returns_individual_that_founder_suppresses() -> None:
-    # The core privacy assertion: the founder path suppresses a single-person query
-    # (k-anon), but the manager view (allow_individual=True) returns it.
+def test_privacy_open_returns_individual_that_k_anon_suppresses() -> None:
+    # The core privacy assertion: under privacy_mode="k_anon" a single-person query is
+    # suppressed by the floor; an org that waived anonymization ("open" →
+    # allow_individual=True) gets the named answer.
     config = _cfg(k_anon_floor=4)
     store = ServerStore.open("sqlite://")
     store.create_org("o1", "Acme")
@@ -381,15 +382,15 @@ def test_manager_view_returns_individual_that_founder_suppresses() -> None:
         store.ingest_compaction(_comp(f"s{i}", "suraj@acme.demo"), org_id="o1", team_id="t1")
     citing = MockProvider("Suraj shipped the work [s0].")
 
-    founder = run_query(store, config, org_id="o1", query="what did suraj do?", provider=citing)
-    assert founder.insufficient_data is True  # single contributor < floor → suppressed
+    k_anon = run_query(store, config, org_id="o1", query="what did suraj do?", provider=citing)
+    assert k_anon.insufficient_data is True  # single contributor < floor → suppressed
 
-    mgr = run_query(
+    open_org = run_query(
         store, config, org_id="o1", query="what did suraj do?",
         provider=citing, allow_individual=True,
     )
-    assert mgr.insufficient_data is False  # manager view bypasses the floor
-    assert mgr.citations == ["s0"]
+    assert open_org.insufficient_data is False  # privacy_mode="open" bypasses the floor
+    assert open_org.citations == ["s0"]
 
 
 def test_resolve_actor_unique_ambiguous_none() -> None:

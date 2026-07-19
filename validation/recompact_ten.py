@@ -1,13 +1,19 @@
-"""Re-compact the 10 validation sessions with the CURRENT compactor, cost-tracked.
+"""Re-compact the 10 validation sessions with the CURRENT compactor.
 
-The stored digests are stale (pre-fix v1: no total_tokens, no head+tail window, no
-call-cost capture). This re-runs each of the same 10 sessions through the real
-``claude -p`` provider and records, per session: the input source (full transcript vs
-Claude's own summary), the digest's est_cost_usd (API list-price equivalent of the
-ORIGINAL session) + total_tokens, and the ACTUAL compaction-call cost + wall duration.
+Agents no longer call an LLM: compaction is deterministic and local, and the
+qualitative fields (task_intent beyond the fallback, approach, outcome, friction)
+are written server-side by the enrichment pass on the operator's metered key.
+So this harness no longer spends tokens and no longer has a per-call cost to
+report — ``call_cost_usd`` is server-side now. What it still measures, per
+session: whether the session carried the coding agent's own native compaction
+(``native_summary``), the digest's est_cost_usd (API list-price equivalent of the
+ORIGINAL session) + total_tokens, and the wall duration of the local pass.
+
+Judging digest QUALITY now requires the enriched digest from the server, not this
+script's output — see validation/founder_queries.py.
 
 Run:  uv run python validation/recompact_ten.py
-Spends real tokens (10 CLI calls). Writes validation/recompact_results.json.
+Free (no model calls). Writes validation/recompact_results.json.
 
 SPDX-License-Identifier: Apache-2.0
 """
@@ -19,7 +25,6 @@ import time
 from pathlib import Path
 
 from manthana.agent.compact import compact_session
-from manthana.agent.llm import ClaudeCLIProvider
 from manthana.agent.store import Store
 
 # The same 10 sessions as the first validation run (verified present in the store).
@@ -39,12 +44,9 @@ TEN = [
 
 def main() -> None:
     store = Store.open()
-    provider = ClaudeCLIProvider(timeout=300)
-    if not provider.available():
-        raise SystemExit("claude CLI not available — cannot run the live re-compaction")
 
     rows: list[dict[str, object]] = []
-    total_call_cost = 0.0
+    with_native = 0
     for label, sid in TEN:
         session = store.get_session(sid)
         if session is None:
@@ -52,13 +54,17 @@ def main() -> None:
             continue
         turns = len(store.get_turns(sid))
         t0 = time.monotonic()
-        comp = compact_session(store, sid, provider=provider)
+        comp = compact_session(store, sid)
         dur = time.monotonic() - t0
         if comp is None:
             print(f"  SKIP {label}: compaction returned None")
             continue
-        call_cost = comp.call_cost_usd or 0.0
-        total_call_cost += call_cost
+        # ``native_summary`` is the coding agent's OWN compaction, when the session
+        # had one — it is what the server prefers over the raw transcript when
+        # enriching, so its hit rate across the slate is the number worth watching.
+        native = comp.native_summary
+        if native:
+            with_native += 1
         row = {
             "label": label,
             "session_id": sid,
@@ -69,29 +75,29 @@ def main() -> None:
             "est_cost_usd": comp.est_cost_usd,
             "total_tokens": comp.total_tokens,
             "tier_used": comp.tier_used,
-            "call_cost_usd": round(call_cost, 6),
-            "call_seconds": round(dur, 1),
+            "native_summary_chars": len(native) if native else 0,
+            "local_seconds": round(dur, 2),
             "files_touched": len(comp.files_touched),
-            "friction_points": len(comp.friction_points),
-            "usage": provider.last_usage,
         }
         rows.append(row)
         print(
             f"  {label:11} src={comp.source:13} turns={turns:5} "
-            f"call=${call_cost:.4f} {dur:5.1f}s  files={len(comp.files_touched):3} "
-            f"friction={len(comp.friction_points)} -> {comp.outcome.value}"
+            f"native={'yes' if native else ' no':3} {dur:5.2f}s  "
+            f"files={len(comp.files_touched):3} tokens={comp.total_tokens}"
         )
 
     out = {
         "sessions": len(rows),
-        "total_call_cost_usd": round(total_call_cost, 4),
-        "avg_call_cost_usd": round(total_call_cost / len(rows), 4) if rows else 0.0,
+        "with_native_summary": with_native,
         "rows": rows,
     }
     dest = Path(__file__).parent / "recompact_results.json"
     dest.write_text(json.dumps(out, indent=2))
-    print(f"\n{len(rows)} sessions re-compacted; total call cost "
-          f"${total_call_cost:.4f}; avg ${out['avg_call_cost_usd']}/compaction")
+    print(
+        f"\n{len(rows)} sessions re-compacted locally (free); "
+        f"{with_native} carried the agent's own compaction. "
+        f"Qualitative fields are written by the server enrichment pass."
+    )
     print(f"wrote {dest}")
 
 
