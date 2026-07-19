@@ -100,6 +100,10 @@ class SetQuotaBody(BaseModel):
     monthly_cap_usd: float | None = None  # None clears the override → server default
 
 
+class SetPrivacyBody(BaseModel):
+    mode: str  # "open" | "k_anon"
+
+
 class FounderTokenBody(BaseModel):
     org_id: str
     expires_days: int = 365
@@ -169,6 +173,11 @@ def create_app(
         if cap is None:
             cap = config.llm_monthly_cap_usd
         return MeteredProvider(provider, store, org_id, cap)
+
+    def privacy_open(org_id: str) -> bool:
+        """True when this org waived anonymization (founder == manager: named,
+        per-individual results). Per-org override wins over the server default."""
+        return (store.get_org_privacy(org_id) or config.privacy_mode) == "open"
 
     @app.exception_handler(QuotaExceededError)
     def quota_exceeded(_request: Request, exc: QuotaExceededError) -> JSONResponse:
@@ -352,6 +361,7 @@ def create_app(
         result = run_query(
             store, config, org_id=body.org_id, query=body.query,
             provider=org_provider(body.org_id), source=body.source,
+            allow_individual=privacy_open(body.org_id),
         )
         store.record_founder_query(
             org_id=body.org_id,
@@ -400,11 +410,15 @@ def create_app(
         check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
     ) -> dict[str, Any]:
         check_org(org_id)
-        # Emergent topic clusters across the team, k-anon de-identified (>= floor
-        # contributors, names dropped) — cross-cutting visibility beyond project tags.
-        tops, cov = team_topics(store, config, org_id)
+        # Emergent topic clusters across the team. De-identified (>= floor
+        # contributors, names dropped) unless the org waived anonymization.
+        named = privacy_open(org_id)
+        tops, cov = team_topics(store, config, org_id, named=named)
         return {
-            "topics": [t.deidentified() for t in tops],
+            "topics": [
+                {**t.deidentified(), **({"contributors": sorted(t.contributors)} if named else {})}
+                for t in tops
+            ],
             "coverage": {"matched": cov.matched, "used": cov.used, "truncated": cov.truncated},
         }
 
@@ -565,6 +579,16 @@ def create_app(
                 for r in store.list_llm_usage(org_id)
             ],
         }
+
+    @app.put("/v1/admin/orgs/{org_id}/privacy")
+    def set_privacy(
+        org_id: str, body: SetPrivacyBody, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, str]:
+        """Set an org's privacy posture: 'open' (named, founder==manager) or 'k_anon'."""
+        if body.mode not in ("open", "k_anon"):
+            raise HTTPException(status_code=422, detail="mode must be 'open' or 'k_anon'")
+        store.set_org_privacy(org_id, body.mode)
+        return {"org_id": org_id, "mode": body.mode}
 
     @app.put("/v1/admin/orgs/{org_id}/quota")
     def set_quota(

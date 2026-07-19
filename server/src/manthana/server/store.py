@@ -33,6 +33,7 @@ from .tables import (
     InviteRow,
     LlmUsageRow,
     OrgConsentRow,
+    OrgPrivacyRow,
     OrgQuotaRow,
     OrgRow,
     RawTranscriptRow,
@@ -522,6 +523,17 @@ class ServerStore:
         with DBSession(self._engine) as db:
             db.merge(OrgQuotaRow(org_id=org_id, monthly_cap_usd=monthly_cap_usd))
             db.commit()
+
+    def set_org_privacy(self, org_id: str, mode: str) -> None:
+        with DBSession(self._engine) as db:
+            db.merge(OrgPrivacyRow(org_id=org_id, mode=mode))
+            db.commit()
+
+    def get_org_privacy(self, org_id: str) -> str | None:
+        """The org's privacy mode override ('open' | 'k_anon'), or None for default."""
+        with DBSession(self._engine) as db:
+            row = db.get(OrgPrivacyRow, org_id)
+            return row.mode if row else None
 
     def get_org_quota(self, org_id: str) -> float | None:
         """The org's cap override, or None when the server default applies."""

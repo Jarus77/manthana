@@ -102,6 +102,10 @@ def mount_ui(
     object_store: ObjectStore | None = None,
     provider_for: Callable[[str], LLMProvider] | None = None,
 ) -> None:
+    def _privacy_open(org_id: str) -> bool:
+        """Org waived anonymization → named, per-individual results in the console."""
+        return (store.get_org_privacy(org_id) or config.privacy_mode) == "open"
+
     def _provider(org_id: str) -> LLMProvider:
         # Per-org metered provider when the app supplies one (hosted quotas);
         # the shared provider otherwise (self-hosted / tests).
@@ -192,7 +196,8 @@ def mount_ui(
                 f"<tr><td>{_e(o.name)} <span class='muted'>({_e(o.id)})</span></td>"
                 f"<td>{teams}</td><td>{comps}</td><td>{pending}</td>"
                 f"<td title='month-to-date server AI spend / monthly cap'>{_e(budget)}</td>"
-                f"<td><a href='/ui/topics?org_id={_e(o.id)}'>Topics</a> · "
+                f"<td><a href='/ui/sessions?org_id={_e(o.id)}'>Sessions</a> · "
+                f"<a href='/ui/topics?org_id={_e(o.id)}'>Topics</a> · "
                 f"<a href='/ui/router?org_id={_e(o.id)}'>Cost $</a> · "
                 f"<a href='/ui/digest?org_id={_e(o.id)}'>Digest</a> · "
                 f"<form method='post' action='/ui/mine'>"
@@ -235,6 +240,7 @@ def mount_ui(
             result = run_query(
                 store, config, org_id=org_id, query=query,
                 provider=_provider(org_id), source=source or None,
+                allow_individual=_privacy_open(org_id),
             )
         except QuotaExceededError as exc:
             return HTMLResponse(_quota_page(exc), status_code=429)
@@ -254,6 +260,9 @@ def mount_ui(
                 f"<span title='API list-price equivalent — NOT subscription spend'>"
                 f"~${r.total_cost_usd:,.2f} API-list-equiv</span></p>"
                 f"<p>by project: {_e(r.by_project)}<br>by outcome: {_e(r.by_outcome)}</p>"
+                + (
+                    f"<p>by engineer: {_e(r.by_engineer)}</p>" if r.by_engineer else ""
+                )
             )
         cites = ", ".join(_e(c) for c in result.citations) or "—"
         cov = f"<p class='muted'>{_e(result.coverage.note())}</p>" if result.coverage else ""
@@ -519,13 +528,113 @@ def mount_ui(
         )
         return HTMLResponse(_page(f"Cost — {org_id}", body))
 
+    @app.get("/ui/sessions", response_class=HTMLResponse)
+    def ui_sessions(
+        org_id: str,
+        project: str = "",
+        engineer: str = "",
+        manthana_admin: Annotated[str, Cookie()] = "",
+    ) -> Response:
+        """Browse the org's released session digests (no raw transcripts) — the
+        founder-facing answer to 'let me actually read what my team did'."""
+        sess = _session(manthana_admin)
+        if sess is None:
+            return RedirectResponse(url="/ui/login", status_code=303)
+        org_id = _scope_org(sess, org_id)
+        named = _privacy_open(org_id)
+        comps = store.query_compactions(
+            org_id=org_id, project=project or None, actor=engineer or None, limit=300
+        )
+        projects = store.list_projects(org_id)
+        opts = "".join(
+            f"<option value='{_e(p)}'{' selected' if p == project else ''}>{_e(p)}</option>"
+            for p in projects
+        )
+        who = (
+            "".join(
+                f"<option value='{_e(a.id)}'{' selected' if a.id == engineer else ''}>"
+                f"{_e(a.display_name or a.id)}</option>"
+                for a in store.list_actors(org_id)
+            )
+            if named
+            else ""
+        )
+        filters = (
+            "<div class='bar'><form method='get' action='/ui/sessions'>"
+            f"<input type='hidden' name='org_id' value='{_e(org_id)}'>"
+            f"<select name='project'><option value=''>all projects</option>{opts}</select> "
+            + (
+                f"<select name='engineer'><option value=''>all engineers</option>{who}</select> "
+                if named
+                else ""
+            )
+            + "<button>Filter</button></form></div>"
+        )
+        rows = "".join(
+            f"<tr><td class='muted'>{_e(str(c.started_at)[:16])}</td>"
+            + (f"<td>{_e(c.actor.split('@')[0])}</td>" if named else "")
+            + f"<td>{_e(c.project)}</td>"
+            f"<td><a href='/ui/session?org_id={_e(org_id)}&compaction_id={_e(c.id)}'>"
+            f"{_e(c.task_intent[:80])}</a></td>"
+            f"<td>{_e(str(c.outcome))}</td></tr>"
+            for c in comps
+        )
+        head = (
+            "<tr><th>when</th>"
+            + ("<th>engineer</th>" if named else "")
+            + "<th>project</th><th>what they set out to do</th><th>outcome</th></tr>"
+        )
+        empty = f"<tr><td colspan={5 if named else 4}>no sessions yet</td></tr>"
+        body = (
+            f"<p class='muted'>org: {_e(org_id)} · {len(comps)} session(s) · digests only"
+            f"{'' if named else ' · de-identified'}</p>{filters}"
+            f"<table>{head}{rows or empty}</table><p><a href='/ui'>← console</a></p>"
+        )
+        return HTMLResponse(_page("Sessions", body))
+
+    @app.get("/ui/session", response_class=HTMLResponse)
+    def ui_session_detail(
+        org_id: str, compaction_id: str, manthana_admin: Annotated[str, Cookie()] = ""
+    ) -> Response:
+        """One session's full digest. Never raw turns — the founder path has no drill."""
+        sess = _session(manthana_admin)
+        if sess is None:
+            return RedirectResponse(url="/ui/login", status_code=303)
+        org_id = _scope_org(sess, org_id)
+        named = _privacy_open(org_id)
+        c = store.get_compaction(compaction_id, org_id)
+        if c is None:
+            return HTMLResponse(
+                _page("Session", "<p class='warn'>not found in this org</p>"), status_code=404
+            )
+        friction = "".join(
+            f"<li><b>{_e(str(fp.category))}</b> — {_e(fp.description)}</li>"
+            for fp in (getattr(c, "friction_points", None) or [])
+        )
+        files = "".join(f"<li>{_e(f)}</li>" for f in (getattr(c, "files_touched", None) or []))
+        meta = (
+            f"<p class='muted'>{_e(str(c.started_at)[:16])} · project {_e(c.project)}"
+            + (f" · {_e(c.actor)}" if named else "")
+            + f" · outcome <b>{_e(str(c.outcome))}</b> · {_e(str(c.surface))}</p>"
+        )
+        body = (
+            f"<h3>{_e(c.task_intent)}</h3>{meta}"
+            f"<h4>Approach</h4><pre>{_e(getattr(c, 'approach', '') or '—')}</pre>"
+            f"<h4>Friction</h4><ul>{friction or '<li>none recorded</li>'}</ul>"
+            f"<h4>Files touched</h4><ul>{files or '<li>none recorded</li>'}</ul>"
+            f"<p class='muted'>session {_e(c.session_id)} · "
+            f"~${(c.est_cost_usd or 0):.2f} API-list-equiv</p>"
+            f"<p><a href='/ui/sessions?org_id={_e(org_id)}'>← all sessions</a></p>"
+        )
+        return HTMLResponse(_page("Session", body))
+
     @app.get("/ui/topics", response_class=HTMLResponse)
     def ui_topics(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:
         sess = _session(manthana_admin)
         if sess is None:
             return RedirectResponse(url="/ui/login", status_code=303)
         org_id = _scope_org(sess, org_id)
-        tops, cov = team_topics(store, config, org_id)
+        tops, cov = team_topics(store, config, org_id, named=_privacy_open(org_id))
         rows = "".join(
             f"<tr><td>{_e(t.label)}</td><td>{len(t.contributors)}</td>"
             f"<td>{len(t.sessions)}</td>"

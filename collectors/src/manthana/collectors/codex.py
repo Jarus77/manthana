@@ -341,6 +341,41 @@ class CodexCollector:
                     if isinstance(settings.get("model"), str):
                         model = settings["model"]
                     cwd, cwd_rank = _prefer_cwd(cwd, cwd_rank, settings.get("cwd"), 3)
+                # Codex records the AUTHORITATIVE file edits here, not in the tool
+                # call: `patch_apply_end.changes` maps each absolute path to its
+                # change type/diff. Without this, `files_touched` starves on Codex
+                # sessions (the compactor's deterministic extractor reads
+                # tool_input["file_path"]), so emit one apply_patch turn per file.
+                if payload.get("type") == "patch_apply_end":
+                    changes = payload.get("changes")
+                    if isinstance(changes, dict):
+                        success = payload.get("success")
+                        failed = success is False
+                        for file_path, change in changes.items():
+                            if not isinstance(file_path, str) or not file_path:
+                                continue
+                            change_type = (
+                                change.get("type") if isinstance(change, dict) else None
+                            )
+                            turns.append(
+                                _make_turn(
+                                    actor=self.actor,
+                                    base_id=path_session_id,
+                                    role=Role.assistant,
+                                    timestamp=timestamp,
+                                    payload=payload,
+                                    tool_name="apply_patch",
+                                    tool_input={
+                                        "file_path": file_path,
+                                        "change_type": change_type
+                                        if isinstance(change_type, str)
+                                        else None,
+                                    },
+                                    error="patch apply failed" if failed else None,
+                                    model=model,
+                                )
+                            )
+                    continue
                 if payload.get("type") != "token_count":
                     continue
                 usage = _usage_fields(payload)

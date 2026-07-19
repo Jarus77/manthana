@@ -58,6 +58,10 @@ class ServerConfig:
     # mount has lifespan/session-manager wiring that must be verified with a live MCP
     # client before enabling, so it never risks the main app until proven.
     enable_founder_mcp: bool = False
+    # Default privacy posture for orgs with no explicit override (org_privacy table).
+    # "open" = consenting org: the founder sees named, per-individual results
+    # (founder==manager). "k_anon" = de-identified, floor-gated aggregates.
+    privacy_mode: str = "k_anon"
     # Comma-separated Host allowlist for the MCP endpoint's DNS-rebinding check;
     # must include the public domain behind the ALB. "*" disables the check.
     mcp_allowed_hosts: str = "localhost,127.0.0.1,testserver"
@@ -82,6 +86,8 @@ class ServerConfig:
         # None disables the manager view entirely, which is the safe default.
         if self.manager_token is not None and not self.manager_token:
             raise ValueError("manager_token must be non-empty when set (or leave it unset/None)")
+        if self.privacy_mode not in ("open", "k_anon"):
+            raise ValueError(f"privacy_mode must be 'open' or 'k_anon', got {self.privacy_mode!r}")
         if self.llm_provider not in ("mock", "anthropic"):
             raise ValueError(
                 f"llm_provider must be 'mock' or 'anthropic', got {self.llm_provider!r}"
@@ -131,6 +137,7 @@ class ServerConfig:
             enable_founder_mcp=(
                 env("MANTHANA_SERVER_ENABLE_FOUNDER_MCP", "") in ("1", "true", "yes")
             ),
+            privacy_mode=env("MANTHANA_SERVER_PRIVACY_MODE", cls.privacy_mode),
             mcp_allowed_hosts=env("MANTHANA_SERVER_MCP_ALLOWED_HOSTS", cls.mcp_allowed_hosts),
         )
 

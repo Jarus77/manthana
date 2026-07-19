@@ -150,6 +150,17 @@ class LlmUsageRow(SQLModel, table=True):
     est_cost_usd: float = Field(default=0.0)
 
 
+class OrgPrivacyRow(SQLModel, table=True):
+    """Per-org privacy posture. ``open`` = consenting org: the founder sees named,
+    per-individual results (founder==manager). ``k_anon`` = the original contract:
+    de-identified, floor-gated aggregates. New TABLE so ``create_all`` upgrades
+    existing DBs; absent row → the server default."""
+
+    __tablename__ = "org_privacy"  # type: ignore[assignment]
+    org_id: str = Field(primary_key=True)
+    mode: str = Field(default="k_anon")
+
+
 class OrgQuotaRow(SQLModel, table=True):
     """Per-org monthly LLM budget override (None/absent → server default cap)."""
 
@@ -171,6 +182,7 @@ SERVER_TABLES = [
     InviteRow,
     LlmUsageRow,
     OrgQuotaRow,
+    OrgPrivacyRow,
 ]
 
 __all__ = [
@@ -186,5 +198,6 @@ __all__ = [
     "InviteRow",
     "LlmUsageRow",
     "OrgQuotaRow",
+    "OrgPrivacyRow",
     "SERVER_TABLES",
 ]

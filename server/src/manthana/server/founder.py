@@ -15,7 +15,7 @@ import json
 import logging
 import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -61,6 +61,10 @@ class Rollup:
     by_outcome: dict[str, int]
     total_cost_usd: float  # API list-price equivalent, NOT subscription spend
     total_tokens: int
+    # Sessions per named engineer — populated ONLY on the named/individual path
+    # (manager view, or a founder whose org runs privacy_mode="open"). Empty on the
+    # de-identified path so names can never leak through the aggregate.
+    by_engineer: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -390,8 +394,12 @@ def run_query(
         )
 
     if allow_individual:
-        # Manager view: no per-cell suppression — the manager may see individuals.
+        # Named view: no per-cell suppression — individuals may be shown.
         visible = list(compactions)
+        counts: dict[str, int] = defaultdict(int)
+        for c in visible:
+            counts[c.actor] += 1
+        rollup.by_engineer = dict(sorted(counts.items(), key=lambda kv: -kv[1]))
     else:
         # Per-CELL k-anon: the narrative only sees compactions whose (project, outcome)
         # cell itself has >= floor distinct contributors, so it can never cite a cohort
@@ -413,6 +421,10 @@ def run_query(
     brief = [
         {
             "id": c.id,
+            # The engineer's identity reaches the model ONLY on the named path.
+            # Without this the narrative literally cannot attribute work to a
+            # person, which is why "who did what" answers came back anonymous.
+            **({"engineer": c.actor} if allow_individual else {}),
             "project": c.project,
             "intent": c.task_intent,
             "outcome": str(c.outcome),

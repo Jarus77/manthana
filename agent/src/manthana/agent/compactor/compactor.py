@@ -66,7 +66,11 @@ def _str_list(value: Any) -> list[str]:
     return []
 
 
-_FILE_TOOLS = frozenset({"Edit", "Write", "Read", "MultiEdit", "NotebookEdit"})
+# Claude Code tool names + Codex's `apply_patch` (synthesized by the Codex
+# collector from `patch_apply_end`, which is where Codex records real file edits).
+_FILE_TOOLS = frozenset(
+    {"Edit", "Write", "Read", "MultiEdit", "NotebookEdit", "apply_patch"}
+)
 _PATHISH = re.compile(r"\.[A-Za-z0-9]{1,8}$")  # ends in a short file extension
 
 

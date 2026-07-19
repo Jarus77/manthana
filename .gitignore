@@ -36,3 +36,8 @@ data/
 
 # k8s real secret (use secret.example.yaml as template)
 deploy/k8s/secret.yaml
+
+# Pilot/customer data dumps — never commit (contains customer file paths)
+output.md
+*-report-*.md
+codex-report*.txt

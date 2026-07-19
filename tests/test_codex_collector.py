@@ -131,3 +131,35 @@ def test_capture_persists_codex_surface_and_native_summary() -> None:
     assert compaction is not None
     # Compatibility value: this means a surface-native summary, including Codex.
     assert compaction.source == "claude_summary"
+
+
+def test_patch_apply_end_yields_files_touched(tmp_path) -> None:
+    """Codex records real file edits in event_msg/patch_apply_end, not in the tool
+    call — so without this the compactor's deterministic files_touched starves."""
+    from manthana.agent.compactor.compactor import files_from_turns
+
+    roll = tmp_path / "rollout-2026-07-18T10-00-00-019f759f-90dd-7f03-a472-6f6bf45dee71.jsonl"
+    roll.write_text("\n".join([
+        json.dumps({"type": "session_meta", "timestamp": "2026-07-18T10:00:00Z",
+                    "payload": {"session_id": "s1", "cwd": "/repo", "cli_version": "0.144.2"}}),
+        json.dumps({"type": "event_msg", "timestamp": "2026-07-18T10:00:05Z",
+                    "payload": {"type": "patch_apply_end", "success": True, "changes": {
+                        "/repo/api/webhook.py": {"type": "update", "unified_diff": "@@"},
+                        "/repo/api/new.py": {"type": "add", "unified_diff": "@@"}}}}),
+    ]))
+    turns, meta = CodexCollector(actor="e@x.com", codex_dir=tmp_path).read(str(roll))
+    patch_turns = [t for t in turns if t.tool_name == "apply_patch"]
+    assert len(patch_turns) == 2
+    assert files_from_turns(turns) == ["/repo/api/webhook.py", "/repo/api/new.py"]
+    assert meta.session_id == "s1"
+
+
+def test_patch_apply_failure_marks_error(tmp_path) -> None:
+    roll = tmp_path / "rollout-2026-07-18T11-00-00-019f759f-90dd-7f03-a472-6f6bf45dee72.jsonl"
+    roll.write_text(json.dumps({
+        "type": "event_msg", "timestamp": "2026-07-18T11:00:00Z",
+        "payload": {"type": "patch_apply_end", "success": False,
+                    "changes": {"/repo/x.py": {"type": "update"}}},
+    }))
+    turns, _meta = CodexCollector(actor="e@x.com", codex_dir=tmp_path).read(str(roll))
+    assert [t.error for t in turns] == ["patch apply failed"]
