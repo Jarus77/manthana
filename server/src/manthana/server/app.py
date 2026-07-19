@@ -129,6 +129,9 @@ class PurgeBody(BaseModel):
     source: str | None = None  # "pending" | "full" | "claude_summary"
     contains: str | None = None  # substring of the digest's own text
     self_generated: bool = False  # Manthana's own compaction sessions
+    # Sessions that ARE a compaction call rather than work ABOUT one: no files
+    # touched, no real project, abandoned, and compaction-shaped text.
+    structural_junk: bool = False
     # Dry run by DEFAULT. Deleting requires saying so explicitly.
     confirm: bool = False
 
@@ -678,6 +681,7 @@ def create_app(
             source=body.source,
             contains=body.contains,
             self_generated=body.self_generated,
+            structural_junk=body.structural_junk,
         )
         # Reject an unfiltered request up front — it is a bad request (422), not a
         # downstream failure, and checking here keeps it distinguishable from the
@@ -685,7 +689,10 @@ def create_app(
         if selector.is_empty():
             raise HTTPException(
                 status_code=422,
-                detail="refusing an unfiltered purge — set source, contains, or self_generated",
+                detail=(
+                    "refusing an unfiltered purge — set source, contains, "
+                    "self_generated, or structural_junk"
+                ),
             )
         report = purge(
             store, object_store, org_id=body.org_id, selector=selector,

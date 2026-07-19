@@ -15,7 +15,12 @@ from fastapi.testclient import TestClient
 from manthana.schemas import EngineeringCompaction, Outcome, Surface
 from manthana.server import ServerConfig, ServerStore, create_app
 from manthana.server.llm import ScriptedProvider
-from manthana.server.purge import PurgeSelector, is_self_generated, purge
+from manthana.server.purge import (
+    PurgeSelector,
+    is_self_generated,
+    is_structural_junk,
+    purge,
+)
 from manthana.server.storage import InMemoryObjectStore
 
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -31,6 +36,18 @@ _PROMPT_HEAD = (
 _PROD_A = "Summarize one engineering session into a structured JSON digest (the Manthana co"
 _PROD_B = "No engineering task was undertaken; the session contains only the Manthana compa"
 
+# Real paraphrases observed on production. The model reworded the prompt every
+# time, so NONE of these contains a SELF_GENERATED_MARKERS phrase — they are the
+# ~664 rows the marker predicate missed.
+_PARAPHRASES = (
+    "Summarize a single engineering session into a structured JSON digest "
+    "(the Manthana compactor task).",
+    "Summarize an engineering session into a structured JSON digest as Manthana's compactor.",
+    "Meta-task: produce a structured JSON compactor digest summarizing one engineering session.",
+    "The session consisted solely of the Manthana compactor system prompt plus a single "
+    "prior assistant turn that was itself a compactor invocation.",
+)
+
 
 def _comp(
     cid: str,
@@ -39,22 +56,38 @@ def _comp(
     approach: str = "traced api/webhook.py",
     source: str = "full",
     native: str | None = None,
+    project: str = "demo",
+    outcome: Outcome = Outcome.success,
+    files: list[str] | None = None,
 ) -> EngineeringCompaction:
     return EngineeringCompaction(
         id=cid,
         session_id=f"s-{cid}",
         actor="e@x.com",
         surface=Surface.claude_code,
-        project="demo",
+        project=project,
         started_at=_T0,
         ended_at=_T0,
         duration_seconds=1.0,
         task_intent=intent,
         approach=approach,
-        outcome=Outcome.success,
+        outcome=outcome,
         released=True,
         source=source,  # type: ignore[arg-type]
         native_summary=native,
+        files_touched=files or [],
+    )
+
+
+def _junk(cid: str, *, intent: str, **kw: object) -> EngineeringCompaction:
+    """A structurally-junk record: no files, no project, abandoned."""
+    return _comp(
+        cid,
+        intent=intent,
+        approach="",
+        project="unknown",
+        outcome=Outcome.abandoned,
+        **kw,  # type: ignore[arg-type]
     )
 
 
@@ -106,6 +139,84 @@ def test_real_work_about_manthana_is_not_flagged() -> None:
 def test_ordinary_work_is_not_flagged() -> None:
     assert not is_self_generated(_comp("c"))
     assert not is_self_generated(_comp("c", intent="summarize the quarterly metrics"))
+
+
+# ── the structural predicate ──────────────────────────────────────────────
+def test_structural_junk_catches_the_paraphrases_markers_miss() -> None:
+    # The whole reason the selector exists: these are LLM rewordings of the
+    # prompt, so the fixed-phrase markers do NOT fire on them.
+    for i, intent in enumerate(_PARAPHRASES):
+        c = _junk(f"c{i}", intent=intent)
+        assert not is_self_generated(c), intent
+        assert is_structural_junk(c), intent
+
+
+def test_structural_junk_accepts_a_falsy_project_as_well_as_unknown() -> None:
+    assert is_structural_junk(
+        _comp(
+            "c",
+            intent=_PARAPHRASES[0],
+            approach="",
+            project="",
+            outcome=Outcome.abandoned,
+        )
+    )
+
+
+def test_marker_hit_still_qualifies_under_the_structural_conjunction() -> None:
+    assert is_structural_junk(_junk("c", intent=_PROD_A))
+
+
+# ── the false-positive cases that matter ──────────────────────────────────
+def test_compaction_shaped_text_with_files_touched_is_not_junk() -> None:
+    # THE critical case: the operator's own session working ON Manthana. Its
+    # text is every bit as compaction-shaped as the junk — but it touched files,
+    # so it fails structurally and survives.
+    for intent in _PARAPHRASES + (
+        "Rewrite the compactor prompt so it stops summarizing its own digests",
+        "Add native_summary to the Manthana compaction schema",
+    ):
+        c = _comp(
+            "c",
+            intent=intent,
+            approach="",
+            project="unknown",
+            outcome=Outcome.abandoned,
+            files=["server/src/manthana/server/purge.py"],
+        )
+        assert not is_structural_junk(c), intent
+
+
+def test_compaction_shaped_text_with_a_real_project_is_not_junk() -> None:
+    # Files empty (a pure discussion/design session) but a real project name —
+    # deterministic metadata a compaction call never has.
+    c = _comp(
+        "c",
+        intent=_PARAPHRASES[0],
+        approach="",
+        project="manthana",
+        outcome=Outcome.abandoned,
+    )
+    assert not is_structural_junk(c)
+
+
+def test_a_non_abandoned_outcome_is_not_junk() -> None:
+    for outcome in (Outcome.success, Outcome.partial):
+        c = _comp(
+            "c", intent=_PARAPHRASES[0], approach="", project="unknown", outcome=outcome
+        )
+        assert not is_structural_junk(c), outcome
+
+
+def test_structurally_empty_but_non_compaction_text_is_not_junk() -> None:
+    # An engineer really did abandon an unattributed session. No compaction
+    # shape in the text, so it is not ours to delete.
+    for intent in (
+        "Poke at the flaky CI runner, gave up",
+        "summarize the quarterly metrics",  # action token, no subject token
+        "Investigate Manthana compaction cost per session",  # subject, no action
+    ):
+        assert not is_structural_junk(_junk("c", intent=intent)), intent
 
 
 # ── dry run ───────────────────────────────────────────────────────────────
@@ -240,6 +351,94 @@ def test_selectors_combine_as_and_never_widening() -> None:
     assert store.get_compaction("junk_full", "o1") is not None  # narrowed out
 
 
+def test_structural_junk_endpoint_purges_paraphrases_and_spares_real_work() -> None:
+    client, store, _ = _make()
+    store.ingest_compaction(_junk("junk", intent=_PARAPHRASES[0]), org_id="o1", team_id="t1")
+    # The operator's own Manthana dev session: same shape of text, but it touched files.
+    store.ingest_compaction(
+        _comp(
+            "dev",
+            intent=_PARAPHRASES[1],
+            approach="",
+            project="unknown",
+            outcome=Outcome.abandoned,
+            files=["server/src/manthana/server/purge.py"],
+        ),
+        org_id="o1",
+        team_id="t1",
+    )
+    store.ingest_compaction(_comp("real"), org_id="o1", team_id="t1")
+
+    resp = client.post(
+        "/v1/admin/purge",
+        json={"org_id": "o1", "structural_junk": True, "confirm": True},
+        headers=ADMIN,
+    )
+
+    assert resp.json()["deleted"] == 1
+    assert store.get_compaction("junk", "o1") is None
+    assert store.get_compaction("dev", "o1") is not None
+    assert store.get_compaction("real", "o1") is not None
+
+
+def test_structural_junk_dry_run_is_still_the_default() -> None:
+    client, store, _ = _make()
+    store.ingest_compaction(_junk("junk", intent=_PARAPHRASES[2]), org_id="o1", team_id="t1")
+
+    body = client.post(
+        "/v1/admin/purge", json={"org_id": "o1", "structural_junk": True}, headers=ADMIN
+    ).json()
+
+    assert body["dry_run"] is True
+    assert body["matched"] == 1 and body["deleted"] == 0
+    assert store.get_compaction("junk", "o1") is not None
+
+
+def test_structural_and_self_generated_compose_as_and() -> None:
+    client, store, _ = _make()
+    # Structurally junk, but a paraphrase — no marker phrase in it.
+    store.ingest_compaction(
+        _junk("paraphrase", intent=_PARAPHRASES[0]), org_id="o1", team_id="t1"
+    )
+    # Structurally junk AND carrying a verbatim marker.
+    store.ingest_compaction(_junk("marked", intent=_PROD_A), org_id="o1", team_id="t1")
+
+    resp = client.post(
+        "/v1/admin/purge",
+        json={
+            "org_id": "o1",
+            "structural_junk": True,
+            "self_generated": True,
+            "confirm": True,
+        },
+        headers=ADMIN,
+    )
+
+    # ANDed, so adding self_generated deletes strictly less.
+    assert resp.json()["deleted"] == 1
+    assert store.get_compaction("marked", "o1") is None
+    assert store.get_compaction("paraphrase", "o1") is not None
+
+
+def test_structural_junk_is_a_superset_of_self_generated_alone() -> None:
+    # Sanity on the production motivation: the structural selector must catch
+    # BOTH the marker rows and the paraphrases the markers missed.
+    client, store, _ = _make()
+    store.ingest_compaction(_junk("marked", intent=_PROD_A), org_id="o1", team_id="t1")
+    for i, intent in enumerate(_PARAPHRASES):
+        store.ingest_compaction(_junk(f"p{i}", intent=intent), org_id="o1", team_id="t1")
+
+    marker_only = client.post(
+        "/v1/admin/purge", json={"org_id": "o1", "self_generated": True}, headers=ADMIN
+    ).json()
+    structural = client.post(
+        "/v1/admin/purge", json={"org_id": "o1", "structural_junk": True}, headers=ADMIN
+    ).json()
+
+    assert marker_only["matched"] == 1
+    assert structural["matched"] == 1 + len(_PARAPHRASES)
+
+
 def test_bad_source_value_is_rejected() -> None:
     client, *_ = _make()
     resp = client.post(
@@ -327,10 +526,65 @@ def test_agent_local_purge_dry_run_then_confirm() -> None:
     assert "refusing an unfiltered purge" in result.stdout
 
 
-def test_agent_and_server_markers_stay_in_sync() -> None:
-    # They are duplicated for the Apache-2.0 / AGPL package boundary; if one side
-    # is edited without the other, local and server purges would disagree.
-    from manthana.agent.purge import SELF_GENERATED_MARKERS as AGENT_MARKERS
-    from manthana.server.purge import SELF_GENERATED_MARKERS as SERVER_MARKERS
+def test_agent_local_structural_purge_matches_the_server() -> None:
+    from manthana.agent.purge import matches
+    from manthana.agent.store import Store
 
-    assert AGENT_MARKERS == SERVER_MARKERS
+    store = Store.open_memory()
+    store.upsert_compaction(_junk("junk", intent=_PARAPHRASES[0]))
+    store.upsert_compaction(
+        _comp(
+            "dev",
+            intent=_PARAPHRASES[1],
+            approach="",
+            project="unknown",
+            outcome=Outcome.abandoned,
+            files=["agent/src/manthana/agent/purge.py"],
+        )
+    )
+    store.upsert_compaction(_comp("real"))
+
+    doomed = [c for c in store.list_compactions() if matches(c, structural_junk=True)]
+    assert [c.id for c in doomed] == ["junk"]
+
+
+def test_agent_cli_accepts_structural_junk_and_dry_runs_by_default() -> None:
+    from manthana.agent.cli import app as cli_app
+    from typer.testing import CliRunner
+
+    # The flag is offered, and the unfiltered-purge refusal names it — so an
+    # operator who runs a bare `manthana purge` is told the selector exists.
+    assert "--structural-junk" in CliRunner().invoke(cli_app, ["purge", "--help"]).stdout
+    assert "--structural-junk" in CliRunner().invoke(cli_app, ["purge"]).stdout
+
+
+def test_agent_and_server_purge_logic_stays_in_sync() -> None:
+    # Duplicated for the Apache-2.0 / AGPL package boundary; if one side is
+    # edited without the other, local and server purges would disagree.
+    from manthana.agent import purge as agent_purge
+    from manthana.server import purge as server_purge
+
+    assert agent_purge.SELF_GENERATED_MARKERS == server_purge.SELF_GENERATED_MARKERS
+    assert agent_purge.COMPACTION_SUBJECT_TOKENS == server_purge.COMPACTION_SUBJECT_TOKENS
+    assert agent_purge.COMPACTION_ACTION_TOKENS == server_purge.COMPACTION_ACTION_TOKENS
+
+    # And the predicates themselves must agree, not just their token lists.
+    cases = [
+        _junk("a", intent=_PROD_A),
+        _junk("b", intent=_PARAPHRASES[0]),
+        _junk("c", intent=_PARAPHRASES[3]),
+        _junk("d", intent="Poke at the flaky CI runner, gave up"),
+        _comp(
+            "e",
+            intent=_PARAPHRASES[1],
+            approach="",
+            project="unknown",
+            outcome=Outcome.abandoned,
+            files=["x.py"],
+        ),
+        _comp("f", intent=_PARAPHRASES[1], approach="", outcome=Outcome.abandoned),
+        _comp("g"),
+    ]
+    for c in cases:
+        assert agent_purge.is_self_generated(c) == server_purge.is_self_generated(c), c.id
+        assert agent_purge.is_structural_junk(c) == server_purge.is_structural_junk(c), c.id

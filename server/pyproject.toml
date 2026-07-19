@@ -1,12 +1,12 @@
 [project]
 name = "manthana-server"
-version = "0.6.1"
+version = "0.6.2"
 description = "Manthana org server — ingestion, multi-tenancy, k-anonymity, founder query (AGPL-3.0)."
 requires-python = ">=3.11"
 license = "AGPL-3.0-or-later"
 dependencies = [
-    "manthana-schemas==0.6.1",
-    "manthana-skills==0.6.1",
+    "manthana-schemas==0.6.2",
+    "manthana-skills==0.6.2",
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "python-multipart>=0.0.9",

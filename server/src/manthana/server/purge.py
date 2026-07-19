@@ -40,6 +40,28 @@ would match. This is exactly why the endpoint is dry-run by default: the
 operator reviews the sample before confirming. Markers 2 and 3 are safe against
 this, since they are model paraphrases rather than the template text.
 
+**Why fixed phrases were not enough.** On the pilot org the marker predicate
+caught 400 of ~1064 junk rows. The rest are LLM *paraphrases* of the prompt, and
+the model reworded it every time ("Summarize a single engineering session into a
+structured JSON digest (the Manthana compactor task)", "Meta-task: produce a
+structured JSON compactor digest summarizing one engineering session", …). No
+finite list of contiguous phrases catches open-ended paraphrase, and widening to
+a bare substring like "compactor" would also match the operator's own genuine
+Manthana *development* sessions — real work that must survive.
+
+**The reliable signal is structural, not textual.** A junk record is a session
+that IS a compaction call, not a session ABOUT one. Such a session touched no
+files, has no real project, and did no work — verified on production, where the
+junk rows carry ``project: unknown``, ``outcome: abandoned``, an empty
+``files_touched``, and a digest that reads "The session consisted solely of the
+Manthana compactor system prompt …". A paraphrase can reword anything it likes;
+it cannot manufacture files touched or a project name.
+
+``is_structural_junk`` therefore ANDs three structural facts with a *looser*
+text test than the markers. The conjunction is what makes the looser text safe:
+an engineer's real session about the compactor touches files and has a project,
+so it fails structurally no matter how compaction-shaped its prose reads.
+
 SPDX-License-Identifier: AGPL-3.0-or-later
 """
 
@@ -49,7 +71,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from manthana.schemas import BaseCompaction
+from manthana.schemas import BaseCompaction, Outcome
 
 if TYPE_CHECKING:
     from .storage import ObjectStore
@@ -61,6 +83,23 @@ SELF_GENERATED_MARKERS: tuple[str, ...] = (
     "you are manthana's compactor",
     "summarize one engineering session",
     "session contains only the manthana compa",
+)
+
+# The looser, paraphrase-tolerant text test used ONLY under the structural
+# conjunction in ``is_structural_junk`` — never on its own. Two token classes
+# that must BOTH appear: what the session was about, and what it was doing.
+# Neither class alone is discriminating ("compaction cost is high", "summarize
+# the quarterly metrics"); together they describe a compaction task.
+COMPACTION_SUBJECT_TOKENS: tuple[str, ...] = ("manthana", "compactor", "compaction")
+# Substrings, not words: "summar" covers summarize/summarizing/summary/summarised
+# across every paraphrase the model produced. "system prompt" / "compaction prompt"
+# cover the other observed shape, where the model reports that the session's whole
+# content WAS the prompt rather than describing a summarization task.
+COMPACTION_ACTION_TOKENS: tuple[str, ...] = (
+    "summar",
+    "digest",
+    "system prompt",
+    "compaction prompt",
 )
 
 _WS = re.compile(r"\s+")
@@ -76,13 +115,11 @@ def _normalize(text: str) -> str:
     return _WS.sub(" ", text.replace("’", "'").replace("ʼ", "'")).strip().lower()
 
 
-def is_self_generated(compaction: BaseCompaction) -> bool:
-    """True when this digest describes one of Manthana's OWN compaction calls.
-
-    Checks the fields that carry session content — never the deterministic
-    metadata, so a project literally named "manthana" is not at risk.
-    """
-    haystack = _normalize(
+def _haystack(compaction: BaseCompaction) -> str:
+    """The digest's own text — content-bearing fields only, never the
+    deterministic metadata, so a project literally named "manthana" is not at
+    risk of being matched by its name alone."""
+    return _normalize(
         " ".join(
             part
             for part in (
@@ -93,7 +130,42 @@ def is_self_generated(compaction: BaseCompaction) -> bool:
             if part
         )
     )
+
+
+def is_self_generated(compaction: BaseCompaction) -> bool:
+    """True when this digest describes one of Manthana's OWN compaction calls."""
+    haystack = _haystack(compaction)
     return any(marker in haystack for marker in SELF_GENERATED_MARKERS)
+
+
+def _is_compaction_shaped(compaction: BaseCompaction) -> bool:
+    """Loose, paraphrase-tolerant text test — safe ONLY under the structural
+    conjunction in ``is_structural_junk``, never as a standalone selector."""
+    haystack = _haystack(compaction)
+    return any(t in haystack for t in COMPACTION_SUBJECT_TOKENS) and any(
+        t in haystack for t in COMPACTION_ACTION_TOKENS
+    )
+
+
+def is_structural_junk(compaction: BaseCompaction) -> bool:
+    """True when this digest is a compaction call rather than real work.
+
+    Requires ALL of: no files touched, no real project, an abandoned outcome,
+    and a compaction-shaped text signal. The three structural facts are what
+    make the looser text test safe — a genuine session ABOUT the compactor
+    touches files and carries a project, so it fails here on structure alone.
+    """
+    # ``files_touched`` lives on EngineeringCompaction; a bare BaseCompaction
+    # carries no file evidence at all, which is the empty case either way.
+    files = getattr(compaction, "files_touched", None) or []
+    if files:
+        return False
+    project = _normalize(compaction.project or "")
+    if project and project != "unknown":
+        return False
+    if compaction.outcome != Outcome.abandoned:
+        return False
+    return is_self_generated(compaction) or _is_compaction_shaped(compaction)
 
 
 @dataclass
@@ -104,9 +176,15 @@ class PurgeSelector:
     source: str | None = None  # "pending" | "full" | "claude_summary"
     contains: str | None = None  # case-insensitive substring of the digest's text
     self_generated: bool = False  # apply the marker predicate above
+    structural_junk: bool = False  # apply the structural predicate above
 
     def is_empty(self) -> bool:
-        return self.source is None and not self.contains and not self.self_generated
+        return (
+            self.source is None
+            and not self.contains
+            and not self.self_generated
+            and not self.structural_junk
+        )
 
     def matches(self, compaction: BaseCompaction) -> bool:
         # AND across the criteria that were actually supplied — narrowing, never
@@ -115,20 +193,10 @@ class PurgeSelector:
             return False
         if self.self_generated and not is_self_generated(compaction):
             return False
-        if self.contains:
-            haystack = _normalize(
-                " ".join(
-                    p
-                    for p in (
-                        compaction.task_intent,
-                        compaction.approach,
-                        compaction.native_summary or "",
-                    )
-                    if p
-                )
-            )
-            if _normalize(self.contains) not in haystack:
-                return False
+        if self.structural_junk and not is_structural_junk(compaction):
+            return False
+        if self.contains and _normalize(self.contains) not in _haystack(compaction):
+            return False
         return True
 
     def as_dict(self) -> dict[str, object]:
@@ -136,6 +204,7 @@ class PurgeSelector:
             "source": self.source,
             "contains": self.contains,
             "self_generated": self.self_generated,
+            "structural_junk": self.structural_junk,
         }
 
 
@@ -214,7 +283,10 @@ def purge(
     report = PurgeReport(dry_run=not confirm, matched=len(matched), sample=_sample(matched))
 
     if selector.is_empty():
-        report.error = "refusing an unfiltered purge — set source, contains, or self_generated"
+        report.error = (
+            "refusing an unfiltered purge — set source, contains, "
+            "self_generated, or structural_junk"
+        )
         report.matched = 0
         report.sample = []
         return report
@@ -255,7 +327,10 @@ __all__ = [
     "PurgeSelector",
     "PurgeReport",
     "SELF_GENERATED_MARKERS",
+    "COMPACTION_SUBJECT_TOKENS",
+    "COMPACTION_ACTION_TOKENS",
     "is_self_generated",
+    "is_structural_junk",
     "purge",
     "select",
 ]

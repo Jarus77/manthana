@@ -490,6 +490,11 @@ def purge(
     self_generated: bool = typer.Option(
         False, "--self-generated", help="Manthana's own compaction sessions (the recursion junk)"
     ),
+    structural_junk: bool = typer.Option(
+        False,
+        "--structural-junk",
+        help="sessions that ARE a compaction call: no files, no project, abandoned",
+    ),
     source: str = typer.Option("", help="only this source: pending | full | claude_summary"),
     contains: str = typer.Option("", help="only digests whose text contains this substring"),
     confirm: bool = typer.Option(False, "--confirm", help="actually delete (default: dry run)"),
@@ -500,15 +505,22 @@ def purge(
     transcript that was itself captured and compacted. Use --self-generated to
     clear that junk out of your local store.
 
+    --self-generated matches verbatim phrases from the compaction prompt, so it
+    misses the rows where the model paraphrased it. --structural-junk catches
+    those: it requires the session to have touched no files, have no real
+    project, and be abandoned, on top of a looser compaction-shaped text test.
+    Your own sessions working ON Manthana touch files, so they survive it.
+
     Deletes the compaction, its cached embedding vector, and its sync record
     together. Sessions and turns are untouched, so `manthana compact` can
     re-derive a digest if you purge one by mistake.
     """
     from manthana.agent.purge import matches
 
-    if not self_generated and not source and not contains:
+    if not self_generated and not structural_junk and not source and not contains:
         typer.echo(
-            "refusing an unfiltered purge — pass --self-generated, --source, or --contains"
+            "refusing an unfiltered purge — pass --self-generated, --structural-junk, "
+            "--source, or --contains"
         )
         raise typer.Exit(code=1)
 
@@ -521,6 +533,7 @@ def purge(
             source=source or None,
             contains=contains or None,
             self_generated=self_generated,
+            structural_junk=structural_junk,
         )
     ]
     if not doomed:
