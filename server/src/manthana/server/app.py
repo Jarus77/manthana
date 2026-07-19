@@ -27,7 +27,6 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from manthana.schemas import CompactionAdapter
-from manthana.skills import mine_org
 from pydantic import BaseModel, ValidationError
 
 from .analyzer import analyze_counterfactual_costs
@@ -46,6 +45,7 @@ from .founder import run_query, team_topics, thread
 from .hardening import install_hardening
 from .llm import LLMProvider, make_enrich_provider, make_provider
 from .metering import MeteredProvider, QuotaExceededError, month_key
+from .mining import FAILED, QUOTA, run_mining
 from .purge import PurgeSelector, purge
 from .storage import ObjectStore, make_object_store
 from .store import ServerStore
@@ -772,34 +772,22 @@ def create_app(
     def mine_skills(
         body: MineSkillsBody, _: Annotated[None, Depends(require_admin)]
     ) -> dict[str, Any]:
-        # Cross-engineer org mining over released compactions. k-anonymized
-        # (>=K_ANON_FLOOR distinct contributors; names dropped). Compactions are
-        # already redacted on sync, so no redactor is needed here. Proposals are
-        # enqueued for human approval (the action-queue seam) rather than applied.
-        compactions = store.query_compactions(org_id=body.org_id, limit=100_000)
-        proposals = mine_org(compactions, provider=org_provider(body.org_id))
-        out = []
-        for proposal in proposals:
-            store.enqueue_action(
-                action_id="auto_draft_org_skill",
-                org_id=body.org_id,
-                payload={
-                    "name": proposal.draft.name,
-                    "description": proposal.draft.description,
-                    "skill_md": proposal.skill_md,
-                    "contributor_count": proposal.provenance.contributor_count,
-                    "evidence": proposal.provenance.evidence,
-                },
-            )
-            out.append(
-                {
-                    "name": proposal.draft.name,
-                    "description": proposal.draft.description,
-                    "contributor_count": proposal.provenance.contributor_count,
-                    "evidence": proposal.provenance.evidence,
-                }
-            )
-        return {"proposals": out, "queued": len(out)}
+        """Cross-engineer org mining over released compactions. k-anonymized
+        (>=K_ANON_FLOOR distinct contributors; names dropped). Proposals are enqueued
+        for human approval (the action-queue seam) rather than applied.
+
+        BOUNDED: one run covers the last ``mine_window_days`` of released sessions,
+        newest first, capped at ``mine_max_items`` — and the response reports that
+        coverage so a capped run is never mistaken for a complete one. This endpoint
+        stays synchronous (scripted callers want the result, and quota exhaustion must
+        still surface as 429); the console's button runs the same work in the
+        background, since a browser sits behind a gateway timeout."""
+        run = run_mining(store, config, body.org_id, provider=org_provider(body.org_id))
+        if run.state == QUOTA:
+            raise HTTPException(status_code=429, detail=run.detail)
+        if run.state == FAILED:
+            raise HTTPException(status_code=500, detail=run.detail)
+        return {"proposals": run.proposals, "queued": run.queued, "coverage": run.as_dict()}
 
     mount_ui(app, config, store, provider, object_store, provider_for=org_provider)
     if mcp_asgi is not None:

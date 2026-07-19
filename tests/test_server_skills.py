@@ -34,8 +34,13 @@ def _released(cid: str, actor: str, intent: str) -> EngineeringCompaction:
     )
 
 
-def _app() -> tuple[TestClient, ServerStore]:
-    config = ServerConfig(jwt_secret="x" * 40, admin_token="adm")
+def _app(mine_window_days: int = 36_500) -> tuple[TestClient, ServerStore]:
+    # Fixtures are pinned to _T0, which drifts further into the past as real time
+    # passes; a wide mining window keeps these tests about k-anon, not the calendar.
+    # The window's own behaviour is covered in test_mining_bounds.py.
+    config = ServerConfig(
+        jwt_secret="x" * 40, admin_token="adm", mine_window_days=mine_window_days
+    )
     store = ServerStore.open("sqlite://")
     store.create_org("o1", "O")
     client = TestClient(create_app(config, store, InMemoryObjectStore(), MockProvider("{}")))

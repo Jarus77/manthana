@@ -286,3 +286,69 @@ def test_injected_redactor_scrubs_secrets_from_mined_skill() -> None:
     proposals = miner.mine(comps, min_sessions=3, now=_T0)
     assert len(proposals) == 1
     assert secret not in proposals[0].skill_md  # redacted before reaching the skill
+
+
+# ── cached vectors: the mining path must not re-embed what it already knows ─
+def test_cluster_compactions_uses_cached_vectors_and_embeds_only_misses() -> None:
+    class Counting:
+        def __init__(self) -> None:
+            self._inner = HashingEmbedder()
+            self.dim = self._inner.dim
+            self.embedded: list[str] = []
+
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            self.embedded.extend(texts)
+            return self._inner.embed(texts)
+
+    comps = [
+        _comp("a", "s1", "e1@x.com", "fix flaky pytest timeout"),
+        _comp("b", "s2", "e2@x.com", "fix flaky pytest timeout"),
+        _comp("c", "s3", "e3@x.com", "fix flaky pytest timeout"),
+    ]
+    warm = HashingEmbedder()
+    from manthana.skills.cluster import default_text_of
+
+    # Two of the three are already cached; only the third may be embedded.
+    cached = {
+        c.id: v
+        for c, v in zip(comps[:2], warm.embed([default_text_of(c) for c in comps[:2]]), strict=True)
+    }
+    embedder = Counting()
+    clusters = cluster_compactions(comps, embedder, threshold=0.6, vectors=cached)
+
+    assert embedder.embedded == [default_text_of(comps[2])]  # only the cache miss
+    # and the result is identical to clustering with no cache at all
+    plain = cluster_compactions(comps, HashingEmbedder(), threshold=0.6)
+    assert [sorted(c.id for c in cl.compactions) for cl in clusters] == [
+        sorted(c.id for c in cl.compactions) for cl in plain
+    ]
+
+
+def test_cluster_compactions_honours_max_items_newest_first() -> None:
+    comps = [_comp(f"c{i}", f"s{i}", f"e{i}@x.com", "fix flaky pytest timeout") for i in range(6)]
+    clusters = cluster_compactions(comps, HashingEmbedder(), threshold=0.6, max_items=3)
+    seen = {c.id for cl in clusters for c in cl.compactions}
+    assert seen <= {"c0", "c1", "c2"}  # the cap keeps the head of the (newest-first) input
+
+
+def test_community_detection_matches_a_brute_force_reference() -> None:
+    """The numpy fast path must agree with the plain pairwise definition — it is an
+    optimization, not a different algorithm."""
+    from manthana.skills.cluster import _neighbor_sets
+
+    e = HashingEmbedder()
+    vecs = e.embed(
+        [
+            "fix flaky pytest timeout in ci",
+            "fix flaky pytest timeouts on ci",
+            "flaky pytest timeout ci fix",
+            "write the quarterly board deck",
+            "draft the quarterly board deck",
+        ]
+    )
+    threshold = 0.5
+    reference = [
+        {j for j in range(len(vecs)) if cosine(vecs[i], vecs[j]) >= threshold}
+        for i in range(len(vecs))
+    ]
+    assert _neighbor_sets(vecs, threshold) == reference

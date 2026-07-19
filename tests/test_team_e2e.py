@@ -28,7 +28,9 @@ _INTENT = "fix a flaky pytest timeout in CI by raising the asyncio wait budget"
 
 
 def _make() -> tuple[TestClient, ServerConfig]:
-    config = ServerConfig(jwt_secret=_SECRET, admin_token="adm")  # k_anon_floor defaults to 4
+    # k_anon_floor defaults to 4. The wide mining window keeps this e2e about the
+    # k-anon path rather than the calendar (fixtures are pinned to _T0).
+    config = ServerConfig(jwt_secret=_SECRET, admin_token="adm", mine_window_days=36_500)
     store = ServerStore.open("sqlite://")
     store.create_org("acme", "Acme")
     store.create_team("platform", "acme", "Platform")

@@ -86,6 +86,14 @@ class ServerConfig:
     # Comma-separated Host allowlist for the MCP endpoint's DNS-rebinding check;
     # must include the public domain behind the ALB. "*" disables the check.
     mcp_allowed_hosts: str = "localhost,127.0.0.1,testserver"
+    # ── org skill mining bounds ──────────────────────────────────────────
+    # Mining is O(n^2) in clustering plus one model call per cluster, so an
+    # unbounded run over a large org held the request open until the gateway timed
+    # out (504). These two bounds make the work finite; both are REPORTED to the
+    # founder in the console — a run that hit a bound says so rather than silently
+    # covering less than the founder assumes.
+    mine_window_days: int = 90  # only compactions started within this window
+    mine_max_items: int = 1000  # newest-first cap on what one run clusters
 
     def __post_init__(self) -> None:
         # An empty admin token or JWT secret is an auth bypass: hmac.compare_digest
@@ -143,6 +151,12 @@ class ServerConfig:
             )
         if self.enrich_max_batch < 1:
             raise ValueError(f"enrich_max_batch must be >= 1, got {self.enrich_max_batch}")
+        # Non-positive mining bounds would mean "mine nothing" while the console
+        # still reported a run — worse than a slow run.
+        if self.mine_window_days < 1:
+            raise ValueError(f"mine_window_days must be >= 1, got {self.mine_window_days}")
+        if self.mine_max_items < 1:
+            raise ValueError(f"mine_max_items must be >= 1, got {self.mine_max_items}")
         if self.enrich_max_attempts < 1:
             raise ValueError(
                 f"enrich_max_attempts must be >= 1, got {self.enrich_max_attempts}"
@@ -203,6 +217,10 @@ class ServerConfig:
             ),
             privacy_mode=env("MANTHANA_SERVER_PRIVACY_MODE", cls.privacy_mode),
             mcp_allowed_hosts=env("MANTHANA_SERVER_MCP_ALLOWED_HOSTS", cls.mcp_allowed_hosts),
+            mine_window_days=int(
+                env("MANTHANA_SERVER_MINE_WINDOW_DAYS", str(cls.mine_window_days))
+            ),
+            mine_max_items=int(env("MANTHANA_SERVER_MINE_MAX_ITEMS", str(cls.mine_max_items))),
         )
 
 

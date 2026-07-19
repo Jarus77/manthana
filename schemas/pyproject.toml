@@ -1,6 +1,6 @@
 [project]
 name = "manthana-schemas"
-version = "0.6.2"
+version = "0.6.3"
 description = "Manthana shared data schemas (Pydantic v2 + mirrored JSON Schema)."
 requires-python = ">=3.11"
 license = "Apache-2.0"

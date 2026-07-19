@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from manthana.schemas import BaseCompaction
 
@@ -23,6 +24,54 @@ from .embed import Embedder, Vector, cosine
 
 DEFAULT_THRESHOLD = 0.75  # SBERT community_detection default cosine cutoff
 DEFAULT_MIN_CLUSTER_SIZE = 2  # a "pattern" needs at least two occurrences
+
+_BLOCK = 512  # rows per numpy similarity block — bounds peak memory at large n
+
+
+def _as_matrix(embeddings: list[Vector]) -> Any | None:
+    """L2-normalized numpy matrix of the embeddings, or None if numpy is absent.
+
+    numpy is an OPTIONAL accelerator (same posture as the sentence-transformers
+    extra in ``embed``): with it, the O(n^2) similarity pass is one BLAS matmul
+    instead of ~n^2/2 Python-level cosines, which is the difference between
+    seconds and minutes at n in the thousands. The pure-Python path below stays
+    the correctness reference and the two must agree.
+    """
+    try:
+        import numpy as np
+    except ImportError:  # pragma: no cover - numpy present in the dev env
+        return None
+    if not embeddings:
+        return None
+    matrix = np.asarray(embeddings, dtype=np.float64)
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0  # a zero vector stays zero (cosine 0), never NaN
+    return matrix / norms
+
+
+def _neighbor_sets(embeddings: list[Vector], threshold: float) -> list[set[int]]:
+    """For each point, the indices within ``threshold`` cosine of it (self included).
+
+    Stores adjacency (O(edges)) rather than a dense n*n float matrix (O(n^2)), so a
+    few thousand compactions cost megabytes, not gigabytes.
+    """
+    n = len(embeddings)
+    nbrs: list[set[int]] = [{i} for i in range(n)]
+    matrix = _as_matrix(embeddings)
+    if matrix is not None:
+        import numpy as np
+
+        for start in range(0, n, _BLOCK):
+            block = matrix[start : start + _BLOCK] @ matrix.T
+            for row, sims in enumerate(block):
+                nbrs[start + row].update(np.flatnonzero(sims >= threshold).tolist())
+        return nbrs
+    for i in range(n):  # pragma: no cover - exercised only when numpy is absent
+        for j in range(i + 1, n):
+            if cosine(embeddings[i], embeddings[j]) >= threshold:
+                nbrs[i].add(j)
+                nbrs[j].add(i)
+    return nbrs
 
 
 def community_detection(
@@ -32,18 +81,7 @@ def community_detection(
     min_community_size: int = DEFAULT_MIN_CLUSTER_SIZE,
 ) -> list[list[int]]:
     """Greedy non-overlapping communities (SBERT-style). Returns index lists."""
-    n = len(embeddings)
-    sims = [[0.0] * n for _ in range(n)]
-    for i in range(n):
-        for j in range(i, n):
-            s = 1.0 if i == j else cosine(embeddings[i], embeddings[j])
-            sims[i][j] = sims[j][i] = s
-
-    candidates: list[set[int]] = []
-    for i in range(n):
-        members = {j for j in range(n) if sims[i][j] >= threshold}
-        if len(members) >= min_community_size:
-            candidates.append(members)
+    candidates = [m for m in _neighbor_sets(embeddings, threshold) if len(m) >= min_community_size]
     candidates.sort(key=len, reverse=True)
 
     result: list[list[int]] = []
@@ -58,7 +96,18 @@ def community_detection(
 
 def _cohesion(embeddings: list[Vector], indices: list[int]) -> float:
     """Mean pairwise cosine within a cluster (a confidence signal)."""
-    pairs = [
+    if len(indices) < 2:
+        return 1.0
+    matrix = _as_matrix([embeddings[i] for i in indices])
+    if matrix is not None:
+        import numpy as np
+
+        sims = matrix @ matrix.T
+        k = len(indices)
+        # Mean of the strict upper triangle = (total - diagonal) / 2 / #pairs.
+        total = float(sims.sum()) - float(np.trace(sims))
+        return round(total / 2.0 / (k * (k - 1) / 2.0), 4)
+    pairs = [  # pragma: no cover - exercised only when numpy is absent
         cosine(embeddings[a], embeddings[b])
         for ai, a in enumerate(indices)
         for b in indices[ai + 1 :]
@@ -94,13 +143,26 @@ def cluster_compactions(
     min_cluster_size: int = DEFAULT_MIN_CLUSTER_SIZE,
     max_items: int = DEFAULT_MAX_ITEMS,
     text_of: Callable[[BaseCompaction], str] = default_text_of,
+    vectors: dict[str, Vector] | None = None,
 ) -> list[CompactionCluster]:
+    """``vectors`` is an optional id -> vector cache (e.g. the server's stored
+    compaction vectors). Hits skip the embedder entirely and only the misses are
+    embedded, so a repeat run over a mostly-unchanged corpus costs ~nothing —
+    without it, every run re-embeds the whole corpus from scratch. Cached vectors
+    MUST have been produced by the same ``text_of`` and the same embedder/dim as
+    the one passed here, or clustering compares incomparable spaces.
+    """
     if not compactions:
         return []
-    # community_detection builds a dense n*n similarity matrix; cap n so a huge
-    # store can't OOM/hang. Inputs are most-recent-first, so we keep the newest.
+    # The similarity pass is O(n^2); cap n so a huge store can't OOM/hang.
+    # Inputs are most-recent-first, so we keep the newest.
     items = list(compactions)[:max_items]
-    embeddings = embedder.embed([text_of(c) for c in items])
+    cache = vectors or {}
+    todo = [i for i, c in enumerate(items) if c.id not in cache]
+    fresh = embedder.embed([text_of(items[i]) for i in todo]) if todo else []
+    embeddings: list[Vector] = [cache.get(c.id) or [] for c in items]
+    for i, vec in zip(todo, fresh, strict=True):
+        embeddings[i] = vec
     clusters: list[CompactionCluster] = []
     for indices in community_detection(
         embeddings, threshold=threshold, min_community_size=min_cluster_size

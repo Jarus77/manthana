@@ -608,6 +608,61 @@ def sync(raw: bool = False, check: bool = False) -> None:
     )
 
 
+@app.command()
+def resync(
+    confirm: bool = typer.Option(
+        False, "--confirm", help="actually clear the sync watermarks (default: dry run)"
+    ),
+) -> None:
+    """Forget what this laptop already pushed, so the next `sync` RE-UPLOADS everything.
+
+    Use this after your org's server data has been wiped or re-onboarded. Your agent
+    remembers which compactions it already sent and skips them, so against a fresh
+    server your existing history would never be re-pushed and would be missing from
+    the console permanently.
+
+    This UPLOADS to the org server on the next `manthana sync`. It deletes nothing
+    locally — no sessions, no compactions, no transcripts — it only clears the
+    "already sent" watermarks. Raw-transcript watermarks are cleared too, so a
+    later `manthana sync --raw` re-uploads those as well.
+
+    The sync gate is unchanged: only released, non-personal compactions are ever
+    pushed. Personal-mode sessions stay on this laptop, resync or not.
+    """
+    from manthana.agent.sync import eligible_for_sync
+
+    store = Store.open()
+    compactions = store.list_compactions()
+    sessions = {s.id: s for s in store.list_sessions(limit=1_000_000)}
+    # Count through the real gate, not a raw row count: what resync exposes is exactly
+    # what `sync` would push, so personal-mode and unreleased work is never counted
+    # (nor made syncable) by clearing a watermark.
+    eligible = eligible_for_sync(compactions, sessions)
+    marked = store.synced_ids() | store.raw_synced_ids()
+    held_back = len(compactions) - len(eligible)
+
+    typer.echo(f"{len(eligible)} released, non-personal compaction(s) would be re-pushed")
+    typer.echo(f"{len(marked)} local sync watermark(s) would be cleared")
+    if held_back:
+        typer.echo(
+            f"{held_back} compaction(s) stay local (personal-mode or not released) — "
+            "resync does not change that"
+        )
+    if not marked:
+        typer.echo("nothing to clear — this laptop has no sync watermarks")
+        return
+    if not confirm:
+        typer.echo("\nDRY RUN: nothing changed. Re-run with --confirm, then `manthana sync`.")
+        return
+
+    for compaction_id in marked:
+        store.clear_synced(compaction_id)
+    typer.echo(
+        f"\ncleared {len(marked)} watermark(s) — run `manthana sync` to re-upload "
+        f"{len(eligible)} compaction(s) to the org server"
+    )
+
+
 @app.command(name="mine-skills")
 def mine_skills(min_sessions: int = 3, threshold: float = 0.75, write: bool = False) -> None:
     """Mine recurring patterns in your own compactions into proposed SKILL.md files.

@@ -42,8 +42,14 @@ def _comp(
     )
 
 
-def _make(provider: MockProvider | None = None) -> tuple[TestClient, ServerStore]:
-    config = ServerConfig(jwt_secret="x" * 40, admin_token="adm")
+def _make(
+    provider: MockProvider | None = None, *, mine_window_days: int = 36_500
+) -> tuple[TestClient, ServerStore]:
+    # Fixtures are pinned to _T0, so a wide mining window keeps these tests about the
+    # console rather than the calendar; test_mining_bounds.py covers the window itself.
+    config = ServerConfig(
+        jwt_secret="x" * 40, admin_token="adm", mine_window_days=mine_window_days
+    )
     store = ServerStore.open("sqlite://")
     obj = InMemoryObjectStore()
     client = TestClient(

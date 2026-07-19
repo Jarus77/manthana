@@ -77,6 +77,55 @@ def test_skips_pre_breakdown_digests() -> None:
     assert rep.priced == 0 and rep.skipped_no_tokens == 1 and rep.rows == []
 
 
+# ── the cost page must EXPLAIN the route column, not just print it ────────
+def _cost_page(store: ServerStore) -> str:
+    config = ServerConfig(jwt_secret="x" * 40, admin_token="adm")
+    client = TestClient(
+        create_app(config, store, InMemoryObjectStore(), ScriptedProvider([])),
+        follow_redirects=False,
+    )
+    client.post("/ui/login", data={"token": "adm"})
+    resp = client.get("/ui/router?org_id=o1")
+    assert resp.status_code == 200
+    return resp.text
+
+
+def test_cost_page_explains_the_downgrade_rule() -> None:
+    """The founder asked "on what basis are we suggesting that route?" — all three
+    conditions from _safe_to_downgrade must be stated on the page in plain words."""
+    store = _store()
+    store.ingest_compaction(_comp("clean"), org_id="o1", team_id="t")
+    page = _cost_page(store)
+    assert "not abandoned" in page  # outcome != abandoned
+    assert "dead end" in page and "circles" in page  # loop / deadend friction
+    assert "two friction points" in page  # len(fps) <= 2
+    assert "one level" in page  # exactly one tier down
+    assert "Haiku is the cheapest tier" in page  # the floor
+
+
+def test_cost_page_states_it_is_advisory_and_free_to_view() -> None:
+    store = _store()
+    store.ingest_compaction(_comp("clean"), org_id="o1", team_id="t")
+    page = _cost_page(store)
+    # advisory only — it must not read as something Manthana already did
+    assert "does not route your team" in page
+    assert "advice, not an action" in page
+    assert "Nothing on this page has been applied" in page
+    # no model calls → viewing costs nothing
+    assert "No AI model is called" in page
+    assert "does not touch your monthly AI budget" in page
+    # tokens re-price, they never pick the route
+    assert "never influence" in page
+
+
+def test_cost_page_says_skipped_sessions_are_counted_not_dropped() -> None:
+    store = _store()
+    store.ingest_compaction(_comp("old", breakdown=False), org_id="o1", team_id="t")
+    page = _cost_page(store)
+    assert "1 skipped (unknown tier or no token breakdown)" in page
+    assert "never quietly dropped" in page
+
+
 def test_router_endpoint_admin_gated() -> None:
     config = ServerConfig(jwt_secret="x" * 40, admin_token="adm")
     store = _store()

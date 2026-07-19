@@ -250,14 +250,20 @@ class ServerStore:
                     out[r.compaction_id] = r.vec
         return out
 
-    def count_compactions(self, org_id: str) -> int:
+    def count_compactions(self, org_id: str, *, since: str | None = None) -> int:
+        """Released-compaction count, optionally within a window. Selects the id column
+        only — no JSON decode / Pydantic validation — so a caller that needs the honest
+        total behind a capped page (org mining) can get it without materializing rows."""
         with DBSession(self._engine) as db:
-            rows = db.exec(
+            stmt = (
                 select(ReleasedCompactionRow.id)
                 .where(ReleasedCompactionRow.org_id == org_id)
                 .where(ReleasedCompactionRow.released == True)  # noqa: E712 - SQL boolean column
             )
-            return len(list(rows))
+            since_norm = _normalize_since(since)
+            if since_norm is not None:
+                stmt = stmt.where(col(ReleasedCompactionRow.started_at) >= since_norm)
+            return len(list(db.exec(stmt)))
 
     # ── ingestion (fail-closed on release; org-namespaced PK) ─────────────
     def ingest_compaction(

@@ -221,3 +221,110 @@ def test_watch_sync_adapter_uploads_raw_by_default_path() -> None:
     sync_fn_noraw = _sync_pushed(client, include_raw=False)
     assert sync_fn_noraw(local2) == 1
     assert obj.get("o1/t1/cw2.jsonl") is None
+
+
+# ── `manthana resync` (re-onboarding after a server-side wipe) ─────────────
+def _resync_store(tmp_path: Any) -> Store:
+    """A local store on disk at MANTHANA_DATA_HOME, seeded with one released work
+    compaction, one personal-mode compaction, and one unreleased one."""
+    local = Store.open()
+    _session(local, "w", Mode.work)
+    _session(local, "p", Mode.personal)
+    _comp(local, "cw", "w", released=True)
+    _comp(local, "cp", "p", released=True)  # released but PERSONAL — never syncable
+    _comp(local, "cu", "w", released=False)  # work but not released
+    return local
+
+
+def test_resync_dry_run_reports_counts_and_changes_nothing(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from manthana.agent.cli import app as cli_app
+    from typer.testing import CliRunner
+
+    monkeypatch.setenv("MANTHANA_DATA_HOME", str(tmp_path))
+    local = _resync_store(tmp_path)
+    local.mark_synced("cw", _T0)
+    assert local.synced_ids() == {"cw"}
+
+    result = CliRunner().invoke(cli_app, ["resync"])
+    assert result.exit_code == 0
+    assert "1 released, non-personal compaction(s) would be re-pushed" in result.stdout
+    assert "1 local sync watermark(s) would be cleared" in result.stdout
+    assert "2 compaction(s) stay local" in result.stdout  # personal + unreleased
+    assert "DRY RUN" in result.stdout
+    # nothing actually cleared
+    assert Store.open().synced_ids() == {"cw"}
+
+
+def test_resync_confirm_clears_sync_state_so_the_next_sync_re_pushes(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from manthana.agent.cli import app as cli_app
+    from typer.testing import CliRunner
+
+    monkeypatch.setenv("MANTHANA_DATA_HOME", str(tmp_path))
+    local = _resync_store(tmp_path)
+    local.mark_synced("cw", _T0)
+    local.mark_raw_synced("cw", _T0)
+
+    result = CliRunner().invoke(cli_app, ["resync", "--confirm"])
+    assert result.exit_code == 0
+    assert "cleared 1 watermark(s)" in result.stdout
+    assert "re-upload 1 compaction(s) to the org server" in result.stdout
+
+    reopened = Store.open()
+    assert reopened.synced_ids() == set()  # digest watermark gone
+    assert reopened.raw_synced_ids() == set()  # raw watermark gone too
+
+
+def test_resync_does_not_make_personal_sessions_syncable(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The trust invariant: clearing sync state changes WHAT HAS BEEN SENT, never
+    WHAT MAY BE SENT. A personal-mode session stays unsyncable after a resync, and
+    an actual sync must still refuse to push it."""
+    from manthana.agent.cli import app as cli_app
+    from manthana.agent.sync import eligible_for_sync
+    from typer.testing import CliRunner
+
+    monkeypatch.setenv("MANTHANA_DATA_HOME", str(tmp_path))
+    local = _resync_store(tmp_path)
+    local.mark_synced("cw", _T0)
+
+    assert CliRunner().invoke(cli_app, ["resync", "--confirm"]).exit_code == 0
+
+    reopened = Store.open()
+    sessions = {s.id: s for s in reopened.list_sessions(limit=1000)}
+    eligible = eligible_for_sync(reopened.list_compactions(), sessions)
+    assert {c.id for c in eligible} == {"cw"}  # personal "cp" and unreleased "cu" excluded
+
+    # And end-to-end through the real sync path: only the work compaction lands.
+    server, sstore, _obj, token = _server()
+    client = SyncClient("", token, client=server)
+    result = client.sync(reopened)
+    assert result.pushed == 1
+    assert {c.id for c in sstore.query_compactions(org_id="o1")} == {"cw"}
+
+
+def test_resync_with_no_watermarks_says_so(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from manthana.agent.cli import app as cli_app
+    from typer.testing import CliRunner
+
+    monkeypatch.setenv("MANTHANA_DATA_HOME", str(tmp_path))
+    _resync_store(tmp_path)  # nothing marked synced
+    result = CliRunner().invoke(cli_app, ["resync"])
+    assert result.exit_code == 0
+    assert "nothing to clear" in result.stdout
+
+
+def test_resync_help_says_it_re_uploads_and_deletes_nothing_locally() -> None:
+    from manthana.agent.cli import app as cli_app
+    from typer.testing import CliRunner
+
+    out = CliRunner().invoke(cli_app, ["resync", "--help"]).stdout
+    assert "RE-UPLOADS" in out
+    assert "deletes nothing" in out
+    assert "--confirm" in out

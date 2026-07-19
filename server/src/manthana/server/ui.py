@@ -21,9 +21,8 @@ import logging
 from collections.abc import Callable
 from typing import Annotated
 
-from fastapi import Cookie, FastAPI, Form
+from fastapi import BackgroundTasks, Cookie, FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from manthana.skills import mine_org
 
 from .analyzer import analyze_counterfactual_costs
 from .auth import AuthError, verify_founder_token
@@ -32,6 +31,15 @@ from .digest import build_weekly_digest
 from .founder import run_query, team_topics
 from .llm import LLMProvider
 from .metering import QuotaExceededError, month_key
+from .mining import (
+    FAILED,
+    QUOTA,
+    RUNNING,
+    MineRun,
+    MineRunRegistry,
+    check_quota,
+    run_mining,
+)
 from .storage import ObjectStore
 from .store import ServerStore
 
@@ -52,6 +60,43 @@ _STYLE = (
 
 def _e(value: object) -> str:
     return html.escape(str(value))
+
+
+# Plain-language answer to the founder's question: "what is this route column, on what
+# basis are we suggesting that route?" Mirrors analyzer/router.py::_safe_to_downgrade —
+# if that rule changes, this copy must change with it.
+_ROUTE_EXPLAINER = (
+    "<div class='bar'>"
+    "<h3>What the “route” column means</h3>"
+    "<p>Each row shows the model your team actually used for that session and the "
+    "cheaper model we think could have handled it — written as "
+    "<code>opus→sonnet</code>. A dash means we are not suggesting a change.</p>"
+    "<p><b>How we pick it.</b> We suggest the next model down only when the session "
+    "looks like it went smoothly. All three must be true:</p>"
+    "<ul>"
+    "<li>the work was not abandoned;</li>"
+    "<li>the engineer never got stuck going in circles or hit a dead end;</li>"
+    "<li>no more than two friction points were recorded in the whole session.</li>"
+    "</ul>"
+    "<p>If any of those fail we leave the session where it is — a session that was a "
+    "struggle is exactly the one that needed the stronger model. We only ever step "
+    "down one level (Opus → Sonnet, Sonnet → Haiku). Haiku is the cheapest tier, so "
+    "it is never downgraded.</p>"
+    "<p><b>This is advice, not an action.</b> Manthana does not route your team's "
+    "work and does not change which model anyone uses. Nothing on this page has "
+    "been applied — it is a suggestion to take to your team, or ignore.</p>"
+    "<p><b>Looking at this page is free.</b> It is pure arithmetic over token counts "
+    "we already recorded. No AI model is called to produce it, so opening it costs "
+    "nothing and does not touch your monthly AI budget.</p>"
+    "<p><b>About the numbers.</b> Token counts are used only to re-price the same "
+    "session at another tier's rates. They never influence <i>which</i> route we "
+    "suggest — that comes entirely from the three signals above.</p>"
+    "<p><b>Skipped sessions.</b> We can only price a session when we know which model "
+    "tier it ran on and we have its token breakdown. Older sessions recorded before "
+    "we stored that detail are skipped — they are counted and shown above, never "
+    "quietly dropped from the totals.</p>"
+    "</div>"
+)
 
 
 def _ct_eq(a: str, b: str) -> bool:
@@ -100,6 +145,9 @@ def mount_ui(
     object_store: ObjectStore | None = None,
     provider_for: Callable[[str], LLMProvider] | None = None,
 ) -> None:
+    # Last mining run per org (in-process; see MineRunRegistry on why it isn't stored).
+    mine_runs = MineRunRegistry()
+
     def _privacy_open(org_id: str) -> bool:
         """Org waived anonymization → named, per-individual results in the console."""
         return (store.get_org_privacy(org_id) or config.privacy_mode) == "open"
@@ -199,7 +247,8 @@ def mount_ui(
                 f"<a href='/ui/digest?org_id={_e(o.id)}'>Digest</a> · "
                 f"<form method='post' action='/ui/mine'>"
                 f"<input type='hidden' name='org_id' value='{_e(o.id)}'>"
-                "<button>Mine org skills</button></form></td></tr>"
+                "<button>Mine org skills</button></form> · "
+                f"<a href='/ui/mine-status?org_id={_e(o.id)}'>Mining status</a></td></tr>"
             )
         table = (
             "<table><tr><th>org</th><th>teams</th><th>compactions</th>"
@@ -316,7 +365,7 @@ def mount_ui(
             if r.savings_usd > 0
         )
         skip = (
-            f" · {rep.skipped_no_tokens} pre-breakdown digests skipped"
+            f" · {rep.skipped_no_tokens} skipped (unknown tier or no token breakdown)"
             if rep.skipped_no_tokens
             else ""
         )
@@ -330,6 +379,7 @@ def mount_ui(
             "<table><tr><th>project</th><th>route</th><th>now</th><th>projected</th>"
             "<th>save</th></tr>"
             f"{rows or '<tr><td colspan=5>no downgrade candidates</td></tr>'}</table>"
+            f"{_ROUTE_EXPLAINER}"
             "<p><a href='/ui'>← console</a></p>"
         )
         return HTMLResponse(_page(f"Cost — {org_id}", body))
@@ -465,32 +515,87 @@ def mount_ui(
 
     @app.post("/ui/mine")
     def ui_mine(
-        org_id: Annotated[str, Form()], manthana_admin: Annotated[str, Cookie()] = ""
+        org_id: Annotated[str, Form()],
+        background: BackgroundTasks,
+        manthana_admin: Annotated[str, Cookie()] = "",
     ) -> Response:
+        """Start a bounded mining run in the background and redirect to its status.
+
+        This handler used to do the whole job inline — load every compaction,
+        re-embed it, cluster it, then make one model call per cluster — which took
+        long enough that the gateway returned 504 before the founder saw anything.
+        It now returns immediately; the run reports itself on /ui/mine-status.
+        """
         sess = _session(manthana_admin)
         if sess is None:
             return RedirectResponse(url="/ui/login", status_code=303)
         org_id = _scope_org(sess, org_id)
-        # Mining touches the provider/embedder; degrade to a clean redirect (no
-        # 500 on the admin console) if anything raises.
+        # Pre-check the budget so an exhausted org still gets its 429 on THIS click
+        # rather than a silent no-op in the background.
         try:
-            compactions = store.query_compactions(org_id=org_id, limit=100_000)
-            for proposal in mine_org(compactions, provider=_provider(org_id)):
-                store.enqueue_action(
-                    action_id="auto_draft_org_skill",
-                    org_id=org_id,
-                    payload={
-                        "name": proposal.draft.name,
-                        "description": proposal.draft.description,
-                        "skill_md": proposal.skill_md,
-                        "contributor_count": proposal.provenance.contributor_count,
-                    },
-                )
+            check_quota(store, config, org_id)
         except QuotaExceededError as exc:
             return HTMLResponse(_quota_page(exc), status_code=429)
-        except Exception:  # noqa: BLE001 - console action degrades, never 500s
-            _log.exception("org skill mining failed for %s", org_id)
-        return RedirectResponse(url="/ui", status_code=303)
+        status_url = f"/ui/mine-status?org_id={org_id}"
+        if mine_runs.is_running(org_id):
+            # Don't stack runs: a second click would double the model spend for the
+            # same corpus. Send the founder to the run already in flight.
+            return RedirectResponse(url=status_url, status_code=303)
+        mine_runs.start(org_id, MineRun(org_id=org_id, window_days=config.mine_window_days,
+                                        max_items=config.mine_max_items))
+        background.add_task(
+            run_mining, store, config, org_id,
+            provider=_provider(org_id), registry=mine_runs,
+        )
+        return RedirectResponse(url=status_url, status_code=303)
+
+    @app.get("/ui/mine-status", response_class=HTMLResponse)
+    def ui_mine_status(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:
+        sess = _session(manthana_admin)
+        if sess is None:
+            return RedirectResponse(url="/ui/login", status_code=303)
+        org_id = _scope_org(sess, org_id)
+        run = mine_runs.get(org_id)
+        if run is None:
+            body = (
+                f"<p class='muted'>org: {_e(org_id)}</p>"
+                "<p>No mining run yet in this server process.</p>"
+                "<p><a href='/ui'>← console</a></p>"
+            )
+            return HTMLResponse(_page("Mining", body))
+        if run.state == RUNNING:
+            status = (
+                "<p><b>Mining now.</b> This runs in the background — you can leave this "
+                "page. Reload to see the result.</p>"
+            )
+        elif run.state == QUOTA:
+            status = (
+                "<p class='warn'>Stopped: this org's monthly AI budget is spent. "
+                f"{_e(run.detail)}</p>"
+            )
+        elif run.state == FAILED:
+            status = f"<p class='warn'>Run failed: {_e(run.detail)}</p>"
+        else:
+            status = f"<p><b>Done.</b> {_e(run.detail)}</p>"
+        # No silent caps: always state the scope, and flag it loudly when a bound bit.
+        coverage = (
+            f"<p class='warn'>{_e(run.coverage_note())}</p>"
+            if run.capped
+            else f"<p class='muted'>{_e(run.coverage_note())}</p>"
+        )
+        pending = len(store.list_queue(org_id))
+        body = (
+            f"<p class='muted'>org: {_e(org_id)} · started {_e(run.started_at)}"
+            f"{' · finished ' + _e(run.finished_at) if run.finished_at else ''}</p>"
+            f"{status}{coverage}"
+            f"<p class='muted'>window: since {_e(run.since or '—')} "
+            f"({run.window_days} days) · cap: {run.max_items} sessions per run · "
+            f"{pending} proposal(s) awaiting approval</p>"
+            "<p>Mining only proposes skills — nothing is published until you approve it.</p>"
+            f"<p><a href='/ui/mine-status?org_id={_e(org_id)}'>Reload</a> · "
+            "<a href='/ui'>← console</a></p>"
+        )
+        return HTMLResponse(_page("Mining", body))
 
 
 __all__ = ["mount_ui", "COOKIE"]

@@ -22,15 +22,16 @@ from typing import Any
 from manthana.schemas import Surface
 from manthana.skills.assembly import Topic, thread_key
 from manthana.skills.assembly import topics as _build_topics
-from manthana.skills.cluster import DEFAULT_MAX_ITEMS, default_text_of
+from manthana.skills.cluster import DEFAULT_MAX_ITEMS
 from manthana.skills.embed import Embedder, default_embedder
-from manthana.skills.retrieval import Coverage, rank, text_hash
+from manthana.skills.retrieval import Coverage, rank
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .config import ServerConfig
 from .llm import LLMProvider
 from .metering import QuotaExceededError
 from .store import ServerStore
+from .vectors import ensure_vectors
 
 _log = logging.getLogger(__name__)
 
@@ -109,18 +110,7 @@ def _index_and_rank(
     cached vector, then rank by relevance. The index only ever contains what
     ``query_compactions`` returns (released), so it can't hold unreleased/personal."""
     try:
-        have = store.vector_meta(org_id)
-        todo: list[tuple[str, str, str]] = []
-        for c in candidates:
-            txt = default_text_of(c)
-            h = text_hash(txt)
-            if have.get(c.id) != (embedder.dim, h):
-                todo.append((c.id, txt, h))
-        if todo:
-            vecs = embedder.embed([t for _, t, _ in todo])
-            for (cid, _txt, h), v in zip(todo, vecs, strict=True):
-                store.upsert_vector(org_id, cid, dim=embedder.dim, text_hash=h, vec=v)
-        vectors = store.get_vectors(org_id, [c.id for c in candidates], dim=embedder.dim)
+        vectors = ensure_vectors(store, org_id, candidates, embedder)
         return rank(query, candidates, vectors, embedder, k=k)
     except Exception:  # noqa: BLE001 - embedder/index failure degrades to unranked, never 500s
         _log.exception("founder retrieval: embedder/index failed, returning unranked")

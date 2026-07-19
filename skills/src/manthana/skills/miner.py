@@ -18,13 +18,14 @@ from pathlib import Path
 from manthana.schemas import BaseCompaction
 
 from .cluster import (
+    DEFAULT_MAX_ITEMS,
     DEFAULT_MIN_CLUSTER_SIZE,
     DEFAULT_THRESHOLD,
     CompactionCluster,
     cluster_compactions,
     recurring,
 )
-from .embed import Embedder, default_embedder
+from .embed import Embedder, Vector, default_embedder
 from .provenance import Provenance, content_hash, make_provenance, render_provenance
 from .provider import LLMProvider, SupportsRedaction
 from .skillmd import SkillDraft, render_skill_md
@@ -68,6 +69,8 @@ class SkillMiner:
         min_sessions: int = 1,
         include_contributors: bool = True,
         now: datetime | None = None,
+        max_items: int = DEFAULT_MAX_ITEMS,
+        vectors: dict[str, Vector] | None = None,
     ) -> list[SkillProposal]:
         # Privacy invariant: contributor names may only be retained for
         # single-contributor (personal) mining. Any multi-contributor mining must
@@ -85,11 +88,16 @@ class SkillMiner:
             if self.redactor is not None
             else list(compactions)
         )
+        # A redacted compaction keeps its id, so an id-keyed vector cache stays valid
+        # ONLY when redaction did not change the embedded text. The server passes no
+        # redactor (its rows are redacted on sync), which is the path that caches.
         clusters = cluster_compactions(
             source,
             self.embedder,
             threshold=self.threshold,
             min_cluster_size=self.min_cluster_size,
+            max_items=max_items,
+            vectors=None if self.redactor is not None else vectors,
         )
         proposals: list[SkillProposal] = []
         for cluster in recurring(
@@ -133,9 +141,15 @@ def mine_org(
     embedder: Embedder | None = None,
     min_contributors: int = K_ANON_FLOOR,
     now: datetime | None = None,
+    max_items: int = DEFAULT_MAX_ITEMS,
+    vectors: dict[str, Vector] | None = None,
 ) -> list[SkillProposal]:
     """Cross-engineer org mining: k-anonymized (>=K_ANON_FLOOR distinct
-    contributors, contributor names dropped). The safe org entry point."""
+    contributors, contributor names dropped). The safe org entry point.
+
+    ``vectors`` (id -> cached embedding) lets a caller with a vector store skip
+    re-embedding; ``max_items`` bounds the O(n^2) clustering pass. Callers are
+    expected to report both bounds to the user rather than truncate silently."""
     miner = SkillMiner(embedder=embedder, provider=provider)
     return miner.mine(
         compactions,
@@ -143,6 +157,8 @@ def mine_org(
         min_sessions=1,
         include_contributors=False,
         now=now,
+        max_items=max_items,
+        vectors=vectors,
     )
 
 
