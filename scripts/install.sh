@@ -12,7 +12,7 @@ set -eu
 
 WHAT="${1:-agent}"   # agent | server | all
 case "$WHAT" in agent|server|all) ;; *) echo "usage: install.sh [agent|server|all]" >&2; exit 2;; esac
-REPO="${MANTHANA_REPO:-Suraj-gameramp/manthana}"
+REPO="${MANTHANA_REPO:-Jarus77/manthana}"
 TAG="${MANTHANA_VERSION:-latest}"
 echo "→ installing Manthana ($WHAT) (repo=$REPO, version=$TAG)"
 
@@ -42,13 +42,22 @@ for u in $urls; do (cd "$TMP" && curl -LsSO "$u"); done
 
 # 3. install the requested CLI(s) as isolated tools; manthana-* resolve from the release wheels,
 #    everything else from PyPI. (case avoids `set -e` tripping on a false test.)
-case "$WHAT" in agent|all) uv tool install --find-links "$TMP" manthana ;; esac
-case "$WHAT" in server|all) uv tool install --find-links "$TMP" manthana-server ;; esac
+#
+# --force is REQUIRED, not cosmetic: without it `uv tool install` prints
+# "`manthana` is already installed" and exits 0 without upgrading, so every
+# engineer who already had Manthana was silently pinned to whatever version they
+# first installed. This is an INSTALLER, but it is also the only upgrade path we
+# ship, so it must always converge on the requested release.
+case "$WHAT" in agent|all) uv tool install --force --find-links "$TMP" manthana ;; esac
+case "$WHAT" in server|all) uv tool install --force --find-links "$TMP" manthana-server ;; esac
 
 if [ "$WHAT" = "server" ]; then
   echo "✓ installed manthana-server. Next: manthana-server serve --tailscale   (or see docs/deploy.md)"
   manthana-server --help >/dev/null 2>&1 && echo "  run 'manthana-server init .' to drop deploy files (Caddyfile, compose, .env)"
 else
+  # Print the version LAST and labelled — engineers upgrading need to confirm the
+  # new release actually landed, and a bare number under a "✓ installed" line was
+  # easy to read as success when the install had in fact been skipped.
   echo "✓ installed. Next: manthana setup <invite-from-your-admin>"
-  manthana version 2>/dev/null || true
+  printf '  version: '; manthana version 2>/dev/null || echo "unknown"
 fi

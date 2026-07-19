@@ -10,7 +10,7 @@ the AGPL `manthana-server` (Postgres + S3/MinIO).
 
 ```bash
 # CLI — installs the `manthana-server` command
-curl -LsSf https://github.com/Suraj-gameramp/manthana/releases/latest/download/install.sh | sh -s server
+curl -LsSf https://github.com/Jarus77/manthana/releases/latest/download/install.sh | sh -s server
 
 # …or pure Docker (no install at all)
 docker run -p 8000:8000 \

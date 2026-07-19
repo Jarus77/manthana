@@ -7,7 +7,7 @@ Read top-to-bottom once, then drive from the **Cheat-sheet** at the end.
 > boots a server (SQLite + in-memory), enrolls a team, onboards an engineer with one
 > `manthana setup`, and runs `manthana doctor` — then tears itself down. See
 > [onboarding.md](onboarding.md). Engineers install with:
-> `curl -LsSf https://github.com/Suraj-gameramp/manthana/releases/latest/download/install.sh | sh`
+> `curl -LsSf https://github.com/Jarus77/manthana/releases/latest/download/install.sh | sh`
 
 ---
 

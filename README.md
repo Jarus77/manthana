@@ -21,7 +21,7 @@ Personal-mode sessions never leave the laptop.
 ## Install (engineer laptop)
 
 ```bash
-curl -LsSf https://github.com/Suraj-gameramp/manthana/releases/latest/download/install.sh | sh
+curl -LsSf https://github.com/Jarus77/manthana/releases/latest/download/install.sh | sh
 ```
 
 This installs `uv` (if needed) and the `manthana` CLI. (Dev from a clone instead: `uv sync
@@ -39,7 +39,7 @@ The fastest secure path (no domain, no certificates) uses **Tailscale** (a priva
 tailscale up
 
 # 2. Install the server (admin machine only):
-curl -LsSf https://github.com/Suraj-gameramp/manthana/releases/latest/download/install.sh | sh -s server
+curl -LsSf https://github.com/Jarus77/manthana/releases/latest/download/install.sh | sh -s server
 
 # 3. Run it — auto-generates secrets, exposes it on your tailnet with automatic HTTPS:
 manthana-server serve --tailscale        # prints an admin token + your https://<machine>.<tailnet>.ts.net URL

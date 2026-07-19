@@ -43,7 +43,7 @@ The server runs on one host. Postgres and MinIO (or S3) are the only stateful de
 ### One-command full stack (macOS / Linux with Docker)
 
 ```bash
-git clone https://github.com/Suraj-gameramp/manthana.git
+git clone https://github.com/Jarus77/manthana.git
 cd manthana
 cp .env.example .env
 # Edit .env: set JWT_SECRET, ADMIN_TOKEN (see below for values)

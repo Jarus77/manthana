@@ -36,7 +36,7 @@ invites acme`.
 First, install the CLI (once):
 
 ```bash
-curl -LsSf https://github.com/Suraj-gameramp/manthana/releases/latest/download/install.sh | sh
+curl -LsSf https://github.com/Jarus77/manthana/releases/latest/download/install.sh | sh
 ```
 
 Then paste the one-liner your admin sent:

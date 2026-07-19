@@ -234,7 +234,7 @@ Full guides: [docs/deploy.md](../docs/deploy.md) (admin), [docs/onboarding.md](.
 - **Agent, collectors, schemas** (`manthana`, `manthana-collectors`, `manthana-schemas`): **Apache-2.0** (permissive).
 - **Portions derived from ECC** (Affaan Mustafa, MIT): secret patterns, cost rates, agent-data-home pattern, session-end line handling. Full attribution in [`NOTICE`](../NOTICE) and [`LICENSES/MIT-ECC.txt`](../LICENSES/MIT-ECC.txt).
 
-**Repository:** [github.com/Suraj-gameramp/manthana](https://github.com/Suraj-gameramp/manthana) (public, MIT-licensed examples welcome).
+**Repository:** [github.com/Jarus77/manthana](https://github.com/Jarus77/manthana) (public, MIT-licensed examples welcome).
 
 ---
 

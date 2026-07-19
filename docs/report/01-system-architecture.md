@@ -694,4 +694,4 @@ services:
 **Version:** v0.2.0  
 **Status:** v1 complete; vertical slice verified end-to-end (capture → store → compact → release → sync → ingest → founder query).  
 **Tests:** 131 green; adversarial review hardened across 6 passes.  
-**Public repo:** github.com/Suraj-gameramp/manthana
+**Public repo:** github.com/Jarus77/manthana
