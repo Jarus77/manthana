@@ -7,6 +7,12 @@ demo database (``sqlite:///./manthana-demo.db``). Every actor is on the
 local store. Each project has >=4 contributors so founder aggregates clear the
 k-anonymity floor.
 
+The window is anchored to the RUN date by default, because the console's feeds
+are time-windowed ("this week", last 14 days) — data pinned to a fixed past date
+makes a freshly-seeded demo look empty, which reads as broken rather than
+synthetic. Set ``MANTHANA_DEMO_NOW=YYYY-MM-DD`` to pin it when byte-identical
+reproduction matters; content selection is deterministic either way.
+
 Run:  uv run python validation/seed_demo_org.py
 SPDX-License-Identifier: AGPL-3.0-or-later
 """
@@ -14,7 +20,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 # ruff: noqa: E501 - demo content strings are intentionally long, single-line for readability
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+import os
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from manthana.schemas import (
@@ -30,7 +37,17 @@ DB_PATH = Path("manthana-demo.db")
 DB_URL = f"sqlite:///./{DB_PATH.name}"
 ORG = "acme-demo"
 TEAM = "platform"
-NOW = datetime(2026, 6, 20, 12, 0, tzinfo=UTC)
+def _anchor() -> datetime:
+    """Noon UTC today, or the date pinned by ``MANTHANA_DEMO_NOW`` (YYYY-MM-DD)."""
+    pinned = os.environ.get("MANTHANA_DEMO_NOW", "").strip()
+    if pinned:
+        return datetime.combine(date.fromisoformat(pinned), datetime.min.time(), UTC).replace(
+            hour=12
+        )
+    return datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0)
+
+
+NOW = _anchor()
 
 # project -> contributors (>=4 each so founder aggregates clear k-anon floor 4)
 PROJECTS: dict[str, list[str]] = {

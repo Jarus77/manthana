@@ -1,11 +1,13 @@
 """Founder web console (server-rendered HTML + htmx).
 
 A browser GUI for the org side — founder natural-language query, org/team overview,
-and org skill mining — beyond the Swagger ``/docs`` page. Two session roles share
-the same cookie login: the operator's ADMIN token sees every org, while an
-org-scoped FOUNDER token (hosted multi-tenant; a JWT minted at onboarding) sees
-only its own org — every handler derives the org from the SESSION for founders,
-ignoring any client-supplied org field, so cross-tenant reads are impossible.
+and org skill mining — beyond the Swagger ``/docs`` page. THREE session roles share
+the same cookie login: the operator's ADMIN token sees every org; an org-scoped
+FOUNDER token (hosted multi-tenant; a JWT minted at onboarding) sees only its own
+org; an ENGINEER token sees only its own org AND only the wiki (``wiki_ui.py``) —
+the oversight pages in this module send engineers to ``/ui/home`` instead. Every
+handler derives the org from the SESSION for non-admins, ignoring any
+client-supplied org field, so cross-tenant reads are impossible.
 
 NOTE: like ``app.py``, this module intentionally does NOT use ``from __future__
 import annotations`` — FastAPI must resolve the ``Form``/``Cookie`` parameters in
@@ -19,13 +21,19 @@ import hmac
 import html
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import BackgroundTasks, Cookie, FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from .analyzer import analyze_counterfactual_costs
-from .auth import AuthError, verify_founder_token
+from .auth import (
+    AuthError,
+    issue_engineer_token,
+    verify_engineer_token,
+    verify_founder_token,
+)
 from .config import ServerConfig
 from .digest import build_weekly_digest
 from .founder import run_query, team_topics
@@ -110,11 +118,79 @@ def _page(title: str, body: str) -> str:
         f"<!doctype html><html><head><meta charset='utf-8'>"
         f"<title>Manthana — {_e(title)}</title>"
         f"{_STYLE}</head><body><h1>Manthana — Founder Console</h1>"
-        "<nav><a href='/ui'>Console</a>"
+        "<nav><a href='/ui/home'>Home</a><a href='/ui'>Console</a>"
         "<form method='post' action='/ui/logout'><button>Log out</button></form> "
         "<a href='/docs'>API</a></nav>"
         f"{body}</body></html>"
     )
+
+
+# Session resolution + tenant scoping are MODULE-LEVEL (not closures inside
+# mount_ui) so the wiki console can reuse the exact same cookie contract rather
+# than duplicating it — one implementation, one place to get tenant isolation
+# right. The console cookie is scoped path='/ui', so every wiki route must also
+# live under /ui/... to be authenticated at all.
+@dataclass(frozen=True)
+class ConsoleSession:
+    """Who is signed into the console, and what they may reach.
+
+    Three roles, deliberately unequal:
+
+      * ``admin``    — the operator. Every org; every surface.
+      * ``founder``  — one org; every surface for that org (wiki + oversight:
+                       cost, mining, audit, digests).
+      * ``engineer`` — one org; the WIKI only. They read and TEACH the shared
+                       context, but the founder's oversight surfaces are not
+                       theirs to see. ``actor`` names them, so their edits are
+                       attributed to a person rather than a shared role.
+    """
+
+    role: str
+    org_id: str | None  # None = admin (not locked to any one org)
+    actor: str | None = None  # set for engineers; the note author identity
+
+    @property
+    def is_engineer(self) -> bool:
+        return self.role == "engineer"
+
+    @property
+    def author(self) -> str:
+        """Attribution for anything this session writes."""
+        return self.actor or self.role
+
+
+def session_for(config: ServerConfig, cookie: str) -> ConsoleSession | None:
+    """Resolve the console cookie to a session, or None when not signed in.
+
+    The cookie holds the credential itself (admin token or a scoped JWT), so
+    sessions survive restarts without server-side state. Tried in order of
+    privilege; each verifier rejects the other scopes, so a token can only ever
+    authenticate as what it was issued for.
+    """
+    if not cookie:
+        return None
+    if _ct_eq(cookie, config.admin_token):
+        return ConsoleSession(role="admin", org_id=None)
+    try:
+        founder = verify_founder_token(config.jwt_secret, cookie)
+    except AuthError:
+        pass
+    else:
+        return ConsoleSession(role="founder", org_id=founder.org_id)
+    try:
+        engineer = verify_engineer_token(config.jwt_secret, cookie)
+    except AuthError:
+        return None
+    return ConsoleSession(
+        role="engineer", org_id=engineer.org_id, actor=engineer.actor
+    )
+
+
+def scope_org(sess: ConsoleSession, requested: str) -> str:
+    """The org a handler may act on: founders and engineers are FORCED to their
+    own org — the client-supplied form/query value is ignored. This (not the
+    form) is the tenant-isolation enforcement for the console."""
+    return sess.org_id if sess.org_id is not None else requested
 
 
 def _login_page(error: bool = False) -> str:
@@ -122,8 +198,10 @@ def _login_page(error: bool = False) -> str:
     return _page(
         "Login",
         f"{msg}<form method='post' action='/ui/login'>"
-        "<p>Admin or founder token: <input type='password' name='token' autofocus></p>"
-        "<button>Sign in</button></form>",
+        "<p>Your Manthana token: <input type='password' name='token' autofocus></p>"
+        "<button>Sign in</button></form>"
+        "<p class='muted'>Founders and engineers both sign in here. Engineers land on "
+        "the team wiki, where they can read and correct the shared context.</p>",
     )
 
 
@@ -157,30 +235,22 @@ def mount_ui(
         # the shared provider otherwise (self-hosted / tests).
         return provider_for(org_id) if provider_for is not None else provider
 
-    def _session(cookie: str) -> tuple[str, str | None] | None:
-        """Resolve the console cookie to ``(role, org_id)``.
+    def _session(cookie: str) -> ConsoleSession | None:
+        return session_for(config, cookie)
 
-        ``("admin", None)`` = the operator (every org); ``("founder", org)`` = a
-        hosted customer's founder, locked to their org. None = not signed in.
-        The cookie holds the credential itself (admin token or founder JWT), so
-        sessions survive restarts without server-side state.
-        """
-        if not cookie:
-            return None
-        if _ct_eq(cookie, config.admin_token):
-            return ("admin", None)
-        try:
-            claims = verify_founder_token(config.jwt_secret, cookie)
-        except AuthError:
-            return None
-        return ("founder", claims.org_id)
+    _scope_org = scope_org
 
-    def _scope_org(sess: tuple[str, str | None], requested: str) -> str:
-        """The org a handler may act on: founders are FORCED to their own org —
-        the client-supplied form/query value is ignored. This (not the form) is
-        the tenant-isolation enforcement for the console."""
-        _role, sess_org = sess
-        return sess_org if sess_org is not None else requested
+    def _founder_session(cookie: str) -> ConsoleSession | Response:
+        """Gate for the OVERSIGHT surfaces (orgs, cost, mining, audit, digests,
+        session browsing). Engineers hold a wiki login, not a management one, so
+        they are sent to the wiki rather than shown a permission error — from
+        their side these pages simply are not part of their product."""
+        sess = _session(cookie)
+        if sess is None:
+            return RedirectResponse(url="/ui/login", status_code=303)
+        if sess.is_engineer:
+            return RedirectResponse(url="/ui/home", status_code=303)
+        return sess
 
     @app.get("/ui/login", response_class=HTMLResponse)
     def login_form() -> str:
@@ -208,14 +278,13 @@ def mount_ui(
 
     @app.get("/ui", response_class=HTMLResponse)
     def console(manthana_admin: Annotated[str, Cookie()] = "") -> Response:
-        sess = _session(manthana_admin)
-        if sess is None:
-            return RedirectResponse(url="/ui/login", status_code=303)
-        _role, sess_org = sess
-        if sess_org is None:
+        sess = _founder_session(manthana_admin)
+        if isinstance(sess, Response):
+            return sess
+        if sess.org_id is None:
             orgs = store.list_orgs()
         else:  # founder session: their org only — no cross-tenant listing
-            org = store.get_org(sess_org)
+            org = store.get_org(sess.org_id)
             orgs = [org] if org else []
         options = "".join(f"<option value='{_e(o.id)}'>{_e(o.name)}</option>" for o in orgs)
         query_form = (
@@ -269,7 +338,63 @@ def mount_ui(
             "<table><tr><th>when</th><th>org</th><th>query</th><th>result</th></tr>"
             f"{''.join(audit_rows) or '<tr><td colspan=4>none yet</td></tr>'}</table>"
         )
-        return HTMLResponse(_page("Console", query_form + table + audit))
+        # Onboarding the team to the wiki has to be self-serve, or the shared
+        # context ends up with exactly one reader.
+        who = "".join(
+            f"<option value='{_e(a.id)}'>{_e(a.display_name or a.id)}</option>"
+            for o in orgs
+            for a in store.list_actors(o.id)
+        )
+        team_access = (
+            "<h3>Team access to the wiki</h3>"
+            "<div class='bar'><form method='post' action='/ui/engineer-token'>"
+            f"<select name='org_id'>{options or '<option>—</option>'}</select> "
+            f"<input name='actor' list='known-actors' size='28' "
+            "placeholder='engineer@yourcompany.com'>"
+            f"<datalist id='known-actors'>{who}</datalist> "
+            "<button>Create wiki login</button></form>"
+            "<p class='muted'>Gives this person a link to read and correct the team "
+            "wiki. They do not see cost, mining, or audit pages.</p></div>"
+        )
+        return HTMLResponse(_page("Console", query_form + table + team_access + audit))
+
+    @app.post("/ui/engineer-token", response_class=HTMLResponse)
+    def ui_engineer_token(
+        org_id: Annotated[str, Form()],
+        actor: Annotated[str, Form()],
+        manthana_admin: Annotated[str, Cookie()] = "",
+    ) -> Response:
+        """Mint an engineer's wiki login and show the exact link to send them.
+
+        The token is displayed ONCE and never stored server-side (it is a signed
+        JWT, so there is nothing to store) — the page says so, because a founder
+        who assumes they can come back for it later will be stuck re-minting.
+        """
+        sess = _founder_session(manthana_admin)
+        if isinstance(sess, Response):
+            return sess
+        org_id = _scope_org(sess, org_id)
+        actor = actor.strip()
+        if not actor:
+            return HTMLResponse(
+                _page("Team access", "<p class='warn'>An engineer email is required.</p>"
+                      "<p><a href='/ui'>← console</a></p>"),
+                status_code=422,
+            )
+        token = issue_engineer_token(config.jwt_secret, org_id=org_id, actor=actor)
+        body = (
+            f"<h3>Wiki login for {_e(actor)}</h3>"
+            "<p>Send them this token and the link. Sign-in is the token itself — "
+            "there is no password.</p>"
+            f"<p><b>Link:</b> <code>{_e(config.public_url)}/ui/login</code></p>"
+            f"<p><b>Token:</b></p><pre>{_e(token)}</pre>"
+            "<p class='warn'>Shown once — it is not stored anywhere. If it is lost, "
+            "just create another; both keep working.</p>"
+            "<p class='muted'>They will land on the team wiki and can correct anything "
+            "they know is wrong. Their edits are recorded under their own name.</p>"
+            "<p><a href='/ui'>← console</a></p>"
+        )
+        return HTMLResponse(_page("Team access", body))
 
     @app.post("/ui/query", response_class=HTMLResponse)
     def ui_query(
@@ -278,9 +403,9 @@ def mount_ui(
         source: Annotated[str, Form()] = "",
         manthana_admin: Annotated[str, Cookie()] = "",
     ) -> Response:
-        sess = _session(manthana_admin)
-        if sess is None:
-            return RedirectResponse(url="/ui/login", status_code=303)
+        sess = _founder_session(manthana_admin)
+        if isinstance(sess, Response):
+            return sess
         org_id = _scope_org(sess, org_id)
         allow_individual = _privacy_open(org_id)
         try:
@@ -324,9 +449,9 @@ def mount_ui(
 
     @app.get("/ui/digest", response_class=HTMLResponse)
     def ui_digest(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:
-        sess = _session(manthana_admin)
-        if sess is None:
-            return RedirectResponse(url="/ui/login", status_code=303)
+        sess = _founder_session(manthana_admin)
+        if isinstance(sess, Response):
+            return sess
         org_id = _scope_org(sess, org_id)
         try:
             d = build_weekly_digest(store, config, org_id=org_id, provider=_provider(org_id))
@@ -352,9 +477,9 @@ def mount_ui(
 
     @app.get("/ui/router", response_class=HTMLResponse)
     def ui_router(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:
-        sess = _session(manthana_admin)
-        if sess is None:
-            return RedirectResponse(url="/ui/login", status_code=303)
+        sess = _founder_session(manthana_admin)
+        if isinstance(sess, Response):
+            return sess
         org_id = _scope_org(sess, org_id)
         rep = analyze_counterfactual_costs(store, org_id)
         rows = "".join(
@@ -393,9 +518,9 @@ def mount_ui(
     ) -> Response:
         """Browse the org's released session digests (no raw transcripts) — the
         founder-facing answer to 'let me actually read what my team did'."""
-        sess = _session(manthana_admin)
-        if sess is None:
-            return RedirectResponse(url="/ui/login", status_code=303)
+        sess = _founder_session(manthana_admin)
+        if isinstance(sess, Response):
+            return sess
         org_id = _scope_org(sess, org_id)
         named = _privacy_open(org_id)
         comps = store.query_compactions(
@@ -454,9 +579,9 @@ def mount_ui(
     ) -> Response:
         """One session's full digest. Never raw turns — the console shows digests
         only; raw drill-down lives behind the audited POST /v1/founder/drill."""
-        sess = _session(manthana_admin)
-        if sess is None:
-            return RedirectResponse(url="/ui/login", status_code=303)
+        sess = _founder_session(manthana_admin)
+        if isinstance(sess, Response):
+            return sess
         org_id = _scope_org(sess, org_id)
         named = _privacy_open(org_id)
         c = store.get_compaction(compaction_id, org_id)
@@ -487,9 +612,9 @@ def mount_ui(
 
     @app.get("/ui/topics", response_class=HTMLResponse)
     def ui_topics(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:
-        sess = _session(manthana_admin)
-        if sess is None:
-            return RedirectResponse(url="/ui/login", status_code=303)
+        sess = _founder_session(manthana_admin)
+        if isinstance(sess, Response):
+            return sess
         org_id = _scope_org(sess, org_id)
         tops, cov = team_topics(store, config, org_id, named=_privacy_open(org_id))
         rows = "".join(
@@ -526,9 +651,9 @@ def mount_ui(
         long enough that the gateway returned 504 before the founder saw anything.
         It now returns immediately; the run reports itself on /ui/mine-status.
         """
-        sess = _session(manthana_admin)
-        if sess is None:
-            return RedirectResponse(url="/ui/login", status_code=303)
+        sess = _founder_session(manthana_admin)
+        if isinstance(sess, Response):
+            return sess
         org_id = _scope_org(sess, org_id)
         # Pre-check the budget so an exhausted org still gets its 429 on THIS click
         # rather than a silent no-op in the background.
@@ -551,9 +676,9 @@ def mount_ui(
 
     @app.get("/ui/mine-status", response_class=HTMLResponse)
     def ui_mine_status(org_id: str, manthana_admin: Annotated[str, Cookie()] = "") -> Response:
-        sess = _session(manthana_admin)
-        if sess is None:
-            return RedirectResponse(url="/ui/login", status_code=303)
+        sess = _founder_session(manthana_admin)
+        if isinstance(sess, Response):
+            return sess
         org_id = _scope_org(sess, org_id)
         run = mine_runs.get(org_id)
         if run is None:
@@ -598,4 +723,4 @@ def mount_ui(
         return HTMLResponse(_page("Mining", body))
 
 
-__all__ = ["mount_ui", "COOKIE"]
+__all__ = ["mount_ui", "COOKIE", "session_for", "scope_org"]

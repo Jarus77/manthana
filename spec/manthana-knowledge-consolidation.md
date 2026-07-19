@@ -1,6 +1,13 @@
 # Knowledge Consolidation Layer — Design Hypothesis (v0, exploration)
 
-Status: **exploration / hypothesis** — not locked. Written 2026-07-16 to frame the next core-engine phase: the consolidated, self-evolving knowledge base (per-engineer + org-level) built on top of session compactions.
+Status: **partially implemented server-side** (updated 2026-07-20). Written 2026-07-16 as exploration; the org half is now built and locked — see **`spec/manthana-org-wiki.md`**, which wins on any conflict. This document remains the rationale for *why* the unit is a typed note rather than a triple-store graph.
+
+What shipped, and what changed on contact with the product decision:
+
+- **Built**: the `KnowledgeNote` unit (§2), the consolidation operator's retrieve → adjudicate → deterministic-apply loop (§3), org-side storage/retrieval, and renders (wiki pages + notes-first Q&A).
+- **Reversed — per-note k-anonymity (§4).** Written for the de-identified contract; the target segment is a consented ~10-person startup where the founder's flagship question is person-shaped, so the wiki layer applies **no** k-anon and Person pages are first-class. The k-anon pipeline in `founder.py` is untouched legacy. Promotion thresholds relaxed accordingly (≥3 evidence sessions or ≥2 actors, not ≥4 contributors).
+- **Added — the human-authority law.** Not in the original design: a `source="human"` note can be disputed by evidence but never superseded by the consolidator. This is what makes teaching stick, and it is enforced in the apply function, not the prompt.
+- **Not built (deferred, not rejected)**: the reflection/"sleep" pass, staleness via git entity anchors, `links` population + graph expansion, FAQ/demand mining, the replay-eval bake-off (§5), and the entire personal/agent-side note store — the personal wiki is zero-LLM projections only, preserving the no-LLM-on-laptop invariant.
 
 ## 1. Where the pipeline stops today
 

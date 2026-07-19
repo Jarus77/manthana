@@ -47,4 +47,30 @@ def ensure_vectors(
     return store.get_vectors(org_id, [c.id for c in candidates], dim=embedder.dim)
 
 
-__all__ = ["ensure_vectors"]
+def note_text_of(note: Any) -> str:
+    """The one text every note-embedding caller keys on (title + body)."""
+    return f"{note.title} {note.body}".strip()
+
+
+def ensure_note_vectors(
+    store: ServerStore, org_id: str, notes: list[Any], embedder: Embedder
+) -> dict[str, Vector]:
+    """``ensure_vectors`` for KnowledgeNotes — same cache-by-``(dim, text_hash)``
+    contract, own table. Consolidation retrieval and founder Q&A share this one
+    cache; a note re-embeds only when its title/body actually change (e.g. a new
+    version)."""
+    have = store.note_vector_meta(org_id)
+    todo: list[tuple[str, str, str]] = []
+    for n in notes:
+        txt = note_text_of(n)
+        h = text_hash(txt)
+        if have.get(n.id) != (embedder.dim, h):
+            todo.append((n.id, txt, h))
+    if todo:
+        vecs = embedder.embed([t for _, t, _ in todo])
+        for (nid, _txt, h), v in zip(todo, vecs, strict=True):
+            store.upsert_note_vector(org_id, nid, dim=embedder.dim, text_hash=h, vec=v)
+    return store.get_note_vectors(org_id, [n.id for n in notes], dim=embedder.dim)
+
+
+__all__ = ["ensure_vectors", "ensure_note_vectors", "note_text_of"]

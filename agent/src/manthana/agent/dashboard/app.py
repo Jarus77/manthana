@@ -1,9 +1,16 @@
-"""Local dashboard (FastAPI + HTMX) — the employee control plane.
+"""Local dashboard (FastAPI + HTMX) — the engineer's personal wiki + control plane.
 
-Read AND act, all from the browser (no terminal needed): view sessions,
-compactions, and mined skills, and run capture / compact / release / mine / sync
-from buttons. Server-rendered HTML + htmx, no build step. Localhost, single
-employee, no auth (the employee owns their own store).
+Two jobs in one localhost app:
+
+  * **The personal wiki** — the engineer's own Wikipedia of their work. Home is
+    their projects; a project opens to its sessions rendered as full compaction
+    cards (the digest itself, not a re-summarization of it), with local semantic
+    search across everything. This is **zero-LLM**: it reads what is already in
+    the store and ranks with the cached embeddings, so it costs nothing to
+    browse, works offline, and — unlike the org wiki — sees *everything*,
+    including personal-mode and unreleased sessions that never leave the laptop.
+  * **The control plane** — capture / compact / release / hold / mine / sync from
+    buttons, so nothing here needs the terminal.
 
 Actions use redirect-after-POST (303); tunables ride in the URL query string so
 no python-multipart dependency is needed. The Work/Personal toggle stays htmx.
@@ -28,7 +35,9 @@ from manthana.agent.cost import estimate_cost
 from manthana.agent.llm import LLMProvider
 from manthana.agent.skillminer import mine_personal, write_proposal
 from manthana.agent.store import Store
+from manthana.agent.sync import session_is_syncable
 from manthana.schemas import ActionOutcome, BaseCompaction, Mode, Session
+from manthana.skills.projections import ProjectRollup, SessionCard, project_rollups, session_cards
 
 _log = logging.getLogger(__name__)
 
@@ -64,7 +73,8 @@ def _page(title: str, body: str, *, refresh: int = 0) -> str:
         f"<!doctype html><html><head><meta charset='utf-8'><title>Manthana — {_e(title)}</title>"
         f"{refresh_tag}{_HTMX}{_STYLE}</head><body>"
         "<h1>Manthana</h1>"
-        "<nav><a href='/'>Sessions</a><a href='/ask'>Ask</a>"
+        "<nav><a href='/'>My projects</a><a href='/search'>Search</a>"
+        "<a href='/sessions'>Sessions</a><a href='/ask'>Ask</a>"
         "<a href='/topics'>Topics</a>"
         "<a href='/compactions'>Compactions</a><a href='/skills'>Skills</a>"
         "<a href='/optimize'>Optimize</a><a href='/cost'>Cost</a>"
@@ -144,6 +154,65 @@ def _compaction_row(
     )
 
 
+# ── personal wiki rendering (zero-LLM projections) ───────────────────────
+def _project_row(rollup: ProjectRollup) -> str:
+    outcomes = " · ".join(f"{_e(k)} {v}" for k, v in sorted(rollup.outcome_mix.items()))
+    cost = f"${rollup.est_cost_usd:,.2f}" if rollup.est_cost_usd else "—"
+    return (
+        f"<tr><td><a href='/project/{_e(rollup.project)}'>{_e(rollup.project)}</a></td>"
+        f"<td>{rollup.sessions}</td><td>{_e(outcomes) or '—'}</td>"
+        f"<td>{rollup.total_tokens:,}</td><td>{cost}</td>"
+        f"<td class='muted'>{_e(str(rollup.last_active)[:16])}</td>"
+        f"<td>{_e(rollup.top_intent[:70])}</td></tr>"
+    )
+
+
+def _privacy_badges(card: SessionCard, session: Session | None) -> str:
+    """What would and would not leave this laptop.
+
+    Computed with the SHIPPED sync gate (``session_is_syncable``) rather than a
+    reimplementation of it, so this badge can never disagree with what actually
+    syncs. An unknown session fails closed, matching ``eligible_for_sync``.
+    """
+    if session is None or not session_is_syncable(session):
+        return "<span class='badge personal'>personal · stays local</span>"
+    if card.released:
+        return "<span class='badge rel'>released to org</span>"
+    if card.hold:
+        return "<span class='badge unrel'>held · stays local</span>"
+    return "<span class='badge unrel'>local · pending release</span>"
+
+
+def _session_card(card: SessionCard, session: Session | None) -> str:
+    """A full compaction, rendered. Deliberately shows the digest's own fields
+    verbatim — the engineer reads what was recorded, not a summary of a summary."""
+    friction = "".join(f"<li>{_e(f)}</li>" for f in card.friction)
+    files = "".join(f"<li>{_e(f)}</li>" for f in card.files_touched[:25])
+    artifacts = "".join(f"<li>{_e(a)}</li>" for a in card.artifacts[:25])
+    cost = f"${card.est_cost_usd:.4f}" if card.est_cost_usd is not None else "—"
+    tokens = f"{card.total_tokens:,}" if card.total_tokens else "—"
+    extras = ""
+    if card.prs_opened:
+        extras += f"<p><b>PRs</b> {_e(', '.join(card.prs_opened))}</p>"
+    if card.tests_added:
+        extras += f"<p><b>Tests added</b> {_e(', '.join(card.tests_added))}</p>"
+    return (
+        "<div class='bar'>"
+        f"<div>{_privacy_badges(card, session)} "
+        f"<span class='muted'>{_e(str(card.started_at)[:16])} · {_e(card.surface)} · "
+        f"outcome <b>{_e(card.outcome)}</b> · {tokens} tokens · {cost}</span></div>"
+        f"<h3>{_e(card.task_intent)}</h3>"
+        f"<p><b>Approach</b><br>{_e(card.approach) or '<span class=muted>—</span>'}</p>"
+        + (f"<p><b>Friction</b></p><ul>{friction}</ul>" if friction else "")
+        + (f"<p><b>Files touched</b></p><ul>{files}</ul>" if files else "")
+        + (f"<p><b>Artifacts</b></p><ul>{artifacts}</ul>" if artifacts else "")
+        + extras
+        + f"<p class='muted'>session {_e(card.session_id)} · digest {_e(card.source)} · "
+        f"<a href='/drill/{_e(card.id)}'>raw turns →</a></p>"
+        "</div>"
+    )
+
+
 def _read_skill(skill_dir: Path) -> str:
     md = (skill_dir / "SKILL.md").read_text()
     name, description, _body = _parse_skill_md(md)
@@ -207,9 +276,93 @@ def create_app(
             with compacting_lock:
                 compacting.discard(session_id)
 
-    # ── Sessions ─────────────────────────────────────────────────────────
+    def _sessions_by_id() -> dict[str, Session]:
+        return {s.id: s for s in store.list_sessions(limit=100_000)}
+
+    # ── My projects (personal wiki home) ─────────────────────────────────
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
+        """Home is the engineer's own projects — how they actually think about
+        their work ("what was I doing on X?"), not a flat session log."""
+        comps = store.list_compactions(limit=100_000)
+        rows = "".join(_project_row(r) for r in project_rollups(comps))
+        bar = (
+            "<div class='bar'><form method='post' action='/capture'>"
+            "<button>⤓ Capture transcripts</button></form> "
+            "<small>ingest your ~/.claude sessions into the local store</small> · "
+            "<a href='/sessions'>session list &amp; controls →</a></div>"
+        )
+        search = (
+            "<div class='bar'><form method='get' action='/search'>"
+            "<input name='q' size='50' placeholder='search your work — e.g. retry backoff'> "
+            "<button>Search</button></form>"
+            "<small>semantic search over your own compactions · no model call</small></div>"
+        )
+        table = (
+            "<table><tr><th>project</th><th>sessions</th><th>outcomes</th><th>tokens</th>"
+            "<th>API-list $</th><th>last active</th><th>most recent work</th></tr>"
+            f"{rows or '<tr><td colspan=7>no compactions yet — capture, then compact</td></tr>'}"
+            "</table>"
+            "<p><small>Everything you have captured is here, including personal-mode and "
+            "unreleased work that never leaves this laptop.</small></p>"
+        )
+        return _page("My projects", bar + search + table)
+
+    @app.get("/project/{project}", response_class=HTMLResponse)
+    def project_page(project: str) -> str:
+        """One project's sessions as full compaction cards, newest first."""
+        comps = store.list_compactions(project=project, limit=500)
+        sessions = _sessions_by_id()
+        cards = "".join(_session_card(c, sessions.get(c.session_id)) for c in session_cards(comps))
+        rollups = project_rollups(comps)
+        head = ""
+        if rollups:
+            r = rollups[0]
+            outcomes = " · ".join(f"{_e(k)} {v}" for k, v in sorted(r.outcome_mix.items()))
+            head = (
+                f"<div class='bar'>{r.sessions} session(s) · {outcomes} · "
+                f"{r.total_tokens:,} tokens · ~${r.est_cost_usd:,.2f} API-list-equiv · "
+                f"last active {_e(str(r.last_active)[:16])}</div>"
+            )
+        body = (
+            f"<h2>{_e(project)}</h2>{head}"
+            f"{cards or '<p>no compactions for this project yet</p>'}"
+            "<p><a href='/'>← my projects</a></p>"
+        )
+        return _page(f"Project — {project}", body)
+
+    @app.get("/search", response_class=HTMLResponse)
+    def search_page(q: str = "") -> str:
+        """Rank-only semantic search: embeds the query against the cached
+        compaction vectors and shows the matches. No narrative, so **no model
+        call** — searching your own history is free and works offline. Without
+        the embeddings extra this degrades to recency order rather than failing."""
+        from manthana.agent.insights import _index_and_rank
+        from manthana.skills.embed import default_embedder
+
+        form = (
+            "<div class='bar'><form method='get' action='/search'>"
+            f"<input name='q' size='50' value='{_e(q)}' "
+            "placeholder='search your work — e.g. retry backoff'> "
+            "<button>Search</button></form>"
+            "<small>semantic search over your own compactions · no model call</small></div>"
+        )
+        if not q:
+            return _page("Search", form)
+        comps = store.list_compactions(limit=100_000)
+        top, coverage = _index_and_rank(store, q, comps, default_embedder(), 25)
+        sessions = _sessions_by_id()
+        cards = "".join(_session_card(c, sessions.get(c.session_id)) for c in session_cards(top))
+        note = (
+            f"<p class='muted'>{_e(coverage.note())}</p>"
+            if coverage.truncated
+            else f"<p class='muted'>ranked all {coverage.matched} compaction(s)</p>"
+        )
+        return _page("Search", form + note + (cards or "<p>no matches</p>"))
+
+    # ── Sessions (raw list + capture/compact/mode controls) ──────────────
+    @app.get("/sessions", response_class=HTMLResponse)
+    def sessions_page() -> str:
         compacted = {c.session_id for c in store.list_compactions(limit=100_000)}
         with compacting_lock:
             in_progress = set(compacting)
@@ -342,7 +495,7 @@ def create_app(
     @app.post("/capture")
     def capture() -> RedirectResponse:
         ingest_all(store)
-        return RedirectResponse(url="/", status_code=303)
+        return RedirectResponse(url="/sessions", status_code=303)
 
     @app.post("/session/{session_id}/mode/{value}", response_class=HTMLResponse)
     def toggle_mode(session_id: str, value: str) -> str:
@@ -372,7 +525,7 @@ def create_app(
             threading.Thread(
                 target=_run_compaction, args=(session_id,), daemon=True
             ).start()
-        return RedirectResponse(url="/", status_code=303)
+        return RedirectResponse(url="/sessions", status_code=303)
 
     # ── Compactions (review-before-sync inbox) ───────────────────────────
     @app.get("/compactions", response_class=HTMLResponse)

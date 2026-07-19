@@ -92,9 +92,10 @@ def _build(tmp_path: Path) -> tuple[TestClient, Store]:
 
 
 # ── pages render ──────────────────────────────────────────────────────────
-def test_index_lists_sessions_with_capture_and_compact(tmp_path: Path) -> None:
+def test_sessions_page_lists_sessions_with_capture_and_compact(tmp_path: Path) -> None:
+    # The session list + its controls live at /sessions; / is the projects wiki.
     client, _store = _build(tmp_path)
-    body = client.get("/").text
+    body = client.get("/sessions").text
     assert "s1" in body and "demo" in body
     assert "Capture transcripts" in body  # action button present
     assert "compact" in body  # per-session compact button
@@ -152,10 +153,10 @@ def test_compact_shows_in_progress_then_completes(
     monkeypatch.setattr(dash_app, "compact_session", slow)
     client.post("/session/s1/compact", follow_redirects=False)
     # While the worker is gated, the Sessions page shows the in-progress state.
-    assert _wait_for(lambda: "compacting" in client.get("/").text)
+    assert _wait_for(lambda: "compacting" in client.get("/sessions").text)
     gate.set()
     assert _wait_for(lambda: store.get_compaction("comp-s1") is not None)
-    assert "✓ compacted" in client.get("/").text
+    assert "✓ compacted" in client.get("/sessions").text
 
 
 def test_failed_compaction_logs_and_cleans_up(
@@ -171,10 +172,10 @@ def test_failed_compaction_logs_and_cleans_up(
     monkeypatch.setattr(dash_app, "compact_session", boom)
     with caplog.at_level(logging.ERROR):
         client.post("/session/s1/compact", follow_redirects=False)
-        assert _wait_for(lambda: "compacting" not in client.get("/").text)
+        assert _wait_for(lambda: "compacting" not in client.get("/sessions").text)
     assert any("background compaction failed" in r.getMessage() for r in caplog.records)
     assert store.get_compaction("comp-s1") is None  # nothing written on failure
-    assert "compact" in client.get("/").text  # in-progress set cleaned up → button back
+    assert "compact" in client.get("/sessions").text  # in-progress set cleaned up → button back
 
 
 def test_double_compact_does_not_double_spawn(
