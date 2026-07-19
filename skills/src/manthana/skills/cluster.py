@@ -38,7 +38,7 @@ def _as_matrix(embeddings: list[Vector]) -> Any | None:
     the correctness reference and the two must agree.
     """
     try:
-        import numpy as np
+        import numpy as np  # type: ignore[import-not-found]
     except ImportError:  # pragma: no cover - numpy present in the dev env
         return None
     if not embeddings:
@@ -59,7 +59,7 @@ def _neighbor_sets(embeddings: list[Vector], threshold: float) -> list[set[int]]
     nbrs: list[set[int]] = [{i} for i in range(n)]
     matrix = _as_matrix(embeddings)
     if matrix is not None:
-        import numpy as np
+        import numpy as np  # type: ignore[import-not-found]
 
         for start in range(0, n, _BLOCK):
             block = matrix[start : start + _BLOCK] @ matrix.T
@@ -100,7 +100,7 @@ def _cohesion(embeddings: list[Vector], indices: list[int]) -> float:
         return 1.0
     matrix = _as_matrix([embeddings[i] for i in indices])
     if matrix is not None:
-        import numpy as np
+        import numpy as np  # type: ignore[import-not-found]
 
         sims = matrix @ matrix.T
         k = len(indices)
