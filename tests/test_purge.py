@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import typer
+import typer.main
 from fastapi.testclient import TestClient
 from manthana.schemas import EngineeringCompaction, Outcome, Surface
 from manthana.server import ServerConfig, ServerStore, create_app
@@ -28,15 +30,13 @@ from manthana.server.storage import InMemoryObjectStore
 _WIDE = {"COLUMNS": "200"}
 
 
-def _param_opts(typer_app: object, command: str) -> set[str]:
+def _param_opts(typer_app: typer.Typer, command: str) -> set[str]:
     """Every option string a CLI command declares (e.g. "--confirm").
 
     Read off the Click command that Typer builds, so the assertion tests the real
     parameter contract instead of whatever rich decided to render at the current
     terminal width and tty-ness.
     """
-    import typer.main
-
     group = typer.main.get_command(typer_app)
     cmd = group.commands[command]  # type: ignore[attr-defined]
     return {opt for param in cmd.params for opt in param.opts}
