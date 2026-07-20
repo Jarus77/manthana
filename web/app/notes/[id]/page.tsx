@@ -101,6 +101,29 @@ export default function NoteArticle({ params }: { params: Promise<{ id: string }
               )}
             </Section>
 
+            {(note.entities.libraries.length > 0 || note.entities.concepts.length > 0) && (
+              <Section title="Referenced">
+                <p className="subtle">
+                  Libraries and concepts named by this entry. Each links to everything else the
+                  wiki knows about it.
+                </p>
+                <ul>
+                  {note.entities.libraries.map((v) => (
+                    <li key={`lib-${v}`}>
+                      <Link href={`/entities/library/${encodeURIComponent(v)}`}>{v}</Link>{' '}
+                      <span className="faint">(library)</span>
+                    </li>
+                  ))}
+                  {note.entities.concepts.map((v) => (
+                    <li key={`con-${v}`}>
+                      <Link href={`/entities/concept/${encodeURIComponent(v)}`}>{v}</Link>{' '}
+                      <span className="faint">(concept)</span>
+                    </li>
+                  ))}
+                </ul>
+              </Section>
+            )}
+
             {data.related?.length > 0 && (
               <Section title="Related entries">
                 <p className="subtle">

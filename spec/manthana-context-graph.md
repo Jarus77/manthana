@@ -1,7 +1,7 @@
 # Manthana Context Graph — design
 
-Status: **phase 1 implemented**, 2026-07-20 (§4). Phases 2-3 and
-clustering (§5) remain proposed.
+Status: **phases 1-3 implemented**, 2026-07-20 (§4). Clustering (§5) and
+topic-derived descriptions (§6) remain proposed.
 
 ## 1. The finding that motivates this
 
@@ -101,13 +101,14 @@ persist `unrelated` as a negative edge so later passes can skip re-asking.
 This is a pure win: the data is already in memory at
 `consolidate.py:359-377`, correctly typed, already paid for.
 
-**Phase 2 — promote entities.** Write `mentions` edges from notes to their
+**Phase 2 — promote entities. SHIPPED.** Writes `mentions` edges from notes to their
 `entities.files/libraries/concepts`. Gives `libraries` and `concepts` a first
 reader and makes "what touches this file" a lookup rather than a scan.
 
-**Phase 3 — persist the co-occurrence edges** `graph.py` recomputes per render
-(`co_actor`, `co_project`), keeping the same weights so behaviour is unchanged
-and only the cost moves.
+**Phase 3 — persist the co-occurrence edges. SHIPPED.** Refreshed once per
+consolidation pass by calling `related_people`/`project_neighbors` themselves, so
+there is one definition of "works with" and the stored graph cannot drift from
+the rendered page. Recorded once per pair, since `edges_for` matches either end.
 
 ## 5. Clustering
 

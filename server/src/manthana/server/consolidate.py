@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from manthana.schemas import (
@@ -47,6 +47,7 @@ from manthana.skills.embed import Embedder, default_embedder
 from manthana.skills.retrieval import rank_scored
 
 from .enrich.coerce import extract_json, str_list
+from .graph import cooccurrence_edges, entity_edges
 from .metering import MeteredProvider, QuotaExceededError
 from .vectors import ensure_note_vectors
 
@@ -62,6 +63,9 @@ _log = logging.getLogger(__name__)
 # Cosine floor for semantic candidates — below this a note is only ever pulled in
 # by entity overlap. Total candidates per adjudication are capped regardless.
 _MIN_COSINE = 0.25
+#: Window for the persisted co-occurrence graph. Matches the wiki's own
+#: connection window so the stored edges and the rendered "works with" agree.
+_GRAPH_WINDOW_DAYS = 45
 _MAX_CANDIDATES = 12
 _MAX_NEW_NOTES = 3
 
@@ -211,6 +215,10 @@ class ApplyPlan:
     supported: int = 0
     disputed: int = 0
     refined: int = 0
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(UTC).isoformat()
 
 
 def _edge(
@@ -494,6 +502,11 @@ def consolidate_org(
             store.upsert_note(note)
         for old_id, new_version in plan.supersedes:
             store.supersede_note(old_id, new_version, org_id)
+        # Phase 2: every note this pass touched gets `mentions` edges to the
+        # files/libraries/concepts it names — the first reader those entity
+        # lists have ever had.
+        for note in [*plan.upserts, *(nv for _old, nv in plan.supersedes)]:
+            plan.edges.extend(entity_edges(note))
         store.add_edges(org_id, plan.edges)
         store.mark_consolidated(org_id, compaction.id)
         stats.consolidated += 1
@@ -501,6 +514,22 @@ def consolidate_org(
         stats.supported += plan.supported
         stats.disputed += plan.disputed
         stats.refined += plan.refined
+
+    # Phase 3: refresh the persisted co-occurrence graph once per pass, not per
+    # digest — it is a whole-org computation and re-running it inside the loop
+    # would be quadratic for no gain. Built by calling the SAME functions the
+    # pages render from, so the stored graph cannot drift from what a reader
+    # sees. Best-effort: a graph refresh must never fail a consolidation pass
+    # that has already written real notes.
+    if stats.consolidated:
+        try:
+            base = now or datetime.now(UTC)
+            since = _iso(base - timedelta(days=_GRAPH_WINDOW_DAYS))
+            comps = store.query_compactions(org_id=org_id, since=since)
+            live = store.query_notes(org_id, exclude_superseded=True)
+            store.add_edges(org_id, cooccurrence_edges(comps, live))
+        except Exception:  # noqa: BLE001 - never fail the pass on a graph refresh
+            _log.exception("consolidate: co-occurrence graph refresh failed for %s", org_id)
 
     return stats
 

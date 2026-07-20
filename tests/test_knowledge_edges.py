@@ -161,3 +161,85 @@ def test_edges_are_org_scoped() -> None:
     store = _store(_note("kn-1", "BIRD accuracy"))
     _run(store, [{"note_id": "kn-1", "relation": "supports"}])
     assert store.edges_for("other-org", "kn-1") == []
+
+
+# ── phase 2: entity nodes ────────────────────────────────────────────────
+def test_consolidated_notes_link_to_their_entities() -> None:
+    """`entities.libraries` and `.concepts` have been extracted on every note
+    since v1 and read by NOTHING. These edges are their first consumer."""
+    from manthana.server.graph import entity_node_id
+
+    store = _store()
+    payload = json.dumps(
+        {
+            "verdicts": [],
+            "new_notes": [
+                {
+                    "kind": "gotcha",
+                    "title": "torch 2.5 breaks the harness",
+                    "body": "Pin 2.4 until the eval harness is fixed.",
+                    "files": ["src/bench.py"],
+                    "libraries": ["torch"],
+                    "concepts": ["dependency pinning"],
+                }
+            ],
+        }
+    )
+    consolidate_org(
+        store,
+        ScriptedProvider([payload]),
+        ServerConfig(jwt_secret="x" * 40, admin_token="adm"),
+        org_id="o1", limit=10, embedder=HashingEmbedder(), now=_NOW,
+    )
+    for kind, name in (("library", "torch"), ("concept", "dependency pinning")):
+        node = entity_node_id(kind, name)
+        assert store.edges_for("o1", node, relations=["mentions"]), f"{kind}:{name} unlinked"
+
+
+def test_entity_ids_are_case_insensitive() -> None:
+    """`Torch` and `torch` must be one node, not two that never meet."""
+    from manthana.server.graph import entity_node_id
+
+    assert entity_node_id("library", "Torch") == entity_node_id("library", " torch ")
+
+
+def test_human_notes_also_get_entity_edges() -> None:
+    from manthana.server.graph import entity_node_id
+    from manthana.server.teach import create
+
+    store = _store()
+    create(
+        store, "o1", kind=NoteKind.convention, title="Always pin torch",
+        body="Pin the version.", author="a@x.com", project="bench",
+    )
+    assert store.edges_for("o1", entity_node_id("project", "bench"), relations=["mentions"])
+
+
+# ── phase 3: persisted co-occurrence ─────────────────────────────────────
+def test_cooccurrence_edges_match_what_the_pages_render() -> None:
+    """Built by calling the SAME functions the pages use, so the stored graph
+    cannot drift from what a reader sees."""
+    from manthana.server.graph import cooccurrence_edges, related_people
+
+    comps = [_comp("c1"), _comp("c2")]
+    comps[1].actor = "b@x.com"
+    edges = cooccurrence_edges(comps, [])
+    assert any(e["relation"] == "co_actor" for e in edges)
+    rendered = related_people(comps, [], "a@x.com")
+    stored = [e for e in edges if e["relation"] == "co_actor"][0]
+    assert stored["weight"] == float(rendered[0].weight)
+
+
+def test_cooccurrence_edges_are_recorded_once_per_pair() -> None:
+    # (a, b) and (b, a) are the same relationship, and edges_for matches either
+    # end — storing both would double-count every collaboration.
+    from manthana.server.graph import cooccurrence_edges
+
+    comps = [_comp("c1"), _comp("c2")]
+    comps[1].actor = "b@x.com"
+    pairs = [
+        frozenset((e["src_id"], e["dst_id"]))
+        for e in cooccurrence_edges(comps, [])
+        if e["relation"] == "co_actor"
+    ]
+    assert len(pairs) == len(set(pairs))

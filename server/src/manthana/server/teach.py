@@ -35,6 +35,8 @@ from manthana.schemas import (
     NoteStatus,
 )
 
+from .graph import entity_edges
+
 if TYPE_CHECKING:
     from .store import ServerStore
 
@@ -102,6 +104,7 @@ def edit(
         }
     )
     store.supersede_note(old.id, new, org_id)
+    store.add_edges(org_id, entity_edges(new))
     return new
 
 
@@ -139,6 +142,7 @@ def create(
         last_confirmed_at=now,
     )
     store.upsert_note(note)
+    store.add_edges(org_id, entity_edges(note))
     return note
 
 
@@ -217,6 +221,7 @@ def revert(
         }
     )
     store.supersede_note(current.id, new, org_id)
+    store.add_edges(org_id, entity_edges(new))
     return new
 
 

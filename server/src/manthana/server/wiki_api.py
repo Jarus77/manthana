@@ -55,7 +55,7 @@ from pydantic import BaseModel, Field
 
 from .ask import ask
 from .config import ServerConfig
-from .graph import project_neighbors, related_people, session_related
+from .graph import entity_node_id, project_neighbors, related_people, session_related
 from .llm import LLMProvider
 from .metering import QuotaExceededError
 from .pages import (
@@ -390,6 +390,34 @@ def mount_wiki_api(
             "disputes": _jsonable(links.disputes),
             "same_actor": _jsonable(session_cards(links.same_actor)),
             "same_project": _jsonable(session_cards(links.same_project)),
+            "org_id": org_id,
+        }
+
+    @app.get(f"{API}/entities/{{kind}}/{{name}}")
+    def wiki_entity(
+        kind: str, name: str, org_id: str = "", manthana_admin: Annotated[str, Cookie()] = ""
+    ) -> dict[str, Any]:
+        """Everything the wiki knows about one file, library or concept.
+
+        Reads the `mentions` edges written when a note is consolidated or
+        taught. Before these existed, `entities.libraries` and
+        `entities.concepts` were extracted by the model on every note and read by
+        nothing at all — this endpoint is their first consumer.
+        """
+        sess = _session(manthana_admin)
+        org_id = _org(sess, org_id)
+        if kind not in ("file", "library", "concept", "project"):
+            raise ApiError(422, f"unknown entity kind: {kind}")
+        node = entity_node_id(kind, name)
+        notes = []
+        for e in store.edges_for(org_id, node, relations=["mentions"]):
+            note = store.get_note(e.src_id if e.src_type == "note" else e.dst_id, org_id)
+            if note is not None:
+                notes.append(note)
+        return {
+            "kind": kind,
+            "name": name,
+            "notes": _jsonable(notes),
             "org_id": org_id,
         }
 

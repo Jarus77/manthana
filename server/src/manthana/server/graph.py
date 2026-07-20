@@ -247,6 +247,94 @@ def session_related(
     )
 
 
+# ── persisted edge builders (context-graph phases 2 and 3) ───────────────
+#
+# These EMIT edge records for `store.add_edges`; they do not write. Keeping them
+# beside the read-time functions is deliberate — the persisted co-occurrence
+# edges are produced by calling `related_people`/`project_neighbors` themselves,
+# so there is exactly one definition of what "works with" means and no chance of
+# the stored graph and the rendered page disagreeing.
+
+
+def entity_node_id(kind: str, name: str) -> str:
+    """Stable id for an entity node, e.g. ``file:src/core.py``.
+
+    Entities are not rows anywhere — they live inside a note's JSON — so the id
+    IS the identity. Normalising case here means `Torch` and `torch` are one
+    node rather than two that never meet.
+    """
+    return f"{kind}:{name.strip().lower()}"
+
+
+def entity_edges(note: Any) -> list[dict[str, Any]]:
+    """`mentions` edges from a note to the files, libraries, concepts and
+    projects it names.
+
+    This gives ``entities.libraries`` and ``entities.concepts`` their first
+    reader in the system: the consolidator has been extracting them since v1 and
+    nothing has ever looked at them.
+    """
+    ents = note.entities
+    pairs = [
+        *(("file", v) for v in ents.files),
+        *(("library", v) for v in ents.libraries),
+        *(("concept", v) for v in ents.concepts),
+        *(("project", v) for v in ents.projects),
+    ]
+    return [
+        {
+            "src_type": "note",
+            "src_id": note.id,
+            "relation": "mentions",
+            "dst_type": "entity",
+            "dst_id": entity_node_id(kind, name),
+            "weight": 1.0,
+            "evidence_id": note.id,
+        }
+        for kind, name in pairs
+        if name and name.strip()
+    ]
+
+
+def cooccurrence_edges(compactions: list[Any], notes: list[Any]) -> list[dict[str, Any]]:
+    """Persisted `co_actor` / `co_project` edges.
+
+    Computed by calling the very functions the pages render from, so the stored
+    graph cannot drift from what a reader sees. Weight carries the same score,
+    and `via` evidence is flattened into `evidence_id` so a stored edge remains
+    checkable — an edge nobody can check is a claim the wiki cannot defend.
+    """
+    out: list[dict[str, Any]] = []
+    actors = sorted({c.actor for c in compactions if c.actor})
+    for actor in actors:
+        for edge in related_people(compactions, notes, actor):
+            # One direction only: (a, b) and (b, a) are the same relationship,
+            # and `edges_for` matches either end anyway.
+            if actor < edge.actor:
+                out.append(
+                    {
+                        "src_type": "person", "src_id": actor,
+                        "relation": "co_actor",
+                        "dst_type": "person", "dst_id": edge.actor,
+                        "weight": float(edge.weight),
+                        "evidence_id": ",".join(edge.via_projects[:3]),
+                    }
+                )
+    for project in sorted({c.project for c in compactions if c.project}):
+        for edge in project_neighbors(compactions, project):
+            if project < edge.project:
+                out.append(
+                    {
+                        "src_type": "project", "src_id": project,
+                        "relation": "co_project",
+                        "dst_type": "project", "dst_id": edge.project,
+                        "weight": float(edge.weight),
+                        "evidence_id": ",".join(edge.via_actors[:3]),
+                    }
+                )
+    return out
+
+
 __all__ = [
     "NoteRef",
     "PersonEdge",
@@ -256,6 +344,9 @@ __all__ = [
     "WEIGHT_FILE",
     "WEIGHT_NOTE",
     "WEIGHT_PROJECT",
+    "cooccurrence_edges",
+    "entity_edges",
+    "entity_node_id",
     "project_neighbors",
     "related_people",
     "session_related",
