@@ -65,14 +65,31 @@ NOTES_SUFFICIENT = 3
 #: Session drill is deliberately smaller than the legacy path's 40 — notes carry
 #: most of the load, and a shorter prompt is a cheaper, sharper answer.
 DRILL_K = 20
-#: Window for the live activity rollup that answers freshness questions.
+#: Window for the live activity rollup, now always consulted.
 ACTIVITY_DAYS = 14
+#: Sessions pulled in per explicitly-named person, on top of the semantic drill.
+PER_ACTOR_DRILL = 8
 
-_FRESHNESS_RE = re.compile(
-    r"\b(now|today|currently|current|this week|right now|lately|recently|"
-    r"working on|up to|these days|at the moment)\b",
-    re.IGNORECASE,
-)
+
+def _named_actors(store: ServerStore, org_id: str, query: str) -> list[str]:
+    """Known actors whose name appears in the query, by local-part or full id.
+
+    This is what makes a question ABOUT PEOPLE reach data about people. The
+    filter parser can only carry ONE actor, so it deliberately drops the filter
+    when a question names two — which is exactly the "how do A and B compare"
+    shape a founder asks most. Matching here is independent of that filter: it
+    does not narrow the query, it only proves people were mentioned, so the
+    answer can consult live activity and sessions instead of notes alone.
+    """
+    lowered = query.lower()
+    hits = []
+    for row in store.list_actors(org_id):
+        local = row.id.split("@")[0].lower()
+        # Word-boundary match so "sam" does not fire on "sample".
+        if re.search(rf"\b{re.escape(local)}\b", lowered) or row.id.lower() in lowered:
+            hits.append(row.id)
+    return hits
+
 
 _PROMPT = (
     "Answer the founder's QUESTION in 2-5 sentences using ONLY the data below.\n"
@@ -85,6 +102,11 @@ _PROMPT = (
     "DISPUTED has conflicting evidence — say so rather than stating it as fact.\n"
     "CURRENT ACTIVITY is live from recent sessions and is the authority on what "
     "people are working on right now.\n"
+    "Never claim a person, project or topic is ABSENT from the wiki, or that "
+    "there is 'no data' on it. You are shown a RETRIEVED SUBSET, not the whole "
+    "wiki, so absence here is not evidence of absence. If the data below does "
+    "not answer the question, say only that what you were given does not cover "
+    "it, and name what you did find.\n"
     "({coverage}.)\n"
     "QUESTION: {query}\n"
     "NOTES:\n{notes}\n"
@@ -114,11 +136,6 @@ class AskResult:
         if self.drilled:
             parts.append(f"{self.sessions_used} session(s)")
         return " and ".join(parts)
-
-
-def _is_freshness_question(query: str, spec: FounderFilter) -> bool:
-    """Freshness questions must consult live activity, not just notes."""
-    return bool(_FRESHNESS_RE.search(query)) or spec.actor is not None
 
 
 def _rank_notes(
@@ -204,25 +221,34 @@ def ask(
         key=lambda n: (n.source != NoteSource.human and not n.confirmed_by),
     )
 
-    # ── live activity (freshness) ────────────────────────────────────────
-    activity: list[dict[str, Any]] = []
-    if _is_freshness_question(query, spec):
-        since = (now - timedelta(days=ACTIVITY_DAYS)).astimezone(UTC).isoformat()
-        recent = store.query_compactions(
-            org_id=org_id, actor=spec.actor, project=spec.project, since=since
-        )
-        activity = [
-            {
-                "engineer": a.actor,
-                "sessions": a.sessions,
-                "projects": a.projects,
-                "working_on": a.intents,
-            }
-            for a in activity_rollup(recent)
-        ]
+    # ── live activity ────────────────────────────────────────────────────
+    # ALWAYS fetched. This used to be gated on a freshness regex, which made the
+    # commonest founder question — "how do X and Y compare" — structurally blind:
+    # naming two people drops the actor filter, the phrasing matches no freshness
+    # word, so live activity was never read, and anyone whose work had not yet
+    # been consolidated into notes did not exist as far as the answer was
+    # concerned. The gate saved nothing worth having: this is one indexed query
+    # and an in-memory group-by, with no model call.
+    since = (now - timedelta(days=ACTIVITY_DAYS)).astimezone(UTC).isoformat()
+    recent = store.query_compactions(
+        org_id=org_id, actor=spec.actor, project=spec.project, since=since
+    )
+    activity = [
+        {
+            "engineer": a.actor,
+            "sessions": a.sessions,
+            "projects": a.projects,
+            "working_on": a.intents,
+        }
+        for a in activity_rollup(recent)
+    ]
 
-    # ── drill to sessions only when the notes are thin ───────────────────
-    drilled = len(relevant) < NOTES_SUFFICIENT
+    # ── drill to sessions ────────────────────────────────────────────────
+    # Thin notes still trigger a drill, but so does naming people: a question
+    # about someone is answerable from their sessions even when the wiki has a
+    # dozen well-scoring notes about unrelated things.
+    mentioned = _named_actors(store, org_id, query)
+    drilled = len(relevant) < NOTES_SUFFICIENT or bool(mentioned)
     sessions: list[Any] = []
     coverage: Coverage | None = None
     if drilled:
@@ -236,6 +262,19 @@ def ask(
             since=spec.since,
             until=spec.until,
         )
+        # Guarantee every named person is represented. Semantic ranking alone
+        # can bury one side of a comparison — the question mentions two people,
+        # so an answer that saw sessions from only one of them is worse than
+        # useless, because it reads as a finding about the other.
+        if mentioned:
+            have = {c.id for c in candidates}
+            for who in mentioned:
+                for c in store.query_compactions(
+                    org_id=org_id, actor=who, since=spec.since or since, limit=PER_ACTOR_DRILL
+                ):
+                    if c.id not in have:
+                        have.add(c.id)
+                        candidates.append(c)
         try:
             vectors = ensure_vectors(store, org_id, candidates, embedder)
             sessions, coverage = rank(query, candidates, vectors, embedder, k=DRILL_K)

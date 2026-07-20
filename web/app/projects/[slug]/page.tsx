@@ -57,14 +57,18 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
               ]}
             />
 
+            {/* The lead states facts and does NOT quote a session intent. An
+                unenriched digest's intent is the engineer's raw first prompt —
+                typos, run-ons and all — so quoting it produced leads that broke
+                off mid-word and read as gibberish. The intents are still one
+                click away under Sessions, where they are labelled as such. */}
             <p className="lead">
               <b>{data.project}</b> is a project in the {data.org_id} organisation.{' '}
               {r ? (
                 <>
                   It has seen <b>{r.sessions}</b> released session
                   {r.sessions === 1 ? '' : 's'} in the last fortnight, worked on by{' '}
-                  <PersonList actors={r.actors} />. The most recent was{' '}
-                  <i>{r.top_intent}</i>, {when(r.last_active)}.
+                  <PersonList actors={r.actors} />, most recently {when(r.last_active)}.
                 </>
               ) : (
                 <>Nothing has been released against it in the last fortnight.</>

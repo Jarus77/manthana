@@ -5,6 +5,7 @@
 import { Wiki } from '@/components/Loader'
 import {
   Empty,
+  clip,
   PersonList,
   ProjectLink,
   Section,
@@ -47,7 +48,7 @@ export default function ProjectsIndexPage() {
                       <td style={{ whiteSpace: 'nowrap' }}>
                         <ProjectLink project={p.project} />
                       </td>
-                      <td>{p.top_intent}</td>
+                      <td>{clip(p.top_intent)}</td>
                       <td>
                         <PersonList actors={p.actors} />
                       </td>

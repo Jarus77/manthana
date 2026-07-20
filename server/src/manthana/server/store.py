@@ -209,7 +209,13 @@ class ServerStore:
                 .where(ReleasedCompactionRow.released == True)  # noqa: E712 - SQL boolean column
                 .distinct()
             )
-            return sorted({p for p in db.exec(stmt) if p})
+            # Junk slugs (see projections.JUNK_PROJECTS) are the compactor's
+            # fallback when a session had no repo context — they are an absence
+            # of a project, not one, and listing them invites readers into a
+            # bucket of unrelated work.
+            from manthana.skills.projections import is_real_project
+
+            return sorted({p for p in db.exec(stmt) if is_real_project(p)})
 
     # ── compaction vectors (semantic retrieval cache; released-only) ──────
     def vector_meta(self, org_id: str) -> dict[str, tuple[int, str]]:

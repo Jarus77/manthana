@@ -44,11 +44,25 @@ class ProjectRollup:
     total_tokens: int
 
 
+#: Project slugs that are an ABSENCE of a project rather than a project. The
+#: compactor falls back to these when a session ran outside a git repo or the
+#: directory name told it nothing, so they collect unrelated work from everyone
+#: and read on a wiki as if they were real shared efforts. Excluded from rollups
+#: and indexes; the sessions themselves stay reachable via their author.
+JUNK_PROJECTS = frozenset({"", "unknown", "project", "projects", "tmp", "temp", "untitled"})
+
+
+def is_real_project(project: str | None) -> bool:
+    return bool(project) and project.strip().lower() not in JUNK_PROJECTS
+
+
 def project_rollups(compactions: list[Any]) -> list[ProjectRollup]:
-    """Group by project, most recently active first."""
+    """Group by project, most recently active first. Junk slugs are dropped."""
     by_project: dict[str, list[Any]] = {}
     for c in compactions:
-        by_project.setdefault(c.project or "(none)", []).append(c)
+        if not is_real_project(c.project):
+            continue
+        by_project.setdefault(c.project, []).append(c)
     out: list[ProjectRollup] = []
     for project, items in by_project.items():
         items = sorted(items, key=_sort_key, reverse=True)
@@ -150,7 +164,7 @@ def activity_rollup(compactions: list[Any], *, max_intents: int = 5) -> list[Act
     out: list[ActorActivity] = []
     for actor, items in by_actor.items():
         items = sorted(items, key=_sort_key, reverse=True)
-        projects = list(dict.fromkeys(c.project for c in items if c.project))
+        projects = list(dict.fromkeys(c.project for c in items if is_real_project(c.project)))
         out.append(
             ActorActivity(
                 actor=actor,

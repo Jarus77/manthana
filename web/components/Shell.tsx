@@ -17,7 +17,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import useSWR from 'swr'
 import { fetcher, post } from '@/lib/api'
-import { KIND_LABEL, type Me } from '@/lib/types'
+import type { Me } from '@/lib/types'
 
 const NAV = [
   { href: '/', label: 'Main page' },
@@ -67,17 +67,19 @@ export function Shell({ children }: { children: React.ReactNode }) {
           ))}
         </div>
 
+        {/* Two links, not eight.
+            The taxonomy (decision / convention / gotcha / …) is a PROPERTY of an
+            entry, not a route to one. Listing each kind made the sidebar a
+            schema dump: at ~1600 entries "Gotchas (458)" is not a destination
+            anyone can use — nobody reads 458 gotchas, and the count answers no
+            question a reader has. Kind survives as a filter INSIDE the browse
+            page, where it narrows a search you already care about.
+            "Needs review" earns its place because it is a WORKLIST — a finite,
+            shrinking set with an action attached. */}
         <div className="nav-portal">
           <div className="nav-label">Knowledge</div>
           <NavLink href="/knowledge/all" label="All entries" count={me?.total_notes} />
-          {(me?.kinds ?? []).map((kind) => (
-            <NavLink
-              key={kind}
-              href={`/knowledge/${kind}`}
-              label={KIND_LABEL[kind]}
-              count={me?.kind_counts?.[kind]}
-            />
-          ))}
+          <NavLink href="/knowledge/all?status=candidate" label="Needs review" />
         </div>
 
         {me && (
