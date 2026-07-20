@@ -1,21 +1,19 @@
 'use client'
 
 /**
- * Browse knowledge by kind, all-time.
+ * Browse entries by kind, all-time.
  *
- * The gap this closes: the old wiki showed notes only through a seven-day home
- * feed and per-project pages, so a convention agreed two months ago was
- * effectively unreachable unless you remembered which project it belonged to.
+ * The gap this closes: the feed only ever showed the last week, so a convention
+ * agreed two months ago was unreachable unless you remembered its project.
  * Durable knowledge that expires from view is not durable.
  */
 
 import { useSearchParams } from 'next/navigation'
-import { Suspense, useState } from 'react'
+import { Suspense, use, useState } from 'react'
 import { qs } from '@/lib/api'
 import { Loading, Wiki } from '@/components/Loader'
-import { Empty, NoteCard } from '@/components/primitives'
+import { Empty, NoteRow, Title } from '@/components/primitives'
 import { KIND_LABEL, type Note, type NoteKind, type Page } from '@/lib/types'
-import { use } from 'react'
 
 const STATUSES = [
   { value: '', label: 'Any status' },
@@ -25,21 +23,59 @@ const STATUSES = [
   { value: 'stale', label: 'Stale' },
 ]
 
+function Chunk({
+  kind,
+  status,
+  cursor,
+  isLast,
+  onMore,
+}: {
+  kind: string
+  status: string
+  cursor: string
+  isLast: boolean
+  onMore: (cursor: string) => void
+}) {
+  const path = `/notes${qs({ kind, status, until: cursor || undefined })}`
+  return (
+    <Wiki<Page<Note>> path={path}>
+      {(data) => (
+        <>
+          {data.items.length === 0 && !cursor ? (
+            <Empty>Nothing here yet.</Empty>
+          ) : (
+            <ul>
+              {data.items.map((n) => (
+                <NoteRow key={n.id} note={n} />
+              ))}
+            </ul>
+          )}
+          {isLast && data.next_cursor && (
+            <button onClick={() => onMore(data.next_cursor!)}>Load more</button>
+          )}
+        </>
+      )}
+    </Wiki>
+  )
+}
+
 function Browser({ kind }: { kind: string }) {
   const search = useSearchParams()
   const [status, setStatus] = useState(search.get('status') ?? '')
   const [cursors, setCursors] = useState<string[]>([''])
   const isAll = kind === 'all'
-  const title = isAll ? 'All knowledge' : (KIND_LABEL[kind as NoteKind] ?? kind)
+  const title = isAll ? 'All entries' : (KIND_LABEL[kind as NoteKind] ?? kind)
 
   return (
     <>
-      <h1 style={{ marginBottom: 6 }}>{title}</h1>
-      <p className="muted">
-        Everything the team knows, oldest entries included — not just this week.
+      <Title>{title}</Title>
+      <p className="lead">
+        Everything the team knows{isAll ? '' : ` of this kind`}, oldest entries included — not
+        just this week. Entries marked <span className="status-unreviewed">unreviewed</span>{' '}
+        were written by Manthana and have not been checked by anyone.
       </p>
 
-      <div className="row" style={{ margin: '16px 0' }}>
+      <div style={{ margin: '0 0 1em' }}>
         <select
           style={{ width: 'auto' }}
           value={status}
@@ -67,40 +103,6 @@ function Browser({ kind }: { kind: string }) {
         />
       ))}
     </>
-  )
-}
-
-function Chunk({
-  kind,
-  status,
-  cursor,
-  isLast,
-  onMore,
-}: {
-  kind: string
-  status: string
-  cursor: string
-  isLast: boolean
-  onMore: (cursor: string) => void
-}) {
-  const path = `/notes${qs({ kind, status, until: cursor || undefined })}`
-  return (
-    <Wiki<Page<Note>> path={path}>
-      {(data) => (
-        <>
-          {data.items.length === 0 && !cursor ? (
-            <Empty>Nothing here yet.</Empty>
-          ) : (
-            data.items.map((n) => <NoteCard key={n.id} note={n} />)
-          )}
-          {isLast && data.next_cursor && (
-            <button style={{ marginTop: 12 }} onClick={() => onMore(data.next_cursor!)}>
-              Load more
-            </button>
-          )}
-        </>
-      )}
-    </Wiki>
   )
 }
 
