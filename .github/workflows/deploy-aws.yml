@@ -1,6 +1,17 @@
-# Deploy the hosted Manthana server to AWS (ECS Fargate).
+# Deploy the hosted Manthana stack to AWS (ECS Fargate).
 # Auth: GitHub OIDC → the manthana-github-deploy IAM role (no stored AWS keys).
 # Trigger: manual (workflow_dispatch) or a version tag push.
+#
+# TWO containers in ONE task (`server` :8000 and `web` :3000), so a deploy rolls
+# them together. They must ship atomically: the wiki client talks to the server
+# over same-origin /ui/api/wiki/*, so a task carrying a new client with an old
+# server — or the reverse — is a broken wiki either way. One task definition
+# revision means there is no window in which the two disagree.
+#
+# The `web` container must already exist in the task definition; the one-time
+# infrastructure setup is deploy/aws-add-web-container.sh. This workflow only
+# ever swaps IMAGES, and fails loudly rather than silently deploying a task with
+# no client in it.
 #
 # The GHCR publish workflow is unrelated and continues to serve self-hosters.
 
@@ -22,6 +33,7 @@ concurrency:
 env:
   AWS_REGION: us-east-1
   ECR_REPO: 086561632645.dkr.ecr.us-east-1.amazonaws.com/manthana-server
+  ECR_REPO_WEB: 086561632645.dkr.ecr.us-east-1.amazonaws.com/manthana-web
   ECS_CLUSTER: manthana
   ECS_SERVICE: manthana-server
   TASK_FAMILY: manthana-server
@@ -41,24 +53,48 @@ jobs:
       - name: Log in to ECR
         run: aws ecr get-login-password | docker login --username AWS --password-stdin "${ECR_REPO%%/*}"
 
-      - name: Build and push image
+      # Both images carry the SAME tag: it is the only thing tying a client build
+      # to the server build it was tested against, and the pair is what rolls.
+      - name: Build and push images
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           [ "$GITHUB_REF_TYPE" = "tag" ] || TAG="sha-${GITHUB_SHA::12}"
           echo "IMAGE=$ECR_REPO:$TAG" >> "$GITHUB_ENV"
+          echo "IMAGE_WEB=$ECR_REPO_WEB:$TAG" >> "$GITHUB_ENV"
+          # Runner is arm64 to match the task's ARM64/Graviton runtimePlatform —
+          # native build, no QEMU, for both images.
           docker build -f server/Dockerfile -t "$ECR_REPO:$TAG" -t "$ECR_REPO:latest" .
+          docker build -f web/Dockerfile -t "$ECR_REPO_WEB:$TAG" -t "$ECR_REPO_WEB:latest" ./web
           docker push "$ECR_REPO:$TAG"
           docker push "$ECR_REPO:latest"
+          docker push "$ECR_REPO_WEB:$TAG"
+          docker push "$ECR_REPO_WEB:latest"
 
-      - name: Register task definition revision with new image
+      - name: Register task definition revision with new images
         run: |
           aws ecs describe-task-definition --task-definition "$TASK_FAMILY" \
-            --query taskDefinition --output json \
-          | jq --arg img "$IMAGE" '
-              .containerDefinitions[0].image = $img
+            --query taskDefinition --output json > current.json
+
+          # Containers are matched BY NAME, never by index. With two of them the
+          # order in the array is not guaranteed, and patching [0] would sooner or
+          # later push the client image onto the server container.
+          for name in server web; do
+            jq -e --arg n "$name" \
+              'any(.containerDefinitions[]; .name == $n)' current.json >/dev/null || {
+                echo "::error::no container named '$name' in task family $TASK_FAMILY."
+                echo "::error::Run deploy/aws-add-web-container.sh once to add it."
+                exit 1
+              }
+          done
+
+          jq --arg srv "$IMAGE" --arg web "$IMAGE_WEB" '
+              .containerDefinitions |= map(
+                  if   .name == "server" then .image = $srv
+                  elif .name == "web"    then .image = $web
+                  else . end)
               | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
                     .compatibilities, .registeredAt, .registeredBy)' \
-          > taskdef.json
+            current.json > taskdef.json
           aws ecs register-task-definition --cli-input-json file://taskdef.json --query 'taskDefinition.revision'
 
       - name: Roll the service (circuit breaker auto-rolls back on failure)
@@ -66,4 +102,4 @@ jobs:
           aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" \
             --task-definition "$TASK_FAMILY" --query 'service.deployments[0].id'
           aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
-          echo "deployed $IMAGE"
+          echo "deployed $IMAGE and $IMAGE_WEB"
