@@ -226,12 +226,58 @@ that silently vanished.
 
 **The default is load-bearing, not caution.** The client is a *separate
 deployable*: enabling this where nothing serves it replaces a working wiki with a
-404, because the redirect targets belong to the client. As of this writing the
-hosted AWS deploy (`deploy-aws.yml`) builds only `server/Dockerfile` and updates
-`containerDefinitions[0]` of a single-container ECS task — **the client is not
-deployed there at all**. Production cannot enable this flag until the `web`
-container ships (ECR repo, second container or service, path routing at the load
-balancer). Self-hosted compose already runs `web`, so it can.
+404, because the redirect targets belong to the client. Self-hosted compose
+already runs `web`, so it can enable the flag; the hosted stack needs the setup
+below first.
+
+## 3c. Hosted deploy — two containers, one task (added 2026-07-20)
+
+The client ships as a **second container in the existing `manthana-server` ECS
+task**, not as its own service. They must roll atomically: the client talks to
+the server over same-origin `/ui/api/wiki/*`, so a task carrying a new client
+with an old server (or the reverse) is a broken wiki either way. One task
+definition revision means there is no window in which the two disagree.
+
+Production topology, as it stood before this change: ALB `manthana-alb`, HTTPS
+listener with **exactly one rule** — `default → manthana-app` (the server target
+group, port 8000, health check `/readyz`); one Fargate service, `awsvpc`,
+ARM64/Graviton, 2048 CPU / 8192 MiB; a single container `server` on :8000.
+
+`deploy-aws.yml` now builds and pushes both images under the **same tag** (the
+only thing tying a client build to the server build it was tested against) and
+patches container images **by name**. Index-based patching (`[0]`) was safe with
+one container and becomes a latent bug with two — the array order is not
+guaranteed, so it would eventually push the client image onto the server. The
+workflow also refuses to deploy if the task family has no `web` container, rather
+than silently shipping a task with no client in it.
+
+One-time setup is `deploy/aws-add-web-container.sh`. **Its step order is the
+whole safety argument**, because that single default rule means every path
+reaches the server today — including `/v1/*`, the endpoint every engineer's agent
+syncs to. Flipping the default to the client before the server's paths are pinned
+would take the customer data pipeline down, not just the wiki. So:
+
+1. ECR repo — nothing serves it yet.
+2. Target group for :3000 — no targets, no traffic.
+3. Explicit `/ui*`, `/v1*`, `/mcp*`, `/docs*`, `/openapi.json`, `/healthz`,
+   `/readyz` → server rules. **Behaviourally a no-op** (the default already sends
+   these to the server) and precisely what makes step 5 survivable. Split across
+   three rules because an ALB path-pattern condition takes at most 5 values.
+4. Task revision adding `web` + a second `loadBalancers` mapping on the service.
+   The client starts and goes healthy while still receiving no traffic.
+5. Flip the listener default → client. **The cutover**, gated behind `--cutover`,
+   with the one-command rollback printed as it runs.
+6. Set `MANTHANA_SERVER_RETIRE_HTML_WIKI=1`, gated behind `--retire`.
+
+Steps 1–4 are idempotent and safe to re-run; 5 and 6 are opt-in flags so a re-run
+of the setup can never cut over by accident.
+
+The `web` container carries **no container-level health check**, deliberately.
+The ALB target group already probes `/login` (the one client route that renders
+without a session) and is what actually gates traffic; a second probe adds no
+signal while adding a way to fail. On an `essential` container a subtly wrong
+health-check command kills the whole task in a loop — including the server beside
+it.
 
 ## 4. Known v1 limitations
 
