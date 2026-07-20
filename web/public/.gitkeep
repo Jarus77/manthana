@@ -1,0 +1,5 @@
+# Next.js serves static assets (favicon, images, robots.txt) from this directory.
+# It is currently empty, but the Dockerfile copies it into the runtime image, and
+# `COPY` fails the build outright when the source path does not exist — so this
+# placeholder keeps the directory in git rather than leaving a build that breaks
+# the moment someone checks out a clean tree.
