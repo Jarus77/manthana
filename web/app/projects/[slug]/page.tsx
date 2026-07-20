@@ -8,6 +8,10 @@ import { Wiki } from '@/components/Loader'
 import {
   CatLinks,
   Empty,
+  Markdown,
+  NoteBanners,
+  leadParagraph,
+  restOfBody,
   Infobox,
   NoteRow,
   PersonList,
@@ -30,6 +34,9 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
         const r = data.rollup
         const outcomes = r ? Object.entries(r.outcome_mix) : []
         const sections = [
+          ...(data.overview && restOfBody(data.overview.body)
+            ? [{ id: 'overview', label: 'Overview' }]
+            : []),
           ...data.sections.map((s) => ({ id: s.kind, label: KIND_LABEL[s.kind] })),
           { id: 'sessions', label: 'Sessions' },
           ...(data.neighbors.length ? [{ id: 'see-also', label: 'See also' }] : []),
@@ -57,12 +64,19 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
               ]}
             />
 
-            {/* The lead states facts and does NOT quote a session intent. An
-                unenriched digest's intent is the engineer's raw first prompt —
-                typos, run-ons and all — so quoting it produced leads that broke
-                off mid-word and read as gibberish. The intents are still one
-                click away under Sessions, where they are labelled as such. */}
-            <p className="lead">
+            {/* The lead is a versioned, human-correctable note when one exists.
+                The factual sentence below it stays either way: session counts and
+                activity are computed live, and the overview prompt forbids the
+                model from writing them into a note where they would go stale. */}
+            {data.overview && (
+              <>
+                <NoteBanners note={data.overview} />
+                <div className="lead">
+                  <Markdown>{leadParagraph(data.overview.body)}</Markdown>
+                </div>
+              </>
+            )}
+            <p className={data.overview ? undefined : 'lead'}>
               <b>{data.project}</b> is a project in the {data.org_id} organisation.{' '}
               {r ? (
                 <>
@@ -81,8 +95,29 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
               )}
             </p>
 
+            {data.overview && (
+              <p className="faint">
+                This description was written by Manthana from the sessions below.{' '}
+                <Link href={`/notes/${data.overview.id}`}>Correct it</Link>
+                {data.overview.version > 1 && (
+                  <>
+                    {' · '}
+                    <Link href={`/notes/${data.overview.id}/history`}>
+                      {data.overview.version} versions
+                    </Link>
+                  </>
+                )}
+              </p>
+            )}
+
             <Toc sections={sections} />
             <div className="clear" />
+
+            {data.overview && restOfBody(data.overview.body) && (
+              <Section id="overview" title="Overview">
+                <Markdown>{restOfBody(data.overview.body)}</Markdown>
+              </Section>
+            )}
 
             {data.sections.length ? (
               data.sections.map((section) => (

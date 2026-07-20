@@ -10,6 +10,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from manthana.schemas import (
     EngineeringCompaction,
@@ -39,6 +40,7 @@ def _comp(
     intent: str = "tune the reranker",
     cost: float = 0.5,
     tokens: int = 1000,
+    source: Literal["pending", "full", "claude_summary"] = "full",  # ENRICHED
 ) -> EngineeringCompaction:
     return EngineeringCompaction(
         id=cid,
@@ -46,6 +48,7 @@ def _comp(
         actor=actor,
         surface=Surface.claude_code,
         project=project,
+        source=source,
         started_at=at,
         ended_at=at + timedelta(hours=1),
         duration_seconds=3600.0,
@@ -149,3 +152,41 @@ def test_actor_activity_drops_junk_projects() -> None:
 
     comps = [_comp("c1", project="rel-bench"), _comp("c2", project="unknown")]
     assert activity_rollup(comps)[0].projects == ["rel-bench"]
+
+
+# ── pending digests carry raw prompts, not summaries ─────────────────────
+def test_top_intent_skips_pending_digests() -> None:
+    """A pending digest's `task_intent` is the engineer's literal first prompt.
+    Quoted as a project's "latest work" it reads as gibberish and breaks
+    mid-word, so the projection reaches past it to the newest real summary."""
+    from manthana.skills.projections import project_rollups
+
+    comps = [
+        _comp("c-new", at=_T0 + timedelta(hours=2), intent="raw pasted prompt", source="pending"),
+        _comp("c-old", at=_T0, intent="tune the reranker", source="full"),
+    ]
+    assert project_rollups(comps)[0].top_intent == "tune the reranker"
+
+
+def test_top_intent_is_empty_when_everything_is_pending() -> None:
+    # Empty renders honestly as an em dash; a raw prompt would not.
+    from manthana.skills.projections import project_rollups
+
+    comps = [_comp("c1", intent="raw pasted prompt", source="pending")]
+    assert project_rollups(comps)[0].top_intent == ""
+
+
+def test_activity_intents_exclude_pending() -> None:
+    from manthana.skills.projections import activity_rollup
+
+    comps = [
+        _comp("c-new", at=_T0 + timedelta(hours=2), intent="raw prompt", source="pending"),
+        _comp("c-old", at=_T0, intent="tune the reranker", source="full"),
+    ]
+    assert activity_rollup(comps)[0].intents == ["tune the reranker"]
+
+
+def test_activity_intents_empty_when_all_pending() -> None:
+    from manthana.skills.projections import activity_rollup
+
+    assert activity_rollup([_comp("c1", intent="raw", source="pending")])[0].intents == []

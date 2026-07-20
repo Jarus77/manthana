@@ -301,3 +301,29 @@ def test_retrieval_unions_semantic_and_entity_overlap() -> None:
         store, _config(), _comp(), org_id="o1", embedder=HashingEmbedder()
     )
     assert "kn-1" in {n.id for n in got}  # entity overlap guarantees inclusion
+
+
+# ── project_overview is not the adjudicator's to create ──────────────────
+def test_adjudicator_cannot_create_a_project_overview() -> None:
+    """`_new_note` builds NoteKind straight from model output, so the moment the
+    member exists a hallucinating adjudicator can emit it. The prompt has never
+    been able to stop that — ADJUDICABLE_KINDS is the actual gate."""
+    from manthana.server.consolidate import apply_verdicts
+
+    payload = {
+        "verdicts": [],
+        "new_notes": [
+            {"kind": "project_overview", "title": "scribe", "body": "A transcription service."}
+        ],
+    }
+    plan = apply_verdicts(_comp("c1"), [], payload, org_id="o1", now=_NOW)
+    assert plan.new_notes == 0 and plan.upserts == []
+
+
+def test_adjudication_prompt_offers_only_adjudicable_kinds() -> None:
+    from manthana.server.consolidate import ADJUDICABLE_KINDS, build_adjudication_prompt
+
+    prompt = build_adjudication_prompt(_comp("c1"), [])
+    assert "project_overview" not in prompt
+    for kind in ADJUDICABLE_KINDS:
+        assert str(kind) in prompt

@@ -354,6 +354,22 @@ def test_benchmark_delta_exposes_previous_value_as_a_field() -> None:
     assert "previous_value" in delta and "note" in delta
 
 
+def test_person_payload_carries_projects_and_unfiled() -> None:
+    client, store, config = _make()
+    _seed(store)
+    store.ingest_compaction(
+        _comp("c3", project="unknown"), org_id="o1", team_id="t1"
+    )
+    _login(client, _engineer(config))
+    payload = client.get(f"{API}/people/{ENG}").json()
+    assert payload["projects"], "person page must group work by project"
+    block = payload["projects"][0]
+    assert block["rollup"]["project"] == "bench"
+    # The header's count must describe exactly the rows beneath it.
+    assert block["rollup"]["sessions"] == len(block["sessions"])
+    assert [s["id"] for s in payload["unfiled"]] == ["c3"]
+
+
 def test_project_page_links_to_sibling_projects() -> None:
     client, store, config = _make()
     _seed(store)
@@ -538,3 +554,45 @@ def test_ask_is_audited_as_an_individual_query() -> None:
     client.post(f"{API}/ask", json={"query": "what shipped this week?"})
     audit = store.list_founder_audit("o1")
     assert any(q.query == "what shipped this week?" for q in audit)
+
+
+def test_api_keeps_sending_the_raw_task_intent() -> None:
+    """The client hides a pending digest's raw prompt behind a placeholder, but
+    the API must NOT sanitise it: the session page's "Opening prompt" section and
+    the verbatim page both render it, and the verbatim page's whole promise is
+    that nothing has been rewritten. This guards against someone later "fixing"
+    the gibberish server-side and silently gutting both."""
+    client, store, config = _make()
+    _seed(store)
+    store.ingest_compaction(
+        _comp("cp", intent="raw pasted paragraph that runs on and on"),
+        org_id="o1", team_id="t1",
+    )
+    store.save_enriched  # noqa: B018 - presence check only
+    _login(client, _engineer(config))
+    payload = client.get(f"{API}/sessions/cp").json()
+    assert payload["session"]["task_intent"] == "raw pasted paragraph that runs on and on"
+    assert "source" in payload
+
+
+def test_project_overview_is_not_a_browsable_kind() -> None:
+    """It is a page's own description, not knowledge you browse. Excluding it
+    from SECTION_ORDER excludes it from the nav, /knowledge/[kind], the project
+    page's own sections (where it would duplicate the lead), every contributor's
+    person page, and the home feed — all from one list."""
+    client, store, config = _make()
+    _seed(store)
+    _login(client, _engineer(config))
+    me = client.get(f"{API}/me").json()
+    assert "project_overview" not in me["kinds"]
+    assert "project_overview" not in me["kind_counts"]
+    sections = client.get(f"{API}/projects/bench").json()["sections"]
+    assert all(s["kind"] != "project_overview" for s in sections)
+
+
+def test_project_payload_carries_the_overview_field() -> None:
+    client, store, config = _make()
+    _seed(store)
+    _login(client, _engineer(config))
+    payload = client.get(f"{API}/projects/bench").json()
+    assert "overview" in payload  # null until the pass has run

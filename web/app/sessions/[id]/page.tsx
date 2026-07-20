@@ -12,6 +12,7 @@ import Link from 'next/link'
 import { use } from 'react'
 import { Wiki } from '@/components/Loader'
 import {
+  Ambox,
   CatLinks,
   Empty,
   Hatnote,
@@ -23,7 +24,9 @@ import {
   SessionRow,
   Title,
   Toc,
+  isPending,
   onDate,
+  sessionTitle,
   shortName,
 } from '@/components/primitives'
 import type { SessionPage } from '@/lib/types'
@@ -52,6 +55,9 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
         const touched =
           s.files_touched.length + s.prs_opened.length + s.tests_added.length + s.artifacts.length
         const sections = [
+          ...(isPending(s) && s.task_intent
+            ? [{ id: 'prompt', label: 'Opening prompt' }]
+            : []),
           { id: 'approach', label: 'Approach' },
           ...(s.friction.length ? [{ id: 'friction', label: 'Friction' }] : []),
           ...(touched ? [{ id: 'touched', label: 'What it touched' }] : []),
@@ -62,7 +68,7 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
         return (
           <>
             <Title tagline="A work session recorded in the Manthana wiki">
-              {s.task_intent || 'Untitled session'}
+              {sessionTitle(s)}
             </Title>
 
             <Hatnote>
@@ -90,11 +96,32 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
               ]}
             />
 
+            {isPending(s) && (
+              <Ambox kind="content">
+                <b>This session has not been summarised yet.</b> Manthana recorded what it
+                could measure — files, duration, cost — but the account of what was done is
+                written later on the server. The engineer&rsquo;s opening prompt is shown
+                under <a href="#prompt">Opening prompt</a> below.
+              </Ambox>
+            )}
+
             <p className="lead">
               On {onDate(s.started_at)}, <b>{shortName(s.actor)}</b> worked on{' '}
-              <ProjectLink project={s.project} /> to <b>{s.task_intent.toLowerCase()}</b>. The
-              session ran about {Math.max(1, Math.round(s.duration_seconds / 60))} minutes and
-              ended <b>{s.outcome}</b>.
+              <ProjectLink project={s.project} />
+              {!isPending(s) && (
+                <>
+                  {' '}
+                  to <b>{s.task_intent.toLowerCase()}</b>
+                </>
+              )}
+              . The session ran about {Math.max(1, Math.round(s.duration_seconds / 60))} minutes
+              {!isPending(s) && (
+                <>
+                  {' '}
+                  and ended <b>{s.outcome}</b>
+                </>
+              )}
+              .
               {data.notes.length > 0 && (
                 <>
                   {' '}
@@ -106,6 +133,16 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
 
             <Toc sections={sections} />
             <div className="clear" />
+
+            {isPending(s) && s.task_intent && (
+              <Section id="prompt" title="Opening prompt">
+                <p className="subtle">
+                  The first thing the engineer typed, verbatim. It is not a summary of the
+                  session and is shown here only because no summary exists yet.
+                </p>
+                <pre style={{ whiteSpace: 'pre-wrap' }}>{s.task_intent}</pre>
+              </Section>
+            )}
 
             <Section id="approach" title="Approach">
               {s.approach ? <p>{s.approach}</p> : <Empty>Not recorded.</Empty>}

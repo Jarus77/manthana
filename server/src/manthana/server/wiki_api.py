@@ -284,6 +284,8 @@ def mount_wiki_api(
             "actor": page.actor,
             "activity": _jsonable(page.activity),
             "sections": _note_sections(page.notes),
+            "projects": _jsonable(page.projects),
+            "unfiled": _jsonable(page.unfiled),
             "sessions": _jsonable(page.sessions),
             "connections": _jsonable(edges),
             "org_id": org_id,
@@ -316,6 +318,7 @@ def mount_wiki_api(
         edges = project_neighbors(_graph_window(org_id), project)
         return {
             "project": page.project,
+            "overview": _jsonable(page.overview),
             "rollup": _jsonable(page.rollup),
             "sections": [
                 {"kind": str(kind), "notes": _jsonable(notes)} for kind, notes in page.sections

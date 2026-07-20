@@ -218,6 +218,9 @@ def discovery_feed(
 class ProjectPage:
     project: str
     rollup: ProjectRollup | None  # None when nothing happened in the window
+    #: What the project IS, as a versioned, human-correctable note. None until
+    #: the overview pass has run (or when it is disabled).
+    overview: KnowledgeNote | None = None
     sections: list[tuple[NoteKind, list[KnowledgeNote]]] = field(default_factory=list)
     sessions: list[SessionCard] = field(default_factory=list)
 
@@ -256,12 +259,32 @@ def project_page(
         for kind in SECTION_ORDER
         if any(n.kind == kind for n in notes)
     ]
+    # The description lives in a note so it can be versioned and corrected.
+    # Excluded from SECTION_ORDER, so it never doubles as a "knowledge" section.
+    overviews = _live_notes(
+        store, org_id, kind=str(NoteKind.project_overview), scope=f"project:{project}"
+    )
+
     return ProjectPage(
         project=project,
         rollup=rollups[0] if rollups else None,
+        overview=overviews[0] if overviews else None,
         sections=sections,
         sessions=session_cards(recent),
     )
+
+
+@dataclass(frozen=True)
+class PersonProject:
+    """One project an engineer works on, with the sessions behind it.
+
+    The rollup is computed over the SAME cards listed here, not over the
+    fortnight activity window — a block headed "7 sessions" sitting above 4 rows
+    is a bug report waiting to happen.
+    """
+
+    rollup: ProjectRollup
+    sessions: list[SessionCard] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -269,6 +292,17 @@ class PersonPage:
     actor: str
     activity: ActorActivity | None  # None when quiet in the window
     notes: list[KnowledgeNote] = field(default_factory=list)
+    #: The engineer's work, grouped: an engineer has several projects and each
+    #: project has several sessions. A flat list cannot show which link belongs
+    #: to what, which is the whole reason this page was hard to read.
+    projects: list[PersonProject] = field(default_factory=list)
+    #: Sessions that ran outside a git repo, so the compactor could not name a
+    #: project (see JUNK_PROJECTS). Kept as their own section rather than
+    #: dropped: this page is the canonical index of one engineer's work, and
+    #: bucketing by rollup alone would make real released work unreachable.
+    unfiled: list[SessionCard] = field(default_factory=list)
+    #: Flat, all projects together. Retained for the legacy server-rendered
+    #: person page (``wiki_ui``) and existing callers.
     sessions: list[SessionCard] = field(default_factory=list)
 
 
@@ -294,11 +328,27 @@ def person_page(
     recent = _readable(store.query_compactions(org_id=org_id, actor=actor, limit=session_limit))
     acts = activity_rollup(windowed)
     notes = [n for n in _live_notes(store, org_id) if actor in n.actors]
+
+    # Grouped over ``recent`` — the same rows that get listed — so every block's
+    # header describes exactly the sessions beneath it. project_rollups already
+    # orders most-recently-active first and already drops junk slugs.
+    cards = session_cards(recent)
+    rollups = project_rollups(recent)
+    by_project: dict[str, list[SessionCard]] = {}
+    for card in cards:
+        by_project.setdefault(card.project, []).append(card)
+    projects = [
+        PersonProject(rollup=r, sessions=by_project.get(r.project, [])) for r in rollups
+    ]
+    named = {r.project for r in rollups}
+
     return PersonPage(
         actor=actor,
         activity=acts[0] if acts else None,
         notes=notes,
-        sessions=session_cards(recent),
+        projects=projects,
+        unfiled=[c for c in cards if c.project not in named],
+        sessions=cards,
     )
 
 
@@ -323,6 +373,7 @@ __all__ = [
     "DiscoveryFeed",
     "HomeFeed",
     "PersonPage",
+    "PersonProject",
     "ProjectPage",
     "HOME_WINDOW_DAYS",
     "PROJECT_WINDOW_DAYS",

@@ -48,7 +48,7 @@ export default function ProjectsIndexPage() {
                       <td style={{ whiteSpace: 'nowrap' }}>
                         <ProjectLink project={p.project} />
                       </td>
-                      <td>{clip(p.top_intent)}</td>
+                      <td>{p.top_intent ? clip(p.top_intent) : <span className="faint">—</span>}</td>
                       <td>
                         <PersonList actors={p.actors} />
                       </td>

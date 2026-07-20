@@ -213,3 +213,46 @@ def test_note_page_resolves_evidence_and_disputes() -> None:
     assert [c.id for c in evidence] == ["c1"]  # unresolvable ids simply drop out
     assert [c.id for c in disputing] == ["c2"]
     assert note_page(store, "o1", "kn-ghost") is None
+
+
+# ── person page: engineer → projects → sessions ──────────────────────────
+def test_person_page_groups_sessions_under_their_projects() -> None:
+    """The flat list could not show which link belonged to what."""
+    from manthana.skills.projections import JUNK_PROJECTS
+
+    store = _store()
+    for cid, project in [
+        ("p1", "bench"), ("p2", "bench"), ("p3", "search"), ("p4", "unknown")
+    ]:
+        store.ingest_compaction(
+            _comp(cid, actor="suraj@x.com", project=project), org_id="o1", team_id="t1"
+        )
+    page = person_page(store, "o1", "suraj@x.com")
+
+    named = {p.rollup.project for p in page.projects}
+    assert "bench" in named and "search" in named
+    assert not (named & JUNK_PROJECTS), "junk slugs must never become project blocks"
+    # The junk-project session is kept, just unfiled — this page is the canonical
+    # index of one engineer's work, so dropping it would strand real released work.
+    assert [c.id for c in page.unfiled] == ["p4"]
+
+
+def test_person_page_project_counts_match_the_sessions_listed() -> None:
+    """A block headed "7 sessions" above 4 rows is a bug report waiting to
+    happen — the rollup is computed over exactly the cards listed."""
+    store = _store()
+    for cid in ("q1", "q2", "q3"):
+        store.ingest_compaction(
+            _comp(cid, actor="suraj@x.com", project="bench"), org_id="o1", team_id="t1"
+        )
+    for block in person_page(store, "o1", "suraj@x.com").projects:
+        assert block.rollup.sessions == len(block.sessions)
+
+
+def test_person_page_still_exposes_the_flat_session_list() -> None:
+    # The legacy server-rendered person page iterates it.
+    store = _store()
+    store.ingest_compaction(
+        _comp("r1", actor="suraj@x.com", project="bench"), org_id="o1", team_id="t1"
+    )
+    assert [c.id for c in person_page(store, "o1", "suraj@x.com").sessions] == ["r1"]

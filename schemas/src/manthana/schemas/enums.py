@@ -121,6 +121,14 @@ class NoteKind(StrEnum):
     Notes hold only durable knowledge — never activity/status ("what is X working
     on" is a live rollup over recent compactions, so it can't go stale).
     ``faq`` is reserved: demand mining populates it in a later phase.
+
+    ``project_overview`` is different in kind from the rest: it is a PAGE'S OWN
+    DESCRIPTION, not a claim discovered in a session. One per project, written by
+    a dedicated pass that sees the whole project's evidence — a single session
+    can never see enough to say what a project IS. It is deliberately excluded
+    from ``pages.SECTION_ORDER`` (so it is not browsable "knowledge") and from
+    ``consolidate.ADJUDICABLE_KINDS`` (so the per-session adjudicator cannot
+    create one).
     """
 
     decision = "decision"
@@ -130,6 +138,7 @@ class NoteKind(StrEnum):
     procedure_ref = "procedure_ref"
     faq = "faq"
     benchmark = "benchmark"
+    project_overview = "project_overview"
 
 
 class NoteStatus(StrEnum):

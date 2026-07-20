@@ -52,6 +52,22 @@ class ProjectRollup:
 JUNK_PROJECTS = frozenset({"", "unknown", "project", "projects", "tmp", "temp", "untitled"})
 
 
+def is_pending(compaction: Any) -> bool:
+    """True when a digest has not been summarised yet.
+
+    An unenriched digest's ``task_intent`` is the engineer's LITERAL first
+    prompt (the compactor's deterministic fallback, "grounded in the first user
+    turn"), not a summary — typos, run-ons and all. That is legitimate data on
+    the session's own page and unreadable anywhere else, so the projections that
+    quote intent OUT of context skip it rather than clipping it prettier.
+
+    The projections must do this, not the client: ``ProjectRollup.top_intent``
+    and ``ActorActivity.intents`` are bare strings with no ``source`` beside
+    them, so a renderer has no way to tell a summary from a raw prompt.
+    """
+    return str(getattr(compaction, "source", "")) == "pending"
+
+
 def is_real_project(project: str | None) -> bool:
     return bool(project) and project.strip().lower() not in JUNK_PROJECTS
 
@@ -73,7 +89,9 @@ def project_rollups(compactions: list[Any]) -> list[ProjectRollup]:
                 actors=sorted({c.actor for c in items}),
                 outcome_mix=dict(Counter(str(c.outcome) for c in items)),
                 last_active=items[0].started_at,
-                top_intent=items[0].task_intent,
+                top_intent=next(
+                    (c.task_intent for c in items if not is_pending(c)), ""
+                ),
                 est_cost_usd=round(sum(c.est_cost_usd or 0.0 for c in items), 4),
                 total_tokens=sum(c.total_tokens or 0 for c in items),
             )
@@ -170,7 +188,10 @@ def activity_rollup(compactions: list[Any], *, max_intents: int = 5) -> list[Act
                 actor=actor,
                 sessions=len(items),
                 projects=projects,
-                intents=[c.task_intent for c in items[:max_intents]],
+                # Dropped, not placeheld: a column of identical "awaiting
+                # summary" strings answers nothing, while an empty list renders
+                # honestly as an em dash.
+                intents=[c.task_intent for c in items if not is_pending(c)][:max_intents],
                 last_active=items[0].started_at,
                 outcome_mix=dict(Counter(str(c.outcome) for c in items)),
             )

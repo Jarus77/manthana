@@ -28,6 +28,7 @@ import {
   ProjectLink,
   Title,
   onDate,
+  sessionTitle,
 } from '@/components/primitives'
 import type { SessionPage } from '@/lib/types'
 
@@ -66,7 +67,7 @@ export default function VerbatimCompaction({ params }: { params: Promise<{ id: s
 
             <Hatnote>
               For the readable account of this session, see{' '}
-              <Link href={`/sessions/${s.id}`}>{s.task_intent || s.session_id}</Link>.
+              <Link href={`/sessions/${s.id}`}>{sessionTitle(s)}</Link>.
             </Hatnote>
 
             <p className="lead">
@@ -116,7 +117,14 @@ export default function VerbatimCompaction({ params }: { params: Promise<{ id: s
                   value={`${Math.round(s.duration_seconds)} seconds`}
                 />
                 <Field label="Outcome" value={s.outcome} />
-                <Field label="Task intent" value={s.task_intent || <span className="faint">—</span>} />
+                <Field
+                  label={
+                    (data.source ?? s.source) === 'pending'
+                      ? 'Task intent (raw opening prompt — not yet summarised)'
+                      : 'Task intent'
+                  }
+                  value={s.task_intent || <span className="faint">—</span>}
+                />
                 <Field label="Approach" value={s.approach || <span className="faint">—</span>} />
                 <Field label="Friction" value={<ListCell items={s.friction} />} />
                 <Field label="Artifacts" value={<ListCell items={s.artifacts} />} />

@@ -14,12 +14,28 @@ import os
 import time
 from datetime import UTC, datetime
 
+from manthana.collectors.sessionize import GAP
 from manthana.schemas import EngineeringCompaction, Mode, Surface
 
 from .compactor import Compactor
 from .store import Store
 
 _log = logging.getLogger(__name__)
+
+#: How long a transcript must be quiet before it is compacted — DERIVED from the
+#: session-boundary gap, never chosen independently.
+#:
+#: ``sessionize`` closes a segment only when the next turn arrives more than
+#: ``GAP`` after the last one. If the settle window were SHORTER than that, a
+#: pause in between would compact a session sessionize has not yet closed —
+#: half a session, uploaded. Worse, the compaction id is deterministic
+#: (``comp-<session.id>``) and server ingest is an upsert, so resuming rewrites
+#: that row with ``source="pending"`` again and the server pays to enrich the
+#: same session twice.
+#:
+#: Deriving the constant is the point: two independently-chosen numbers drifted
+#: apart once already (settle 10 min vs GAP 30 min) and nothing caught it.
+DEFAULT_SETTLE_SECONDS = GAP.total_seconds()
 
 
 def _native_summary_for(session: object) -> str | None:
@@ -101,7 +117,7 @@ def compact_settled(
     store: Store,
     *,
     now: float | None = None,
-    settle_seconds: float = 600.0,
+    settle_seconds: float = DEFAULT_SETTLE_SECONDS,
     mtime_of: object = os.path.getmtime,
     summarized_only: bool = False,
     max_per_cycle: int | None = None,
@@ -152,4 +168,5 @@ def compact_settled(
     return out
 
 
-__all__ = ["compact_session", "compact_pending", "compact_settled"]
+__all__ = [
+    "DEFAULT_SETTLE_SECONDS","compact_session", "compact_pending", "compact_settled"]

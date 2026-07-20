@@ -58,6 +58,17 @@ export function clip(text: string, max = 120): string {
   return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[,;:]$/, '')}…`
 }
 
+/** First paragraph of a markdown body — the overview prompt requires it to be a
+ *  self-contained sentence, so it can stand alone as an article lead. */
+export function leadParagraph(body: string): string {
+  return (body ?? '').trim().split(/\n\s*\n/)[0] ?? ''
+}
+
+export function restOfBody(body: string): string {
+  const parts = (body ?? '').trim().split(/\n\s*\n/)
+  return parts.slice(1).join('\n\n').trim()
+}
+
 export function onDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
     year: 'numeric',
@@ -77,12 +88,26 @@ export function ProjectLink({ project }: { project: string }) {
   return <Link href={`/projects/${encodeURIComponent(project)}`}>{project}</Link>
 }
 
+/**
+ * A `pending` digest has no summary yet — its `task_intent` is the engineer's
+ * literal first prompt. Rendered as a title that reads as gibberish and breaks
+ * mid-word, so everywhere EXCEPT the session's own page and the verbatim page it
+ * is replaced by this. The raw text is not hidden, just moved somewhere it is
+ * labelled for what it is.
+ */
+export const PENDING_TITLE = 'Untitled session — awaiting summary'
+
+export function isPending(session: Session): boolean {
+  return session.source === 'pending'
+}
+
+export function sessionTitle(session: Session): string {
+  if (isPending(session)) return PENDING_TITLE
+  return clip(session.task_intent) || session.session_id
+}
+
 export function SessionLink({ session }: { session: Session }) {
-  return (
-    <Link href={`/sessions/${session.id}`}>
-      {clip(session.task_intent) || session.session_id}
-    </Link>
-  )
+  return <Link href={`/sessions/${session.id}`}>{sessionTitle(session)}</Link>
 }
 
 /** Comma-separated links, with "and" before the last — reads as a sentence. */
@@ -316,7 +341,9 @@ export function SessionRow({ session }: { session: Session }) {
     <li style={{ marginBottom: '0.35em' }}>
       <SessionLink session={session} /> — <PersonLink actor={session.actor} />,{' '}
       <ProjectLink project={session.project} />, {when(session.started_at)}{' '}
-      <span className="faint">({session.outcome})</span>
+      <span className="faint">
+        ({isPending(session) ? 'not yet summarised' : session.outcome})
+      </span>
     </li>
   )
 }

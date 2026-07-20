@@ -39,7 +39,7 @@
       "type": "object"
     },
     "NoteKind": {
-      "description": "What kind of durable claim a KnowledgeNote makes.\n\nNotes hold only durable knowledge \u2014 never activity/status (\"what is X working\non\" is a live rollup over recent compactions, so it can't go stale).\n``faq`` is reserved: demand mining populates it in a later phase.",
+      "description": "What kind of durable claim a KnowledgeNote makes.\n\nNotes hold only durable knowledge \u2014 never activity/status (\"what is X working\non\" is a live rollup over recent compactions, so it can't go stale).\n``faq`` is reserved: demand mining populates it in a later phase.\n\n``project_overview`` is different in kind from the rest: it is a PAGE'S OWN\nDESCRIPTION, not a claim discovered in a session. One per project, written by\na dedicated pass that sees the whole project's evidence \u2014 a single session\ncan never see enough to say what a project IS. It is deliberately excluded\nfrom ``pages.SECTION_ORDER`` (so it is not browsable \"knowledge\") and from\n``consolidate.ADJUDICABLE_KINDS`` (so the per-session adjudicator cannot\ncreate one).",
       "enum": [
         "decision",
         "convention",
@@ -47,7 +47,8 @@
         "failure_pattern",
         "procedure_ref",
         "faq",
-        "benchmark"
+        "benchmark",
+        "project_overview"
       ],
       "title": "NoteKind",
       "type": "string"
