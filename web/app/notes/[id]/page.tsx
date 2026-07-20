@@ -101,6 +101,22 @@ export default function NoteArticle({ params }: { params: Promise<{ id: string }
               )}
             </Section>
 
+            {data.related?.length > 0 && (
+              <Section title="Related entries">
+                <p className="subtle">
+                  Entries Manthana weighed against this one while reading the same session.
+                </p>
+                <ul>
+                  {data.related.map((r) => (
+                    <li key={r.id}>
+                      <Link href={`/notes/${r.id}`}>{r.title}</Link>{' '}
+                      <span className="faint">({r.kind.replace('_', ' ')})</span>
+                    </li>
+                  ))}
+                </ul>
+              </Section>
+            )}
+
             {data.disputed_by.length > 0 && (
               <Section id="disputed" title="Conflicting evidence">
                 <p className="subtle">Later sessions that contradict the claim above.</p>

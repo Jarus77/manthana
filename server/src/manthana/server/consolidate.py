@@ -203,10 +203,30 @@ class ApplyPlan:
 
     upserts: list[KnowledgeNote] = field(default_factory=list)
     supersedes: list[tuple[str, KnowledgeNote]] = field(default_factory=list)
+    #: Typed relationships this adjudication established. Previously the
+    #: relation was read, used to pick a mutation, and dropped — so the wiki
+    #: paid a model call to label edges and kept none of them.
+    edges: list[dict[str, Any]] = field(default_factory=list)
     new_notes: int = 0
     supported: int = 0
     disputed: int = 0
     refined: int = 0
+
+
+def _edge(
+    src_type: str, src_id: str, relation: str, dst_type: str, dst_id: str, *, weight: float = 1.0
+) -> dict[str, Any]:
+    """One edge record. ``evidence_id`` is the session that established it, which
+    is what lets a reader check the claim the edge makes."""
+    return {
+        "src_type": src_type,
+        "src_id": src_id,
+        "relation": relation,
+        "dst_type": dst_type,
+        "dst_id": dst_id,
+        "weight": weight,
+        "evidence_id": src_id if src_type == "session" else "",
+    }
 
 
 def _dedup(items: list[str]) -> list[str]:
@@ -359,9 +379,11 @@ def apply_verdicts(
         if relation == "supports":
             plan.upserts.append(_support(note, compaction, now))
             plan.supported += 1
+            plan.edges.append(_edge("session", compaction.id, "supports", "note", note.id))
         elif relation == "contradicts":
             plan.upserts.append(_contradict(note, compaction, now))
             plan.disputed += 1
+            plan.edges.append(_edge("session", compaction.id, "contradicts", "note", note.id))
         elif relation == "refines":
             plan.supersedes.append(
                 (
@@ -373,9 +395,25 @@ def apply_verdicts(
                 )
             )
             plan.refined += 1
+            plan.edges.append(_edge("session", compaction.id, "refines", "note", note.id))
         else:
-            continue  # unrelated / unknown relation
+            # Keep the NEGATIVE edge. It is the cheapest signal to store and the
+            # most expensive to recompute — a later pass that knows these two
+            # were already judged unrelated need not ask a model again.
+            plan.edges.append(
+                _edge("session", compaction.id, "unrelated", "note", note.id, weight=0.0)
+            )
+            continue
         handled.add(note.id)
+
+    # The candidate set is itself a graph and was being discarded. Notes
+    # retrieved together for one digest are semantically adjacent (cosine ≥
+    # _MIN_COSINE or entity overlap) — recording that adjacency is free here and
+    # costs a full re-retrieval to recover later.
+    for i, a in enumerate(candidates):
+        for b in candidates[i + 1 :]:
+            plan.edges.append(_edge("note", a.id, "co_adjudicated", "note", b.id, weight=0.5))
+            plan.edges[-1]["evidence_id"] = compaction.id
 
     titles = {n.title.casefold(): n for n in candidates}
     new_notes = data.get("new_notes")
@@ -456,6 +494,7 @@ def consolidate_org(
             store.upsert_note(note)
         for old_id, new_version in plan.supersedes:
             store.supersede_note(old_id, new_version, org_id)
+        store.add_edges(org_id, plan.edges)
         store.mark_consolidated(org_id, compaction.id)
         stats.consolidated += 1
         stats.new_notes += plan.new_notes

@@ -62,6 +62,7 @@ from .pages import (
     HOME_WINDOW_DAYS,
     PROJECT_WINDOW_DAYS,
     SECTION_ORDER,
+    _readable,
     discovery_feed,
     note_page,
     person_page,
@@ -353,7 +354,9 @@ def mount_wiki_api(
             until=until or None,
             limit=limit,
         )
-        cards = session_cards(comps)
+        # Same display filter as the page projections: digests describing
+        # Manthana compacting itself are plumbing, not work anyone did.
+        cards = session_cards(_readable(comps))
         return {
             **_page_envelope(cards, lambda c: c.started_at.isoformat(), limit),
             "total": store.count_compactions(org_id),
@@ -431,8 +434,25 @@ def mount_wiki_api(
         if found is None:
             raise ApiError(404, "note not found in this org")
         note, evidence, disputed = found
+        # Related entries, from the edges consolidation now persists instead of
+        # discarding. `co_adjudicated` means the two notes were retrieved
+        # together as semantic neighbours for the same digest — the wiki's only
+        # note-to-note signal, and it was previously recomputed and thrown away
+        # on every pass.
+        related = []
+        seen_ids = set()
+        for e in store.edges_for(org_id, note.id, relations=["co_adjudicated"]):
+            other = e.dst_id if e.src_id == note.id else e.src_id
+            if other == note.id or other in seen_ids:
+                continue
+            seen_ids.add(other)
+            neighbour = store.get_note(other, org_id)
+            if neighbour is not None:
+                related.append({"id": neighbour.id, "title": neighbour.title,
+                                "kind": str(neighbour.kind), "via": e.evidence_id})
         return {
             "note": _jsonable(note),
+            "related": related[:8],
             "evidence": _jsonable(session_cards(evidence)),
             "disputed_by": _jsonable(session_cards(disputed)),
             "org_id": org_id,

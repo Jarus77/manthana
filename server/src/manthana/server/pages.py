@@ -34,6 +34,8 @@ from manthana.skills.projections import (
     session_cards,
 )
 
+from .purge import is_structural_junk
+
 if TYPE_CHECKING:
     from .store import ServerStore
 
@@ -66,6 +68,25 @@ def _window(now: datetime | None, days: int) -> tuple[datetime, str]:
 def _live_notes(store: ServerStore, org_id: str, **kw: object) -> list[KnowledgeNote]:
     """Current versions only — superseded rows are history, not content."""
     return store.query_notes(org_id, exclude_superseded=True, **kw)  # type: ignore[arg-type]
+
+
+def _readable(compactions: list[BaseCompaction]) -> list[BaseCompaction]:
+    """Drop digests that describe Manthana compacting itself.
+
+    These are real rows — an engineer's tool ran, a digest was produced — but
+    they describe the plumbing rather than any work the team did, and on a wiki
+    they read as a colleague's project ("Summarize a single engineering session
+    into a structured JSON digest"). ``is_structural_junk`` is deliberately
+    conservative: it requires no files touched AND no real project AND an
+    abandoned outcome AND a compaction-shaped text signal, so a genuine session
+    *about* the compactor keeps its files and project and is never caught.
+
+    A DISPLAY filter, not an ingest one. The rows stay in the store, stay
+    purgeable through the audited admin path, and stay reachable by id — hiding
+    something from a reader is a much weaker act than deleting it, and only the
+    weaker act is justified by a heuristic.
+    """
+    return [c for c in compactions if not is_structural_junk(c)]
 
 
 @dataclass(frozen=True)
@@ -118,7 +139,7 @@ def org_home(
     """This week across the org: project status lines, notable decisions,
     benchmarks that moved, who's active."""
     _now, since = _window(now, days)
-    comps = store.query_compactions(org_id=org_id, since=since)
+    comps = _readable(store.query_compactions(org_id=org_id, since=since))
     fresh = _live_notes(store, org_id, since=since)
     return HomeFeed(
         org_id=org_id,
@@ -172,8 +193,8 @@ def discovery_feed(
     """This week across the org, as a browsable stream plus whatever knowledge
     kinds actually moved."""
     _now, since = _window(now, days)
-    comps = store.query_compactions(org_id=org_id, since=since, limit=stream_limit)
-    windowed = store.query_compactions(org_id=org_id, since=since)
+    comps = _readable(store.query_compactions(org_id=org_id, since=since, limit=stream_limit))
+    windowed = _readable(store.query_compactions(org_id=org_id, since=since))
     fresh = _live_notes(store, org_id, since=since)
     sections = [
         (kind, [n for n in fresh if n.kind == kind])
@@ -217,8 +238,8 @@ def project_page(
     """State of one project: a live header, its notes grouped by kind, and the
     sessions behind them."""
     _now, since = _window(now, days)
-    windowed = store.query_compactions(org_id=org_id, project=project, since=since)
-    recent = store.query_compactions(org_id=org_id, project=project, limit=session_limit)
+    windowed = _readable(store.query_compactions(org_id=org_id, project=project, since=since))
+    recent = _readable(store.query_compactions(org_id=org_id, project=project, limit=session_limit))
     rollups = project_rollups(windowed)
 
     notes = _live_notes(store, org_id, project=project)
@@ -269,8 +290,8 @@ def person_page(
     time from the evidence compactions — no entity resolution needed.
     """
     _now, since = _window(now, days)
-    windowed = store.query_compactions(org_id=org_id, actor=actor, since=since)
-    recent = store.query_compactions(org_id=org_id, actor=actor, limit=session_limit)
+    windowed = _readable(store.query_compactions(org_id=org_id, actor=actor, since=since))
+    recent = _readable(store.query_compactions(org_id=org_id, actor=actor, limit=session_limit))
     acts = activity_rollup(windowed)
     notes = [n for n in _live_notes(store, org_id) if actor in n.actors]
     return PersonPage(

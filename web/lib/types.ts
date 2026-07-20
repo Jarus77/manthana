@@ -208,6 +208,9 @@ export interface SessionPage {
 
 export interface NotePage {
   note: Note
+  /** Notes retrieved as semantic neighbours of this one during the same
+   *  adjudication. From persisted edges, not recomputed per request. */
+  related: Array<{ id: string; title: string; kind: string; via: string }>
   evidence: Session[]
   disputed_by: Session[]
   org_id: string

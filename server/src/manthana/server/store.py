@@ -33,6 +33,7 @@ from .tables import (
     EnrichmentStateRow,
     FounderQueryAuditRow,
     InviteRow,
+    KnowledgeEdgeRow,
     KnowledgeNoteRow,
     KnowledgeNoteVectorRow,
     LlmUsageRow,
@@ -646,6 +647,53 @@ class ServerStore:
             db.add(old)
             db.merge(self._note_row(new_note))
             db.commit()
+
+    # ── knowledge graph edges ────────────────────────────────────────────
+    def add_edges(self, org_id: str, edges: list[dict[str, Any]]) -> int:
+        """Upsert typed edges. Idempotent on (org, src, relation, dst), so a
+        re-consolidation of the same digest rewrites rather than duplicates."""
+        if not edges:
+            return 0
+        now = _now_iso()
+        with DBSession(self._engine) as db:
+            for e in edges:
+                key = f"{org_id}::{e['src_id']}::{e['relation']}::{e['dst_id']}"
+                db.merge(
+                    KnowledgeEdgeRow(
+                        id=key,
+                        org_id=org_id,
+                        src_type=e["src_type"],
+                        src_id=e["src_id"],
+                        dst_type=e["dst_type"],
+                        dst_id=e["dst_id"],
+                        relation=e["relation"],
+                        weight=float(e.get("weight", 1.0)),
+                        evidence_id=str(e.get("evidence_id", "")),
+                        created_at=now,
+                    )
+                )
+            db.commit()
+        return len(edges)
+
+    def edges_for(
+        self, org_id: str, node_id: str, *, relations: list[str] | None = None
+    ) -> list[KnowledgeEdgeRow]:
+        """Every edge touching a node, in EITHER direction.
+
+        Both directions on purpose: "what contradicts this note" and "what this
+        note contradicts" are the same question to a reader, and an API that
+        made them ask twice would be answering the storage layout rather than
+        the question.
+        """
+        with DBSession(self._engine) as db:
+            stmt = select(KnowledgeEdgeRow).where(KnowledgeEdgeRow.org_id == org_id)
+            stmt = stmt.where(
+                (col(KnowledgeEdgeRow.src_id) == node_id)
+                | (col(KnowledgeEdgeRow.dst_id) == node_id)
+            )
+            if relations:
+                stmt = stmt.where(col(KnowledgeEdgeRow.relation).in_(relations))
+            return list(db.exec(stmt))
 
     _HISTORY_CAP = 50
 
