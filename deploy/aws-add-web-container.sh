@@ -165,10 +165,23 @@ weights() {
   printf '[{"Type":"forward","ForwardConfig":{"TargetGroups":[{"TargetGroupArn":"%s","Weight":%s},{"TargetGroupArn":"%s","Weight":%s}]}}]' \
     "$SERVER_TG" "$1" "$WEB_TG" "$2"
 }
-aws elbv2 modify-listener --listener-arn "$LISTENER_443" \
-  --default-actions "$(weights 100 0)" \
-  --region "$REGION" --query 'Listeners[0].ListenerArn' --output text
-echo "ok: client attached, receiving 0% of traffic"
+# Only attach if the client is not already in the default action. Setting the
+# weights unconditionally would shove traffic BACK to the server for the seconds
+# between here and step 5 on any re-run after a cutover — a live flap caused by
+# nothing more than running the setup script again.
+if aws elbv2 describe-listeners --listener-arns "$LISTENER_443" --region "$REGION" \
+     --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[].TargetGroupArn' \
+     --output text | grep -q "$WEB_TG"; then
+  current=$(aws elbv2 describe-listeners --listener-arns "$LISTENER_443" --region "$REGION" \
+    --query "Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[?TargetGroupArn=='$WEB_TG'].Weight|[0]" \
+    --output text)
+  echo "ok: already attached (client currently at ${current}% of traffic)"
+else
+  aws elbv2 modify-listener --listener-arn "$LISTENER_443" \
+    --default-actions "$(weights 100 0)" \
+    --region "$REGION" --query 'Listeners[0].ListenerArn' --output text
+  echo "ok: client attached, receiving 0% of traffic"
+fi
 
 # ── 4. Add the web container + second load-balancer mapping ──────────────────
 say "4. task definition: add the web container"
