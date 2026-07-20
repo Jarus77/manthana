@@ -239,6 +239,40 @@ class KnowledgeNoteRow(SQLModel, table=True):
     data: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
 
 
+class KnowledgeEdgeRow(SQLModel, table=True):
+    """A typed, evidenced relationship between two wiki objects.
+
+    Exists because consolidation was already computing this and throwing it
+    away: every adjudication builds a semantic neighbourhood and asks the model
+    to label each candidate ``supports|contradicts|refines|unrelated``, and the
+    old code turned each label into a note mutation and dropped the label. A
+    "supports" became an evidence append indistinguishable from any other, and
+    "unrelated" — the cheapest signal to keep and the most expensive to recompute
+    — was simply ``continue``.
+
+    ``evidence_id`` is not optional in spirit: it names the compaction or note
+    that justifies the edge. An edge nobody can check is a claim the wiki cannot
+    defend, and every connection surface in the UI already promises a "via".
+
+    Same document-store shape as the rest: typed index columns for traversal,
+    which is what makes a neighbourhood two indexed lookups instead of the
+    Python scans ``graph.py`` does today. New TABLE, so ``create_all`` upgrades
+    existing DBs without a migration.
+    """
+
+    __tablename__ = "knowledge_edge"  # type: ignore[assignment]
+    id: str = Field(primary_key=True)  # org::src::rel::dst — idempotent upsert key
+    org_id: str = Field(index=True)
+    src_type: str = Field(index=True)  # "note" | "session"
+    src_id: str = Field(index=True)
+    dst_type: str = Field(index=True)
+    dst_id: str = Field(index=True)
+    relation: str = Field(index=True)
+    weight: float = Field(default=1.0)
+    evidence_id: str = Field(default="")  # what justifies this edge
+    created_at: str
+
+
 class KnowledgeNoteVectorRow(SQLModel, table=True):
     """Cached embedding for a KnowledgeNote (mirror of the compaction vector
     cache). Derived/regenerable; keyed on (dim, text_hash) for staleness."""
@@ -291,6 +325,7 @@ SERVER_TABLES = [
     PurgeAuditRow,
     KnowledgeNoteRow,
     KnowledgeNoteVectorRow,
+    KnowledgeEdgeRow,
     ConsolidationStateRow,
 ]
 
@@ -313,5 +348,6 @@ __all__ = [
     "KnowledgeNoteRow",
     "KnowledgeNoteVectorRow",
     "ConsolidationStateRow",
+    "KnowledgeEdgeRow",
     "SERVER_TABLES",
 ]

@@ -1,6 +1,7 @@
 # Manthana Context Graph — design
 
-Status: **proposed**, 2026-07-20. Nothing here is built yet.
+Status: **phases 1-3 implemented**, 2026-07-20 (§4). Clustering (§5) and
+topic-derived descriptions (§6) remain proposed.
 
 ## 1. The finding that motivates this
 
@@ -90,8 +91,9 @@ already depends on this.
 
 ## 4. How edges get written
 
-**Phase 1 — stop discarding (no new cost).** Change `apply_verdicts` to emit an
-edge alongside each mutation. `supports`/`contradicts`/`refines` become typed
+**Phase 1 — stop discarding (no new cost). SHIPPED.** `apply_verdicts` now emits
+an edge alongside each mutation into `ApplyPlan.edges`, persisted by
+`store.add_edges` in the same pass that writes the notes. `supports`/`contradicts`/`refines` become typed
 note↔session edges, and — the genuinely new information — the *candidate set*
 becomes `mentions` edges between the notes that were adjudicated together. Also
 persist `unrelated` as a negative edge so later passes can skip re-asking.
@@ -99,13 +101,14 @@ persist `unrelated` as a negative edge so later passes can skip re-asking.
 This is a pure win: the data is already in memory at
 `consolidate.py:359-377`, correctly typed, already paid for.
 
-**Phase 2 — promote entities.** Write `mentions` edges from notes to their
+**Phase 2 — promote entities. SHIPPED.** Writes `mentions` edges from notes to their
 `entities.files/libraries/concepts`. Gives `libraries` and `concepts` a first
 reader and makes "what touches this file" a lookup rather than a scan.
 
-**Phase 3 — persist the co-occurrence edges** `graph.py` recomputes per render
-(`co_actor`, `co_project`), keeping the same weights so behaviour is unchanged
-and only the cost moves.
+**Phase 3 — persist the co-occurrence edges. SHIPPED.** Refreshed once per
+consolidation pass by calling `related_people`/`project_neighbors` themselves, so
+there is one definition of "works with" and the stored graph cannot drift from
+the rendered page. Recorded once per pair, since `edges_for` matches either end.
 
 ## 5. Clustering
 

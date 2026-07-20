@@ -55,13 +55,14 @@ from pydantic import BaseModel, Field
 
 from .ask import ask
 from .config import ServerConfig
-from .graph import project_neighbors, related_people, session_related
+from .graph import entity_node_id, project_neighbors, related_people, session_related
 from .llm import LLMProvider
 from .metering import QuotaExceededError
 from .pages import (
     HOME_WINDOW_DAYS,
     PROJECT_WINDOW_DAYS,
     SECTION_ORDER,
+    _readable,
     discovery_feed,
     note_page,
     person_page,
@@ -353,7 +354,9 @@ def mount_wiki_api(
             until=until or None,
             limit=limit,
         )
-        cards = session_cards(comps)
+        # Same display filter as the page projections: digests describing
+        # Manthana compacting itself are plumbing, not work anyone did.
+        cards = session_cards(_readable(comps))
         return {
             **_page_envelope(cards, lambda c: c.started_at.isoformat(), limit),
             "total": store.count_compactions(org_id),
@@ -387,6 +390,34 @@ def mount_wiki_api(
             "disputes": _jsonable(links.disputes),
             "same_actor": _jsonable(session_cards(links.same_actor)),
             "same_project": _jsonable(session_cards(links.same_project)),
+            "org_id": org_id,
+        }
+
+    @app.get(f"{API}/entities/{{kind}}/{{name}}")
+    def wiki_entity(
+        kind: str, name: str, org_id: str = "", manthana_admin: Annotated[str, Cookie()] = ""
+    ) -> dict[str, Any]:
+        """Everything the wiki knows about one file, library or concept.
+
+        Reads the `mentions` edges written when a note is consolidated or
+        taught. Before these existed, `entities.libraries` and
+        `entities.concepts` were extracted by the model on every note and read by
+        nothing at all — this endpoint is their first consumer.
+        """
+        sess = _session(manthana_admin)
+        org_id = _org(sess, org_id)
+        if kind not in ("file", "library", "concept", "project"):
+            raise ApiError(422, f"unknown entity kind: {kind}")
+        node = entity_node_id(kind, name)
+        notes = []
+        for e in store.edges_for(org_id, node, relations=["mentions"]):
+            note = store.get_note(e.src_id if e.src_type == "note" else e.dst_id, org_id)
+            if note is not None:
+                notes.append(note)
+        return {
+            "kind": kind,
+            "name": name,
+            "notes": _jsonable(notes),
             "org_id": org_id,
         }
 
@@ -431,8 +462,25 @@ def mount_wiki_api(
         if found is None:
             raise ApiError(404, "note not found in this org")
         note, evidence, disputed = found
+        # Related entries, from the edges consolidation now persists instead of
+        # discarding. `co_adjudicated` means the two notes were retrieved
+        # together as semantic neighbours for the same digest — the wiki's only
+        # note-to-note signal, and it was previously recomputed and thrown away
+        # on every pass.
+        related = []
+        seen_ids = set()
+        for e in store.edges_for(org_id, note.id, relations=["co_adjudicated"]):
+            other = e.dst_id if e.src_id == note.id else e.src_id
+            if other == note.id or other in seen_ids:
+                continue
+            seen_ids.add(other)
+            neighbour = store.get_note(other, org_id)
+            if neighbour is not None:
+                related.append({"id": neighbour.id, "title": neighbour.title,
+                                "kind": str(neighbour.kind), "via": e.evidence_id})
         return {
             "note": _jsonable(note),
+            "related": related[:8],
             "evidence": _jsonable(session_cards(evidence)),
             "disputed_by": _jsonable(session_cards(disputed)),
             "org_id": org_id,

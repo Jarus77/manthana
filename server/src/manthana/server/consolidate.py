@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from manthana.schemas import (
@@ -47,6 +47,7 @@ from manthana.skills.embed import Embedder, default_embedder
 from manthana.skills.retrieval import rank_scored
 
 from .enrich.coerce import extract_json, str_list
+from .graph import cooccurrence_edges, entity_edges
 from .metering import MeteredProvider, QuotaExceededError
 from .vectors import ensure_note_vectors
 
@@ -62,6 +63,9 @@ _log = logging.getLogger(__name__)
 # Cosine floor for semantic candidates — below this a note is only ever pulled in
 # by entity overlap. Total candidates per adjudication are capped regardless.
 _MIN_COSINE = 0.25
+#: Window for the persisted co-occurrence graph. Matches the wiki's own
+#: connection window so the stored edges and the rendered "works with" agree.
+_GRAPH_WINDOW_DAYS = 45
 _MAX_CANDIDATES = 12
 _MAX_NEW_NOTES = 3
 
@@ -203,10 +207,34 @@ class ApplyPlan:
 
     upserts: list[KnowledgeNote] = field(default_factory=list)
     supersedes: list[tuple[str, KnowledgeNote]] = field(default_factory=list)
+    #: Typed relationships this adjudication established. Previously the
+    #: relation was read, used to pick a mutation, and dropped — so the wiki
+    #: paid a model call to label edges and kept none of them.
+    edges: list[dict[str, Any]] = field(default_factory=list)
     new_notes: int = 0
     supported: int = 0
     disputed: int = 0
     refined: int = 0
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(UTC).isoformat()
+
+
+def _edge(
+    src_type: str, src_id: str, relation: str, dst_type: str, dst_id: str, *, weight: float = 1.0
+) -> dict[str, Any]:
+    """One edge record. ``evidence_id`` is the session that established it, which
+    is what lets a reader check the claim the edge makes."""
+    return {
+        "src_type": src_type,
+        "src_id": src_id,
+        "relation": relation,
+        "dst_type": dst_type,
+        "dst_id": dst_id,
+        "weight": weight,
+        "evidence_id": src_id if src_type == "session" else "",
+    }
 
 
 def _dedup(items: list[str]) -> list[str]:
@@ -359,9 +387,11 @@ def apply_verdicts(
         if relation == "supports":
             plan.upserts.append(_support(note, compaction, now))
             plan.supported += 1
+            plan.edges.append(_edge("session", compaction.id, "supports", "note", note.id))
         elif relation == "contradicts":
             plan.upserts.append(_contradict(note, compaction, now))
             plan.disputed += 1
+            plan.edges.append(_edge("session", compaction.id, "contradicts", "note", note.id))
         elif relation == "refines":
             plan.supersedes.append(
                 (
@@ -373,9 +403,25 @@ def apply_verdicts(
                 )
             )
             plan.refined += 1
+            plan.edges.append(_edge("session", compaction.id, "refines", "note", note.id))
         else:
-            continue  # unrelated / unknown relation
+            # Keep the NEGATIVE edge. It is the cheapest signal to store and the
+            # most expensive to recompute — a later pass that knows these two
+            # were already judged unrelated need not ask a model again.
+            plan.edges.append(
+                _edge("session", compaction.id, "unrelated", "note", note.id, weight=0.0)
+            )
+            continue
         handled.add(note.id)
+
+    # The candidate set is itself a graph and was being discarded. Notes
+    # retrieved together for one digest are semantically adjacent (cosine ≥
+    # _MIN_COSINE or entity overlap) — recording that adjacency is free here and
+    # costs a full re-retrieval to recover later.
+    for i, a in enumerate(candidates):
+        for b in candidates[i + 1 :]:
+            plan.edges.append(_edge("note", a.id, "co_adjudicated", "note", b.id, weight=0.5))
+            plan.edges[-1]["evidence_id"] = compaction.id
 
     titles = {n.title.casefold(): n for n in candidates}
     new_notes = data.get("new_notes")
@@ -456,12 +502,34 @@ def consolidate_org(
             store.upsert_note(note)
         for old_id, new_version in plan.supersedes:
             store.supersede_note(old_id, new_version, org_id)
+        # Phase 2: every note this pass touched gets `mentions` edges to the
+        # files/libraries/concepts it names — the first reader those entity
+        # lists have ever had.
+        for note in [*plan.upserts, *(nv for _old, nv in plan.supersedes)]:
+            plan.edges.extend(entity_edges(note))
+        store.add_edges(org_id, plan.edges)
         store.mark_consolidated(org_id, compaction.id)
         stats.consolidated += 1
         stats.new_notes += plan.new_notes
         stats.supported += plan.supported
         stats.disputed += plan.disputed
         stats.refined += plan.refined
+
+    # Phase 3: refresh the persisted co-occurrence graph once per pass, not per
+    # digest — it is a whole-org computation and re-running it inside the loop
+    # would be quadratic for no gain. Built by calling the SAME functions the
+    # pages render from, so the stored graph cannot drift from what a reader
+    # sees. Best-effort: a graph refresh must never fail a consolidation pass
+    # that has already written real notes.
+    if stats.consolidated:
+        try:
+            base = now or datetime.now(UTC)
+            since = _iso(base - timedelta(days=_GRAPH_WINDOW_DAYS))
+            comps = store.query_compactions(org_id=org_id, since=since)
+            live = store.query_notes(org_id, exclude_superseded=True)
+            store.add_edges(org_id, cooccurrence_edges(comps, live))
+        except Exception:  # noqa: BLE001 - never fail the pass on a graph refresh
+            _log.exception("consolidate: co-occurrence graph refresh failed for %s", org_id)
 
     return stats
 
