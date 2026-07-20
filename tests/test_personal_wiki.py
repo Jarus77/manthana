@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -69,7 +70,7 @@ def _compaction(
     released: bool = False,
     hold: bool = False,
     days: int = 0,
-    source: str = "full",  # these fixtures model ENRICHED digests
+    source: Literal["pending", "full", "claude_summary"] = "full",  # ENRICHED
 ) -> None:
     at = _T0 + timedelta(days=days)
     store.upsert_compaction(

@@ -10,6 +10,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from manthana.schemas import (
     EngineeringCompaction,
@@ -39,7 +40,7 @@ def _comp(
     intent: str = "tune the reranker",
     cost: float = 0.5,
     tokens: int = 1000,
-    source: str = "full",  # these fixtures model ENRICHED digests
+    source: Literal["pending", "full", "claude_summary"] = "full",  # ENRICHED
 ) -> EngineeringCompaction:
     return EngineeringCompaction(
         id=cid,

@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -110,7 +111,7 @@ def contributing_compactions(
     return [c for c in comps if str(getattr(c, "source", "")) != "pending"]
 
 
-def contributors_hash(comps: list[BaseCompaction]) -> str:
+def contributors_hash(comps: Sequence[BaseCompaction]) -> str:
     """Digest of the exact contributing session set.
 
     Sorted, so ordering churn cannot trigger a rewrite. Ids ONLY, so re-enriching
@@ -122,14 +123,14 @@ def contributors_hash(comps: list[BaseCompaction]) -> str:
     return hashlib.sha256("\n".join(sorted(c.id for c in comps)).encode()).hexdigest()[:16]
 
 
-def _top_files(comps: list[BaseCompaction], n: int = 20) -> list[str]:
+def _top_files(comps: Sequence[BaseCompaction], n: int = 20) -> list[str]:
     counter: Counter[str] = Counter()
     for c in comps:
         counter.update(getattr(c, "files_touched", None) or [])
     return [path for path, _count in counter.most_common(n)]
 
 
-def _distinct(comps: list[BaseCompaction], attr: str, n: int = 12) -> list[str]:
+def _distinct(comps: Sequence[BaseCompaction], attr: str, n: int = 12) -> list[str]:
     seen: list[str] = []
     for c in comps:
         for value in getattr(c, attr, None) or []:
@@ -138,7 +139,9 @@ def _distinct(comps: list[BaseCompaction], attr: str, n: int = 12) -> list[str]:
     return seen[:n]
 
 
-def build_overview_prompt(project: str, org_id: str, comps: list[BaseCompaction]) -> str:
+def build_overview_prompt(
+    project: str, org_id: str, comps: Sequence[BaseCompaction]
+) -> str:
     """The prompt. Session lines deliberately OMIT the actor field — the rule
     against naming people is then unbreakable rather than merely instructed."""
     lines = [
@@ -197,7 +200,7 @@ def build_overview_note(
     data: dict[str, Any],
     *,
     prior: KnowledgeNote | None,
-    comps: list[BaseCompaction],
+    comps: Sequence[BaseCompaction],
     org_id: str,
     project: str,
     now: datetime,

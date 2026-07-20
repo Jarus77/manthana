@@ -21,6 +21,7 @@ from manthana.schemas import EngineeringCompaction, NoteKind, NoteSource, Outcom
 from manthana.server import ServerConfig, ServerStore
 from manthana.server.llm import LLMProvider, ScriptedProvider
 from manthana.server.overview import (
+    OverviewStats,
     build_overview_note,
     contributors_hash,
     refresh_org_overviews,
@@ -47,15 +48,13 @@ class _CountingProvider(LLMProvider):
         self._inner = ScriptedProvider(responses)
         self.calls = 0
 
-    def complete(self, prompt: str, **kw: object) -> str:
+    def complete(self, prompt: str) -> str:
         self.calls += 1
-        return self._inner.complete(prompt, **kw)
+        return self._inner.complete(prompt)
 
 
 def _config(**kw: object) -> ServerConfig:
-    return ServerConfig(
-        jwt_secret="x" * 40, admin_token="adm", overview_min_sessions=2, **kw
-    )  # type: ignore[arg-type]
+    return ServerConfig(jwt_secret="x" * 40, admin_token="adm", overview_min_sessions=2, **kw)  # type: ignore[arg-type]
 
 
 def _comp(cid: str, *, project: str = "scribe", days_ago: int = 1) -> EngineeringCompaction:
@@ -87,10 +86,10 @@ def _store(*comps: EngineeringCompaction) -> ServerStore:
     return store
 
 
-def _run(store: ServerStore, provider: LLMProvider, **kw: object):
+def _run(store: ServerStore, provider: LLMProvider) -> OverviewStats:
     return refresh_org_overviews(
-        store, provider, _config(), org_id="o1", limit=10, now=_NOW, **kw
-    )  # type: ignore[arg-type]
+        store, provider, _config(), org_id="o1", limit=10, now=_NOW
+    )
 
 
 def _overview(store: ServerStore):
@@ -132,7 +131,9 @@ def test_new_work_triggers_exactly_one_regeneration() -> None:
     store.ingest_compaction(_comp("c3"), org_id="o1", team_id="t1")
     _run(store, provider)
     assert provider.calls == 2
-    assert _overview(store).id != first.id
+    latest = _overview(store)
+    assert first is not None and latest is not None
+    assert latest.id != first.id
 
 
 def test_below_min_sessions_never_calls_the_model() -> None:
@@ -153,9 +154,11 @@ def test_refresh_supersedes_the_previous_overview() -> None:
     _run(store, provider)
     new = _overview(store)
 
+    assert old is not None and new is not None
     assert new.supersedes == old.id and new.version == 2
     # Append-only: the old version survives as history.
-    assert store.get_note(old.id, "o1").superseded_by == new.id
+    archived = store.get_note(old.id, "o1")
+    assert archived is not None and archived.superseded_by == new.id
 
 
 def test_a_human_description_is_never_regenerated_or_costed() -> None:
@@ -168,6 +171,7 @@ def test_a_human_description_is_never_regenerated_or_costed() -> None:
     provider = _CountingProvider([_GOOD, _GOOD])
     _run(store, provider)
     ai = _overview(store)
+    assert ai is not None
 
     edit(store, "o1", ai.id, title="scribe", body="Humans know best.", author="me@x.com")
     store.ingest_compaction(_comp("c3"), org_id="o1", team_id="t1")  # new work
@@ -177,6 +181,7 @@ def test_a_human_description_is_never_regenerated_or_costed() -> None:
     assert provider.calls == calls_before, "a human description must not be re-costed"
     assert stats.skipped_human == 1
     current = _overview(store)
+    assert current is not None
     assert current.source == NoteSource.human and current.body == "Humans know best."
 
 
@@ -223,6 +228,7 @@ def test_built_note_is_scoped_and_cites_its_evidence() -> None:
     note = build_overview_note(
         json.loads(_GOOD), prior=None, comps=comps, org_id="o1", project="scribe", now=_NOW
     )
+    assert note is not None
     assert note.kind == NoteKind.project_overview
     assert note.scope == "project:scribe"
     assert set(note.evidence) == {"c1", "c2"}
