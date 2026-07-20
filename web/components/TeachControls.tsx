@@ -1,13 +1,13 @@
 'use client'
 
 /**
- * The four teaching verbs, as the reader meets them.
+ * The four teaching verbs, in an editor's idiom rather than a product's.
  *
  * The editorial contract this UI has to keep legible: a human write always
- * outranks the AI, and nothing is ever destroyed. So "Edit" says it publishes a
- * new version rather than overwriting, "Confirm" is offered only while a claim
- * is unvouched, and a revert is presented as restoring — not undoing — because
- * the bad version stays on the record either way.
+ * outranks Manthana, and nothing is ever destroyed. So the edit form says it
+ * publishes a new revision rather than overwriting, confirming is offered only
+ * while a claim is unvouched, and restoring is described as publishing old text
+ * again — because the bad revision stays on the record either way.
  */
 
 import { useRouter } from 'next/navigation'
@@ -41,14 +41,14 @@ export function TeachControls({ note, onChanged }: { note: Note; onChanged: () =
   const [body, setBody] = useState(note.body)
   const { busy, error, run } = useAction(onChanged)
 
-  // Confirming is only meaningful for an unvouched AI claim; a human note is
-  // already authoritative and a second endorsement would say nothing.
+  // Confirming is only meaningful for an unvouched entry Manthana wrote; a human
+  // entry is already authoritative and a second endorsement would say nothing.
   const canConfirm = !note.confirmed_by && note.source !== 'human'
 
   if (editing) {
     return (
-      <div className="panel">
-        {error && <div className="error">{error}</div>}
+      <div>
+        {error && <div className="error-box">{error}</div>}
         <div className="field">
           <label htmlFor="title">Title</label>
           <input id="title" type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -57,44 +57,45 @@ export function TeachControls({ note, onChanged }: { note: Note; onChanged: () =
           <label htmlFor="body">Body (markdown)</label>
           <textarea id="body" value={body} onChange={(e) => setBody(e.target.value)} />
         </div>
-        <div className="row">
+        <p className="subtle">
+          Publishing saves a new revision authored by you. The previous one stays in the
+          history — nothing is overwritten, and Manthana will not overwrite yours.
+        </p>
+        <div style={{ display: 'flex', gap: 8 }}>
           <button
-            className="btn-primary"
+            className="button-progressive"
             disabled={busy || !title.trim() || !body.trim()}
             onClick={() =>
               run(async () => {
                 const res = await post<{ note: Note }>(`/notes/${note.id}/edit`, { title, body })
                 setEditing(false)
                 // An edit supersedes: the corrected claim lives at a new id, so
-                // stay with the reader's content rather than a superseded page.
+                // follow the reader's content rather than a superseded page.
                 if (res.note.id !== note.id) router.replace(`/notes/${res.note.id}`)
               })
             }
           >
-            {busy ? 'Publishing…' : 'Publish correction'}
+            {busy ? 'Publishing…' : 'Publish revision'}
           </button>
           <button disabled={busy} onClick={() => setEditing(false)}>
             Cancel
           </button>
         </div>
-        <p className="faint" style={{ marginTop: 10, marginBottom: 0 }}>
-          Publishes a new version authored by you. The previous version stays in the
-          history — nothing is overwritten.
-        </p>
       </div>
     )
   }
 
   return (
     <div>
-      {error && <div className="error">{error}</div>}
-      <div className="row">
-        <button onClick={() => setEditing(true)}>Correct this</button>
+      {error && <div className="error-box">{error}</div>}
+      <p className="subtle">
+        Anyone signed in can correct this. Corrections are attributed to you and outrank
+        anything Manthana writes later.
+      </p>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={() => setEditing(true)}>Correct this entry</button>
         {canConfirm && (
-          <button
-            disabled={busy}
-            onClick={() => run(() => post(`/notes/${note.id}/confirm`))}
-          >
+          <button disabled={busy} onClick={() => run(() => post(`/notes/${note.id}/confirm`))}>
             {busy ? 'Confirming…' : 'Confirm as correct'}
           </button>
         )}
@@ -120,11 +121,11 @@ export function NewNoteForm({
   const [body, setBody] = useState('')
   const { busy, error, run } = useAction(onCreated)
 
-  if (!open) return <button onClick={() => setOpen(true)}>Add knowledge</button>
+  if (!open) return <button onClick={() => setOpen(true)}>Add an entry</button>
 
   return (
-    <div className="panel">
-      {error && <div className="error">{error}</div>}
+    <div>
+      {error && <div className="error-box">{error}</div>}
       <div className="field">
         <label htmlFor="kind">Kind</label>
         <select id="kind" value={kind} onChange={(e) => setKind(e.target.value)}>
@@ -154,9 +155,9 @@ export function NewNoteForm({
           placeholder="why it's true, and what it means for anyone who hits this"
         />
       </div>
-      <div className="row">
+      <div style={{ display: 'flex', gap: 8 }}>
         <button
-          className="btn-primary"
+          className="button-progressive"
           disabled={busy || !title.trim() || !body.trim()}
           onClick={() =>
             run(async () => {

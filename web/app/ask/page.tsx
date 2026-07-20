@@ -1,19 +1,25 @@
 'use client'
 
 /**
- * Ask results.
+ * Search results.
  *
- * Citations arrive as full objects, so every source is a card you can read and
- * click rather than an id you have to go look up. The coverage line stays
- * visible: an answer drawn from two notes and an answer drawn from twenty
- * should not look identical.
+ * Citations come back as full objects, so every source is a readable, clickable
+ * reference rather than an id to go look up. The coverage line stays visible:
+ * an answer drawn from two entries and one drawn from twenty should not look
+ * identical.
  */
 
 import { useSearchParams } from 'next/navigation'
 import { Suspense, useEffect, useState } from 'react'
 import { AskBar } from '@/components/AskBar'
 import { ErrorBox, Loading } from '@/components/Loader'
-import { Empty, NoteCard, Section, SessionCard } from '@/components/primitives'
+import {
+  Empty,
+  NoteRow,
+  Reflist,
+  Section,
+  Title,
+} from '@/components/primitives'
 import { ApiError, post } from '@/lib/api'
 import type { AskResult } from '@/lib/types'
 
@@ -41,46 +47,44 @@ function Results() {
 
   return (
     <>
-      <h1 style={{ marginBottom: 14 }}>Ask</h1>
-      <AskBar hero initial={query} />
+      <Title tagline="Search results">{query || 'Search'}</Title>
+      <AskBar initial={query} />
 
-      {!query && <Empty>Ask a question to search the team&rsquo;s knowledge.</Empty>}
+      {!query && <Empty>Enter a question to search the team&rsquo;s knowledge.</Empty>}
       {loading && <Loading />}
       {error && <ErrorBox error={error} />}
 
       {result && (
-        <div style={{ marginTop: 24 }}>
-          <div className="card prose" style={{ whiteSpace: 'pre-wrap' }}>
-            {result.narrative}
-          </div>
-          <p className="faint" style={{ marginTop: 8 }}>
+        <>
+          <div style={{ whiteSpace: 'pre-wrap', marginBottom: '0.6em' }}>{result.narrative}</div>
+          <p className="faint">
             {result.coverage}
-            {result.drilled && ' · drilled into sessions because the notes were thin'}
+            {result.drilled && ' — sessions were read because the entries were thin'}
           </p>
 
           {result.notes.length > 0 && (
-            <Section title="From the team&rsquo;s knowledge">
-              {result.notes.map((n) => (
-                <NoteCard key={n.id} note={n} />
-              ))}
+            <Section title="Entries cited">
+              <ul>
+                {result.notes.map((n) => (
+                  <NoteRow key={n.id} note={n} />
+                ))}
+              </ul>
             </Section>
           )}
 
           {result.sessions.length > 0 && (
-            <Section title="From sessions">
-              {result.sessions.map((s) => (
-                <SessionCard key={s.id} session={s} />
-              ))}
+            <Section title="Sessions cited">
+              <Reflist sessions={result.sessions} />
             </Section>
           )}
 
           {result.insufficient_data && (
             <Empty>
-              Nothing in the wiki covers this yet — try a broader question, or add what you
-              know from a note page.
+              Nothing in the wiki covers this yet — try a broader question, or add what you know
+              from any entry page.
             </Empty>
           )}
-        </div>
+        </>
       )}
     </>
   )

@@ -29,8 +29,8 @@ export default function LoginPage() {
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
         <h1 style={{ marginBottom: 4 }}>Manthana</h1>
-        <p className="muted">Your team&rsquo;s shared context.</p>
-        {error && <div className="error">{error}</div>}
+        <p className="subtle">Your team&rsquo;s shared context.</p>
+        {error && <div className="error-box">{error}</div>}
         <div className="field">
           <label htmlFor="token">Access token</label>
           <input
@@ -42,10 +42,10 @@ export default function LoginPage() {
             placeholder="paste the token you were sent"
           />
         </div>
-        <button className="btn-primary" type="submit" disabled={busy || !token.trim()}>
+        <button className="button-progressive" type="submit" disabled={busy || !token.trim()}>
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
-        <p className="faint" style={{ marginTop: 14, marginBottom: 0 }}>
+        <p className="faint">
           Engineers and founders sign in the same way. Ask your founder for a token if you
           don&rsquo;t have one.
         </p>

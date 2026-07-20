@@ -33,7 +33,7 @@ export function Loading() {
 
 export function ErrorBox({ error }: { error: ApiError }) {
   if (error.unauthenticated) return <Loading />
-  return <div className="error">{error.message}</div>
+  return <div className="error-box">{error.message}</div>
 }
 
 /** Render `children` once data has arrived, with consistent loading/error UI. */

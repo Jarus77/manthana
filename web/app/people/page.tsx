@@ -1,8 +1,18 @@
 'use client'
 
+/** Index of people — a wikitable, the way Wikipedia lists anything enumerable. */
+
 import Link from 'next/link'
 import { Wiki } from '@/components/Loader'
-import { Empty, PersonChip, Section, shortName, when } from '@/components/primitives'
+import {
+  Empty,
+  PersonLink,
+  ProjectLink,
+  Section,
+  Title,
+  shortName,
+  when,
+} from '@/components/primitives'
 import type { ActorActivity } from '@/lib/types'
 
 interface PeopleIndex {
@@ -11,33 +21,47 @@ interface PeopleIndex {
   org_id: string
 }
 
-export default function PeoplePage() {
+export default function PeopleIndexPage() {
   return (
     <Wiki<PeopleIndex> path="/people">
       {(data) => (
         <>
-          <h1 style={{ marginBottom: 18 }}>People</h1>
+          <Title>People</Title>
+          <p className="lead">
+            Everyone in the <b>{data.org_id}</b> organisation who has released work to the wiki.
+            Activity is computed live from released sessions; the quiet list keeps everyone else
+            reachable.
+          </p>
 
           <Section title="Active recently">
             {data.active.length ? (
-              <table className="list">
+              <table className="wikitable">
                 <thead>
                   <tr>
                     <th>Person</th>
                     <th>Working on</th>
                     <th>Projects</th>
+                    <th>Sessions</th>
                     <th>Last active</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.active.map((a) => (
                     <tr key={a.actor}>
-                      <td>
-                        <PersonChip actor={a.actor} />
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        <PersonLink actor={a.actor} />
                       </td>
-                      <td className="muted">{a.intents[0] ?? '—'}</td>
-                      <td className="faint">{a.projects.join(', ') || '—'}</td>
-                      <td className="faint">{when(a.last_active)}</td>
+                      <td>{a.intents[0] ?? '—'}</td>
+                      <td>
+                        {a.projects.map((p, i) => (
+                          <span key={p}>
+                            {i > 0 && ', '}
+                            <ProjectLink project={p} />
+                          </span>
+                        ))}
+                      </td>
+                      <td>{a.sessions}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{when(a.last_active)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -47,21 +71,21 @@ export default function PeoplePage() {
             )}
           </Section>
 
-          {/* Quiet people still have pages: their past work and the knowledge it
-              produced doesn't stop being useful because they had a slow fortnight. */}
           {data.quiet.length > 0 && (
             <Section title="Quiet lately">
-              <div className="row">
+              <p className="subtle">
+                No sessions in the window. Their past work and the knowledge it produced are
+                still here.
+              </p>
+              <ul>
                 {data.quiet.map((q) => (
-                  <Link
-                    key={q.actor}
-                    className="chip"
-                    href={`/people/${encodeURIComponent(q.actor)}`}
-                  >
-                    {q.display_name || shortName(q.actor)}
-                  </Link>
+                  <li key={q.actor}>
+                    <Link href={`/people/${encodeURIComponent(q.actor)}`}>
+                      {q.display_name || shortName(q.actor)}
+                    </Link>
+                  </li>
                 ))}
-              </div>
+              </ul>
             </Section>
           )}
         </>

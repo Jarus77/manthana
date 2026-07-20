@@ -1,20 +1,14 @@
 'use client'
 
-/**
- * The ask box. Present in the top bar on every page, and again, larger, on the
- * home page: the two ways in are "I have a question" and "show me what's
- * happening", and neither should require finding the other first.
- */
+/** Search box. Wikipedia's is plain: a field and a button, no ornament. */
 
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 
 export function AskBar({
-  hero = false,
-  placeholder = 'Ask anything — e.g. why did we pin torch 2.4?',
+  placeholder = 'Search the wiki, or ask a question',
   initial = '',
 }: {
-  hero?: boolean
   placeholder?: string
   initial?: string
 }) {
@@ -23,7 +17,7 @@ export function AskBar({
 
   return (
     <form
-      className={`askbar${hero ? ' askbar-hero' : ''}`}
+      className="searchbar"
       onSubmit={(e) => {
         e.preventDefault()
         const q = query.trim()
@@ -31,14 +25,14 @@ export function AskBar({
       }}
     >
       <input
-        type="text"
+        type="search"
         value={query}
         placeholder={placeholder}
-        aria-label="Ask the wiki"
+        aria-label="Search the wiki"
         onChange={(e) => setQuery(e.target.value)}
       />
-      <button className="btn-primary" type="submit">
-        Ask
+      <button className="button-progressive" type="submit">
+        Search
       </button>
     </form>
   )

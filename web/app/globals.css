@@ -1,711 +1,733 @@
 /*
- * Manthana wiki — design system.
+ * Manthana wiki — encyclopedia styling.
  *
- * Reference points are documentation tools, not dashboards: a persistent left
- * rail so you always know where you are, generous measure on prose, and colour
- * reserved almost entirely for the editorial-trust badges. The old console used
- * colour for chrome, which left nothing loud enough to say "an AI wrote this and
- * nobody checked it".
+ * This is modelled directly on MediaWiki's Vector 2022 skin, because the thing
+ * being built IS an encyclopedia: articles about people, projects, sessions and
+ * claims, cross-linked, cited, and versioned. The first version of this file
+ * styled the same data as a product dashboard — cards, pills, panels — and read
+ * like a SaaS admin screen rather than something you browse to learn.
  *
- * Badge palette is carried over verbatim from wiki_ui.py so the two clients
- * cannot drift on the one thing readers must not misread.
+ * Values are Wikimedia Codex design tokens, not approximations:
+ *   color-base #202122 · color-subtle #54595d · color-progressive #36c
+ *   color-visited #6a60b0 · border-color-base #a2a9b1 · subtle #c8ccd1
+ *   background-color-neutral-subtle #f8f9fa · content width 960px
+ *   body 0.875em sans-serif · h1/h2 serif with a hairline rule beneath
+ *
+ * LIGHT ONLY, deliberately. The previous file auto-switched on
+ * prefers-color-scheme, so anyone on a dark-mode machine got a dark wiki no
+ * matter what. Wikipedia ships light by default and treats dark as an explicit
+ * opt-in; a white page is part of what makes an encyclopedia read as one.
  */
 
 :root {
-  --bg: #fbfbfa;
-  --surface: #ffffff;
-  --surface-alt: #f5f5f3;
-  --border: #e4e4e0;
-  --border-strong: #d0d0ca;
-  --text: #1f1f1d;
-  --text-muted: #6b6b66;
-  --text-faint: #94948e;
-  --accent: #2f6f4f;
-  --accent-soft: #eaf3ee;
+  --base: #202122;
+  --subtle: #54595d;
+  --faint: #72777d;
+  --link: #36c;
+  --link-visited: #6a60b0;
+  --link-hover: #447ff5;
+  --border: #a2a9b1;
+  --border-subtle: #c8ccd1;
+  --surface: #fff;
+  --neutral: #f8f9fa;
+  --header-bg: #eaecf0;
+  --page-bg: #f8f9fa;
 
-  /* Editorial trust — see wiki_ui.py _BADGE_STYLE. */
-  --unreviewed: #a66000;
-  --unreviewed-bg: #fdf3e6;
-  --confirmed: #0a7a3d;
-  --confirmed-bg: #e9f6ee;
-  --disputed: #c00000;
-  --disputed-bg: #fdecec;
-  --human: #0066cc;
-  --human-bg: #e9f2fd;
-  --neutral: #6b6b66;
-  --neutral-bg: #f0f0ed;
+  --warning: #886425;
+  --error: #bf3c2c;
+  --success: #177860;
 
-  --radius: 8px;
-  --sidebar-w: 232px;
-  --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
-}
+  --serif: 'Linux Libertine', 'Georgia', 'Times New Roman', Times, serif;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #17171a;
-    --surface: #1e1e22;
-    --surface-alt: #26262b;
-    --border: #303036;
-    --border-strong: #3d3d45;
-    --text: #e8e8e6;
-    --text-muted: #a0a09a;
-    --text-faint: #74746e;
-    --accent: #6fbb8f;
-    --accent-soft: #1f2f26;
-
-    --unreviewed: #e0a04a;
-    --unreviewed-bg: #2e2519;
-    --confirmed: #5cc98a;
-    --confirmed-bg: #172b1f;
-    --disputed: #f08080;
-    --disputed-bg: #2e1b1b;
-    --human: #6cb2f5;
-    --human-bg: #17242f;
-    --neutral: #a0a09a;
-    --neutral-bg: #2a2a30;
-  }
+  --content-width: 960px;
+  --sidebar-width: 176px;
 }
 
 * {
   box-sizing: border-box;
 }
 
-html,
+html {
+  font-size: 100%;
+}
+
 body {
   margin: 0;
-  padding: 0;
-}
-
-body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font);
-  font-size: 15px;
+  background: var(--page-bg);
+  color: var(--base);
+  font-family: var(--sans);
+  font-size: 0.875em; /* 14px — Vector's base */
   line-height: 1.6;
-  -webkit-font-smoothing: antialiased;
 }
 
+/* ── links: the most Wikipedia thing on the page ──────────────────────── */
 a {
-  color: inherit;
+  color: var(--link);
   text-decoration: none;
+}
+
+a:visited {
+  color: var(--link-visited);
 }
 
 a:hover {
   text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
-h1,
-h2,
-h3,
-h4 {
-  line-height: 1.25;
-  margin: 0;
-  font-weight: 600;
-}
-
-h1 {
-  font-size: 26px;
-  letter-spacing: -0.01em;
-}
-h2 {
-  font-size: 19px;
-}
-h3 {
-  font-size: 15px;
-}
-
-p {
-  margin: 0 0 12px;
+a.new,
+a.missing {
+  color: var(--error);
 }
 
 /* ── shell ────────────────────────────────────────────────────────────── */
 .shell {
-  display: grid;
-  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
-  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
 }
 
 .sidebar {
-  border-right: 1px solid var(--border);
-  background: var(--surface-alt);
-  padding: 18px 12px;
+  width: var(--sidebar-width);
+  flex: none;
+  padding: 12px 0 40px 12px;
+  font-size: 0.875em;
   position: sticky;
   top: 0;
-  height: 100vh;
+  max-height: 100vh;
   overflow-y: auto;
 }
 
 .brand {
   display: block;
-  font-weight: 650;
-  font-size: 16px;
-  letter-spacing: -0.01em;
-  padding: 0 10px 4px;
+  font-family: var(--serif);
+  font-size: 1.6em;
+  line-height: 1.2;
+  color: var(--base);
+  padding: 0 8px 2px;
+}
+
+.brand:hover {
+  text-decoration: none;
 }
 
 .brand-sub {
   display: block;
-  padding: 0 10px 18px;
-  font-size: 12px;
-  color: var(--text-faint);
+  padding: 0 8px 20px;
+  color: var(--faint);
+  font-size: 0.85em;
 }
 
-.nav-group {
-  margin-bottom: 18px;
+.nav-portal {
+  margin-bottom: 16px;
 }
 
 .nav-label {
-  padding: 0 10px 6px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-faint);
+  padding: 0 8px 4px;
+  color: var(--faint);
+  font-size: 0.85em;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 4px;
 }
 
 .nav-link {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  align-items: center;
-  padding: 6px 10px;
-  border-radius: 6px;
-  color: var(--text-muted);
-  font-size: 14px;
-}
-
-.nav-link:hover {
-  background: var(--border);
-  text-decoration: none;
-  color: var(--text);
+  display: block;
+  padding: 2px 8px;
+  color: var(--link);
 }
 
 .nav-link[aria-current='page'] {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 550;
+  font-weight: 700;
+  color: var(--base);
 }
 
-.nav-count {
-  font-size: 11px;
-  color: var(--text-faint);
-  font-variant-numeric: tabular-nums;
-}
-
-.main {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.topbar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  padding: 10px 28px;
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--border);
-}
-
-.content {
-  padding: 26px 28px 72px;
-  max-width: 1100px;
-  width: 100%;
-}
-
-.prose {
-  max-width: 68ch;
-}
-
-/* ── ask bar ──────────────────────────────────────────────────────────── */
-.askbar {
-  flex: 1;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.askbar input {
-  flex: 1;
-  min-width: 0;
-  padding: 8px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 14px;
-}
-
-.askbar input:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
-  border-color: transparent;
-}
-
-.askbar-hero input {
-  padding: 13px 18px;
-  font-size: 16px;
-}
-
-/* ── buttons & controls ───────────────────────────────────────────────── */
-button,
-.btn {
-  font: inherit;
-  font-size: 13px;
-  padding: 6px 13px;
-  border-radius: 6px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--text);
-  cursor: pointer;
-}
-
-button:hover,
-.btn:hover {
-  background: var(--surface-alt);
+.nav-link[aria-current='page']:hover {
   text-decoration: none;
 }
 
-button:disabled {
-  opacity: 0.55;
-  cursor: default;
+.nav-count {
+  color: var(--faint);
 }
 
-.btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+.nav-link-empty {
+  color: var(--faint);
 }
 
-.btn-primary:hover {
-  background: color-mix(in srgb, var(--accent) 85%, #000);
+/* The article surface: white, bordered, centred — the encyclopedia page. */
+.main {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--border-subtle);
+  min-height: 100vh;
+}
+
+.content {
+  max-width: var(--content-width);
+  padding: 20px 32px 64px;
+}
+
+/* ── article furniture ────────────────────────────────────────────────── */
+.firstHeading {
+  font-family: var(--serif);
+  font-size: 1.9em;
+  font-weight: normal;
+  line-height: 1.25;
+  margin: 0 0 0.25em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+
+.tagline {
+  color: var(--subtle);
+  font-size: 0.9em;
+  margin: -0.15em 0 1em;
+}
+
+h2 {
+  /* Never let a section rule run underneath a floated infobox — the heading
+     starts below it instead, which is what MediaWiki's own layout does. */
+  clear: right;
+  font-family: var(--serif);
+  font-size: 1.5em;
+  font-weight: normal;
+  line-height: 1.3;
+  margin: 1.4em 0 0.5em;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid var(--border);
+}
+
+h3 {
+  font-family: var(--sans);
+  font-size: 1.1em;
+  font-weight: 700;
+  margin: 1.2em 0 0.4em;
+}
+
+h4 {
+  font-family: var(--sans);
+  font-size: 1em;
+  font-weight: 700;
+  margin: 1em 0 0.3em;
+}
+
+p {
+  margin: 0.5em 0 1em;
+}
+
+/* Wikipedia's lead: the subject in bold, first thing you read. */
+.lead {
+  margin-bottom: 1em;
+}
+
+.lead b,
+.lead strong {
+  font-weight: 700;
+}
+
+/* Hatnote — italic, indented; context above the article proper. */
+.hatnote {
+  padding-left: 1.6em;
+  margin-bottom: 1em;
+  font-style: italic;
+  color: var(--base);
+}
+
+/* Maintenance banner (MediaWiki's "ambox"). Manthana's editorial states map
+   onto this exactly: an unreviewed AI claim is Wikipedia's unsourced article,
+   and a disputed one is its contradiction notice. Far more legible than a
+   coloured chip — it says what is wrong and what to do about it. */
+.ambox {
+  border: 1px solid var(--border-subtle);
+  border-left: 10px solid var(--faint);
+  background: var(--neutral);
+  margin: 0 0 1em;
+  padding: 0.5em 1em;
+  font-size: 0.95em;
+}
+
+.ambox-content {
+  border-left-color: #fc3;
+}
+
+.ambox-style {
+  border-left-color: #36c;
+}
+
+.ambox-serious {
+  border-left-color: var(--error);
+}
+
+.ambox b {
+  font-weight: 700;
+}
+
+.ambox p {
+  margin: 0.2em 0;
+}
+
+/* Infobox — right-floated key facts. */
+.infobox {
+  float: right;
+  clear: right;
+  width: 22em;
+  max-width: 100%;
+  margin: 0 0 1em 1.5em;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--neutral);
+  font-size: 0.88em;
+  line-height: 1.5;
+  border-spacing: 3px;
+}
+
+.infobox-title {
+  font-family: var(--serif);
+  font-size: 1.25em;
+  text-align: center;
+  padding: 0.4em 0.6em;
+  background: var(--header-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.infobox-sub {
+  text-align: center;
+  padding: 0.3em 0.6em;
+  background: var(--header-bg);
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+}
+
+.infobox table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.infobox th {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.3em 0.6em;
+  width: 38%;
+  font-weight: 700;
+}
+
+.infobox td {
+  vertical-align: top;
+  padding: 0.3em 0.6em;
+}
+
+.infobox tr + tr th,
+.infobox tr + tr td {
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Table of contents — bordered box after the lead. */
+.toc {
+  display: inline-block;
+  min-width: 240px;
+  border: 1px solid var(--border-subtle);
+  background: var(--neutral);
+  padding: 0.6em 1.2em 0.6em 0.8em;
+  margin: 0 0 1.2em;
+  font-size: 0.95em;
+}
+
+.toc-title {
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 0.3em;
+}
+
+.toc ol {
+  margin: 0;
+  padding-left: 1.6em;
+}
+
+.toc li {
+  margin: 0.1em 0;
+}
+
+/* ── tables ───────────────────────────────────────────────────────────── */
+.wikitable {
+  border-collapse: collapse;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  margin: 0.5em 0 1.2em;
+  width: 100%;
+  font-size: 0.95em;
+}
+
+.wikitable > thead > tr > th,
+.wikitable > tbody > tr > th {
+  background: var(--header-bg);
+  border: 1px solid var(--border);
+  padding: 0.3em 0.6em;
+  text-align: left;
+  font-weight: 700;
+}
+
+.wikitable > tbody > tr > td {
+  border: 1px solid var(--border);
+  padding: 0.3em 0.6em;
+  vertical-align: top;
+}
+
+/* ── lists ────────────────────────────────────────────────────────────── */
+ul,
+ol {
+  margin: 0.3em 0 1em;
+  padding-left: 1.8em;
+}
+
+li {
+  margin-bottom: 0.15em;
+}
+
+/* Reference list — evidence, set small and numbered like citations. */
+.reflist {
+  font-size: 0.9em;
+  margin: 0.4em 0 1em;
+  padding-left: 2em;
+}
+
+.reflist li {
+  margin-bottom: 0.3em;
+}
+
+sup.reference {
+  font-size: 0.8em;
+  line-height: 1;
+  vertical-align: super;
+}
+
+sup.reference a {
+  padding: 0 1px;
+}
+
+/* Category footer. */
+.catlinks {
+  border: 1px solid var(--border-subtle);
+  background: var(--neutral);
+  padding: 0.4em 0.8em;
+  margin-top: 2.5em;
+  font-size: 0.95em;
+}
+
+.catlinks ul {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.catlinks li {
+  display: inline-block;
+  margin: 0;
+  padding: 0 0.6em;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.catlinks li:first-child {
+  border-left: 0;
+  padding-left: 0.4em;
+}
+
+/* ── search ───────────────────────────────────────────────────────────── */
+.searchbar {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 1.2em;
+}
+
+.searchbar input {
+  flex: 1;
+  min-width: 0;
 }
 
 input[type='text'],
 input[type='password'],
+input[type='search'],
 textarea,
 select {
-  font: inherit;
-  font-size: 14px;
-  padding: 7px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  font-family: inherit;
+  font-size: 1em;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
   background: var(--surface);
-  color: var(--text);
+  color: var(--base);
+  border-radius: 2px;
   width: 100%;
 }
 
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--link);
+  box-shadow: inset 0 0 0 1px var(--link);
+}
+
 textarea {
+  min-height: 140px;
+  line-height: 1.5;
   resize: vertical;
-  min-height: 120px;
-  font-family: var(--mono);
-  font-size: 13px;
-  line-height: 1.55;
 }
 
 label {
   display: block;
-  font-size: 12px;
-  font-weight: 550;
-  color: var(--text-muted);
-  margin-bottom: 4px;
+  font-weight: 700;
+  margin-bottom: 3px;
 }
 
 .field {
-  margin-bottom: 12px;
+  margin-bottom: 0.8em;
 }
 
-/* ── cards & sections ─────────────────────────────────────────────────── */
-.card {
-  background: var(--surface);
+/* ── buttons ──────────────────────────────────────────────────────────── */
+button,
+.button {
+  font-family: inherit;
+  font-size: 1em;
+  padding: 5px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  margin-bottom: 10px;
+  background: var(--neutral);
+  color: var(--base);
+  border-radius: 2px;
+  cursor: pointer;
 }
 
-.card-tight {
-  padding: 11px 14px;
+button:hover {
+  background: var(--header-bg);
 }
 
-.section {
-  margin-bottom: 32px;
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
-.section-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
+.button-progressive {
+  background: var(--link);
+  border-color: var(--link);
+  color: #fff;
 }
 
-.section-head h2 {
-  letter-spacing: -0.01em;
+.button-progressive:hover {
+  background: #447ff5;
+  border-color: #447ff5;
 }
 
-.panel {
-  background: var(--surface-alt);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  margin-bottom: 16px;
-}
-
-.grid-2 {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 10px;
-}
-
-.split {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
-  gap: 28px;
-  align-items: start;
-}
-
-/* ── chips & badges ───────────────────────────────────────────────────── */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.chip:hover {
-  background: var(--surface-alt);
-  color: var(--text);
-  text-decoration: none;
-}
-
-.chip-person {
-  border-color: color-mix(in srgb, var(--human) 40%, var(--border));
-  color: var(--human);
-  background: var(--human-bg);
-}
-
-.badge {
-  display: inline-block;
-  padding: 0 7px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 550;
-  letter-spacing: 0.01em;
-  border: 1px solid currentColor;
-  white-space: nowrap;
-}
-
-.badge-unreviewed {
-  color: var(--unreviewed);
-  background: var(--unreviewed-bg);
-}
-.badge-confirmed {
-  color: var(--confirmed);
-  background: var(--confirmed-bg);
-}
-.badge-disputed {
-  color: var(--disputed);
-  background: var(--disputed-bg);
-}
-.badge-human {
-  color: var(--human);
-  background: var(--human-bg);
-}
-.badge-neutral {
-  color: var(--neutral);
-  background: var(--neutral-bg);
-}
-
-.outcome {
-  font-size: 11px;
-  font-weight: 550;
-  padding: 0 7px;
-  border-radius: 4px;
-  border: 1px solid currentColor;
-}
-.outcome-success {
-  color: var(--confirmed);
-  background: var(--confirmed-bg);
-}
-.outcome-partial {
-  color: var(--unreviewed);
-  background: var(--unreviewed-bg);
-}
-.outcome-abandoned {
-  color: var(--disputed);
-  background: var(--disputed-bg);
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  flex-wrap: wrap;
-}
-
-.row-tight {
-  gap: 5px;
-}
-
-/* ── text utilities ───────────────────────────────────────────────────── */
-.muted {
-  color: var(--text-muted);
-  font-size: 13px;
+/* ── small helpers ────────────────────────────────────────────────────── */
+.subtle {
+  color: var(--subtle);
 }
 
 .faint {
-  color: var(--text-faint);
-  font-size: 12px;
+  color: var(--faint);
+  font-size: 0.95em;
 }
 
 .mono {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 0.92em;
 }
 
 .empty {
-  color: var(--text-faint);
-  font-size: 13px;
+  color: var(--subtle);
   font-style: italic;
-  padding: 10px 0;
+  margin: 0.4em 0 1em;
 }
 
-.stack > * + * {
-  margin-top: 10px;
+.editsection {
+  font-size: 0.75em;
+  font-weight: normal;
+  font-family: var(--sans);
+  margin-left: 0.6em;
+  white-space: nowrap;
 }
 
-/* ── stream (the discovery feed) ──────────────────────────────────────── */
-.stream-item {
-  display: grid;
-  grid-template-columns: 132px minmax(0, 1fr);
-  gap: 14px;
-  padding: 11px 0;
-  border-bottom: 1px solid var(--border);
+.editsection::before {
+  content: '[';
+  color: var(--subtle);
 }
 
-.stream-when {
-  color: var(--text-faint);
-  font-size: 12px;
-  padding-top: 2px;
+.editsection::after {
+  content: ']';
+  color: var(--subtle);
 }
 
-.stream-intent {
-  font-weight: 500;
+/* Status wording, set inline as text rather than as coloured pills. */
+.status-unreviewed {
+  color: var(--warning);
+}
+.status-disputed {
+  color: var(--error);
+}
+.status-confirmed {
+  color: var(--success);
 }
 
-.stream-intent:hover {
-  color: var(--accent);
+.error-box {
+  border: 1px solid var(--error);
+  border-left: 10px solid var(--error);
+  background: #fee7e6;
+  padding: 0.5em 1em;
+  margin-bottom: 1em;
 }
 
-@media (max-width: 720px) {
-  .shell {
-    grid-template-columns: 1fr;
-  }
-  .sidebar {
-    position: static;
-    height: auto;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-  .stream-item {
-    grid-template-columns: 1fr;
-    gap: 4px;
-  }
-  .split {
-    grid-template-columns: 1fr;
-  }
-  .content,
-  .topbar {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
+.clear {
+  clear: both;
 }
 
-/* ── markdown note bodies ─────────────────────────────────────────────── */
-.md > *:first-child {
-  margin-top: 0;
-}
-.md > *:last-child {
-  margin-bottom: 0;
-}
-
-.md h1,
-.md h2,
-.md h3 {
-  margin: 20px 0 8px;
-  font-size: 16px;
-}
-
-.md ul,
-.md ol {
-  margin: 0 0 12px;
-  padding-left: 22px;
-}
-
-.md li {
-  margin-bottom: 3px;
-}
-
-.md code {
-  font-family: var(--mono);
-  font-size: 0.88em;
-  background: var(--surface-alt);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 1px 4px;
-}
-
-.md pre {
-  background: var(--surface-alt);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px 14px;
-  overflow-x: auto;
-}
-
-.md pre code {
-  background: none;
-  border: none;
-  padding: 0;
-}
-
-.md blockquote {
-  margin: 0 0 12px;
-  padding-left: 14px;
-  border-left: 3px solid var(--border-strong);
-  color: var(--text-muted);
-}
-
-.md table {
-  border-collapse: collapse;
-  width: 100%;
-  margin-bottom: 12px;
-  font-size: 14px;
-}
-
-.md th,
-.md td {
-  border: 1px solid var(--border);
-  padding: 6px 10px;
-  text-align: left;
-}
-
-.md th {
-  background: var(--surface-alt);
-}
-
-/* Wide content scrolls inside its own box; the page never scrolls sideways. */
 .scroll-x {
   overflow-x: auto;
   max-width: 100%;
 }
 
+/* ── article prose (markdown note bodies) ─────────────────────────────── */
+.md > *:first-child {
+  margin-top: 0;
+}
+
+.md > *:last-child {
+  margin-bottom: 0;
+}
+
+.md h1,
+.md h2 {
+  /* Never let a section rule run underneath a floated infobox — the heading
+     starts below it instead, which is what MediaWiki's own layout does. */
+  clear: right;
+  font-family: var(--serif);
+  font-weight: normal;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.2em;
+}
+
+.md h2 {
+  font-size: 1.4em;
+}
+
+.md h3 {
+  font-size: 1.05em;
+}
+
+.md code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  background: var(--neutral);
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+  padding: 1px 4px;
+}
+
+.md pre {
+  background: var(--neutral);
+  border: 1px solid var(--border-subtle);
+  padding: 1em;
+  overflow-x: auto;
+  line-height: 1.45;
+}
+
+.md pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+.md blockquote {
+  margin: 0 0 1em;
+  padding-left: 1em;
+  border-left: 3px solid var(--border-subtle);
+  color: var(--subtle);
+}
+
+.md table {
+  border-collapse: collapse;
+  border: 1px solid var(--border);
+  margin-bottom: 1em;
+}
+
+.md th,
+.md td {
+  border: 1px solid var(--border);
+  padding: 0.3em 0.6em;
+  text-align: left;
+}
+
+.md th {
+  background: var(--header-bg);
+}
+
+/* ── main page (portal) boxes ─────────────────────────────────────────── */
+.portal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1em;
+}
+
+.portal-box {
+  border: 1px solid var(--border-subtle);
+  background: var(--surface);
+  padding: 0.8em 1em 1em;
+}
+
+.portal-box > h2 {
+  margin-top: 0;
+  font-size: 1.2em;
+}
+
+.portal-lead {
+  border: 1px solid var(--border-subtle);
+  background: var(--neutral);
+  padding: 1em 1.2em;
+  margin-bottom: 1.2em;
+  text-align: center;
+}
+
+.portal-lead h1 {
+  font-family: var(--serif);
+  font-weight: normal;
+  font-size: 1.7em;
+  margin: 0 0 0.2em;
+  border: 0;
+}
+
 /* ── login ────────────────────────────────────────────────────────────── */
 .login-wrap {
   display: flex;
-  align-items: center;
   justify-content: center;
-  min-height: 100vh;
-  padding: 24px;
+  padding: 60px 20px;
 }
 
 .login-card {
   width: 100%;
   max-width: 380px;
+  border: 1px solid var(--border-subtle);
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 28px;
+  padding: 24px;
 }
 
-.error {
-  color: var(--disputed);
-  background: var(--disputed-bg);
-  border: 1px solid currentColor;
-  border-radius: 6px;
-  padding: 8px 11px;
-  font-size: 13px;
-  margin-bottom: 12px;
-}
-
-/* Shared-note list inside a connection edge. */
-.edge-notes {
-  margin: 4px 0 0;
-  padding-left: 14px;
-  font-size: 12.5px;
-  color: var(--text-muted);
-}
-
-.edge-notes li {
-  margin-bottom: 2px;
-}
-
-.edge-notes a:hover {
-  color: var(--accent);
-}
-
-/* Nav links to sections that exist in the taxonomy but hold nothing yet. */
-.nav-link-empty {
-  opacity: 0.45;
-}
-
-/* ── breadcrumbs ──────────────────────────────────────────────────────── */
-.crumbs {
-  font-size: 13px;
-  color: var(--text-faint);
-  margin-bottom: 10px;
-}
-
-.crumbs a:hover {
-  color: var(--text);
-}
-
-.crumbs span + span::before {
-  content: '/';
-  margin: 0 7px;
-  color: var(--border-strong);
-}
-
-/* ── tables ───────────────────────────────────────────────────────────── */
-table.list {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-table.list th {
-  text-align: left;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-  padding: 0 10px 6px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-table.list td {
-  padding: 9px 10px 9px 0;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
-}
-
-table.list tr:hover td {
-  background: var(--surface-alt);
+/* ── responsive ───────────────────────────────────────────────────────── */
+@media (max-width: 850px) {
+  .shell {
+    display: block;
+  }
+  .sidebar {
+    width: auto;
+    position: static;
+    max-height: none;
+    border-bottom: 1px solid var(--border-subtle);
+    padding-bottom: 12px;
+  }
+  .main {
+    border-left: 0;
+  }
+  .content {
+    padding: 16px;
+  }
+  .infobox {
+    float: none;
+    width: auto;
+    margin: 0 0 1em;
+  }
 }

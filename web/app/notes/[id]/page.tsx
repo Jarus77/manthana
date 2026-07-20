@@ -1,118 +1,132 @@
 'use client'
 
+/**
+ * A knowledge entry, as an article.
+ *
+ * This page is where the encyclopedia framing earns the most. A claim written
+ * by a model from session evidence, which a human may correct, is structurally
+ * a Wikipedia article: it has provenance, sources, a revision history, and
+ * maintenance notices when it is unreviewed or contradicted. So it renders as
+ * one — banner at the top, body as prose, evidence as a numbered reference
+ * list, categories at the foot.
+ */
+
 import Link from 'next/link'
 import { use } from 'react'
 import { Wiki } from '@/components/Loader'
 import { TeachControls } from '@/components/TeachControls'
 import {
-  Crumbs,
+  CatLinks,
+  Empty,
+  Hatnote,
+  Infobox,
   Markdown,
-  PersonChip,
-  ProjectChip,
+  NoteBanners,
+  PersonList,
+  ProjectLink,
+  Reflist,
   Section,
-  SessionCard,
-  StatusBadge,
-  when,
+  Title,
+  onDate,
+  statusWord,
 } from '@/components/primitives'
 import { KIND_SINGULAR, type NotePage } from '@/lib/types'
 
-export default function NoteDetail({ params }: { params: Promise<{ id: string }> }) {
+export default function NoteArticle({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
 
   return (
     <Wiki<NotePage> path={`/notes/${encodeURIComponent(id)}`}>
       {(data, mutate) => {
         const note = data.note
+        const status = statusWord(note)
+        const kind = KIND_SINGULAR[note.kind] ?? note.kind
+
         return (
           <>
-            <Crumbs
-              trail={[
-                { label: 'Knowledge', href: '/knowledge/all' },
-                { label: KIND_SINGULAR[note.kind] ?? note.kind, href: `/knowledge/${note.kind}` },
-                { label: note.title },
+            <Title tagline={`A ${kind} recorded in the Manthana wiki`}>{note.title}</Title>
+
+            <NoteBanners note={note} />
+
+            <Hatnote>
+              {note.source === 'human' ? (
+                <>
+                  Written by <b>{note.author}</b>. Human entries are authoritative — Manthana
+                  may dispute this with evidence, but will never overwrite it.
+                </>
+              ) : (
+                <>
+                  Written by Manthana from the {data.evidence.length} session
+                  {data.evidence.length === 1 ? '' : 's'} cited below.
+                </>
+              )}
+            </Hatnote>
+
+            <Infobox
+              title={note.title}
+              subtitle={kind[0].toUpperCase() + kind.slice(1)}
+              rows={[
+                ['Status', status ? <span className={status.cls}>{status.text}</span> : 'established'],
+                ['Source', note.source === 'human' ? `${note.author} (human)` : 'Manthana'],
+                ['Project', note.project ? <ProjectLink project={note.project} /> : '—'],
+                ['People', note.actors.length ? <PersonList actors={note.actors} /> : '—'],
+                ['Evidence', `${data.evidence.length} session${data.evidence.length === 1 ? '' : 's'}`],
+                ...(note.metric && note.value
+                  ? ([[note.metric, <b key="v">{note.value}</b>]] as Array<[string, React.ReactNode]>)
+                  : []),
+                ['Revision', `${note.version}`],
+                ['Updated', onDate(note.updated_at)],
+                ['Confirmed by', note.confirmed_by ?? '—'],
               ]}
             />
-            <h1>{note.title}</h1>
-            <div className="row" style={{ margin: '10px 0 20px' }}>
-              <StatusBadge note={note} />
-              {note.project && <ProjectChip project={note.project} />}
-              <span className="faint">
-                {note.source === 'human' ? `written by ${note.author}` : 'written by Manthana'} ·
-                updated {when(note.updated_at)} · v{note.version}
-              </span>
-              <Link className="muted" href={`/notes/${note.id}/history`}>
-                history →
-              </Link>
+
+            <div className="lead">
+              <Markdown>{note.body}</Markdown>
             </div>
 
-            {note.status === 'disputed' && (
-              <div className="error" style={{ marginBottom: 16 }}>
-                Later sessions contradict this claim — read the conflicting sessions below
-                before relying on it.
-              </div>
+            <Section title="Evidence">
+              {data.evidence.length ? (
+                <>
+                  <p className="subtle">
+                    The sessions this entry was drawn from. Reading them is how you check it.
+                  </p>
+                  <Reflist sessions={data.evidence} />
+                </>
+              ) : (
+                <Empty>
+                  {note.source === 'human'
+                    ? 'Added by hand — this knowledge never came from a session.'
+                    : 'The sessions behind this entry have since been purged.'}
+                </Empty>
+              )}
+            </Section>
+
+            {data.disputed_by.length > 0 && (
+              <Section id="disputed" title="Conflicting evidence">
+                <p className="subtle">Later sessions that contradict the claim above.</p>
+                <Reflist sessions={data.disputed_by} />
+              </Section>
             )}
 
-            <div className="split">
-              <div>
-                <div className="card prose">
-                  {note.kind === 'benchmark' && note.value && (
-                    <p className="mono">
-                      {note.metric ?? 'value'}: <b>{note.value}</b>
-                    </p>
-                  )}
-                  <Markdown>{note.body}</Markdown>
-                </div>
+            <Section
+              title="Edit"
+              action={<Link href={`/notes/${note.id}/history`}>history</Link>}
+            >
+              <TeachControls note={note} onChanged={mutate} />
+            </Section>
 
-                <div style={{ margin: '16px 0 28px' }}>
-                  <TeachControls note={note} onChanged={mutate} />
-                </div>
-
-                <Section title="Evidence">
-                  {data.evidence.length ? (
-                    data.evidence.map((s) => <SessionCard key={s.id} session={s} />)
-                  ) : (
-                    <p className="empty">
-                      {note.source === 'human'
-                        ? 'Added by hand — this knowledge never came from a session.'
-                        : 'The sessions behind this claim have since been purged.'}
-                    </p>
-                  )}
-                </Section>
-
-                {data.disputed_by.length > 0 && (
-                  <Section title="Conflicting sessions">
-                    {data.disputed_by.map((s) => (
-                      <SessionCard key={s.id} session={s} />
-                    ))}
-                  </Section>
-                )}
-              </div>
-
-              <div className="panel">
-                <div className="nav-label" style={{ padding: '0 0 6px' }}>
-                  People behind this
-                </div>
-                <div className="row">
-                  {note.actors.length ? (
-                    note.actors.map((a) => <PersonChip key={a} actor={a} />)
-                  ) : (
-                    <span className="faint">nobody recorded</span>
-                  )}
-                </div>
-                {note.entities.files.length > 0 && (
-                  <>
-                    <div className="nav-label" style={{ padding: '14px 0 4px' }}>
-                      Files
-                    </div>
-                    <div className="mono muted scroll-x">
-                      {note.entities.files.map((f) => (
-                        <div key={f}>{f}</div>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
+            <CatLinks
+              categories={[
+                { label: KIND_SINGULAR[note.kind] ?? note.kind, href: `/knowledge/${note.kind}` },
+                ...(note.project
+                  ? [{ label: note.project, href: `/projects/${encodeURIComponent(note.project)}` }]
+                  : []),
+                ...(note.status === 'candidate'
+                  ? [{ label: 'Unreviewed entries', href: '/knowledge/all?status=candidate' }]
+                  : []),
+                ...(note.source === 'human' ? [{ label: 'Human-written entries' }] : []),
+              ]}
+            />
           </>
         )
       }}
