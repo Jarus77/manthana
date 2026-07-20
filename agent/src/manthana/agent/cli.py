@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import typer
 from manthana.agent.actions import TriggerEvent, default_dispatcher, tag_all
 from manthana.agent.capture import ingest_all
-from manthana.agent.compact import compact_pending, compact_session
+from manthana.agent.compact import DEFAULT_SETTLE_SECONDS, compact_pending, compact_session
 from manthana.agent.datahome import db_path, resolve_data_home
 from manthana.agent.store import Store
 from manthana.schemas import ActionOutcome, Mode
@@ -292,7 +292,7 @@ def watch(
     interval: float = 5.0,
     auto_compact: bool = True,
     summarized_only: bool = False,
-    settle_min: float = 10.0,
+    settle_min: float = DEFAULT_SETTLE_SECONDS / 60.0,
     max_per_cycle: int = 5,
     auto_release: bool = True,
     release_min: float = 10.0,

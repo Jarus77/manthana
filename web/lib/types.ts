@@ -15,6 +15,10 @@ export type NoteKind =
   | 'benchmark'
   | 'procedure_ref'
   | 'faq'
+  // A page's own description, not browsable knowledge. In the union because
+  // /notes/[id] renders it when reached from a project's "Correct it" link,
+  // but deliberately absent from me.kinds so it never enters the nav.
+  | 'project_overview'
 
 export type NoteStatus =
   | 'candidate'
@@ -174,10 +178,20 @@ export interface Page<T> {
   org_id: string
 }
 
+/** One project an engineer works on, with the sessions behind it. The rollup is
+ *  computed over exactly the sessions listed, so its counts always match. */
+export interface PersonProject {
+  rollup: ProjectRollup
+  sessions: Session[]
+}
+
 export interface PersonPage {
   actor: string
   activity: ActorActivity | null
   sections: Section[]
+  projects: PersonProject[]
+  /** Sessions that ran outside a git repo, so no project could be named. */
+  unfiled: Session[]
   sessions: Session[]
   connections: PersonEdge[]
   org_id: string
@@ -185,6 +199,8 @@ export interface PersonPage {
 
 export interface ProjectPage {
   project: string
+  /** What the project IS — a versioned, human-correctable note. */
+  overview: Note | null
   rollup: ProjectRollup | null
   sections: Section[]
   sessions: Session[]
@@ -236,6 +252,7 @@ export const KIND_LABEL: Record<NoteKind, string> = {
   benchmark: 'Benchmarks',
   procedure_ref: 'Procedures',
   faq: 'FAQ',
+  project_overview: 'Project overviews',
 }
 
 export const KIND_SINGULAR: Record<NoteKind, string> = {
@@ -246,4 +263,5 @@ export const KIND_SINGULAR: Record<NoteKind, string> = {
   benchmark: 'benchmark',
   procedure_ref: 'procedure',
   faq: 'question',
+  project_overview: 'project description',
 }

@@ -239,6 +239,37 @@ class KnowledgeNoteRow(SQLModel, table=True):
     data: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
 
 
+class ProjectOverviewStateRow(SQLModel, table=True):
+    """Per-project bookkeeping for the project-overview generation pass.
+
+    CONSOLIDATION shape (a positive ``done`` marker), not the enrichment shape
+    (delete-on-success): there is no field on a project that flips to record
+    "described", because a project is not a row anywhere — it is a string.
+
+    ``contributors_hash`` is the entire cost control. It digests the exact set of
+    compaction ids the current overview was written from, so the pass regenerates
+    when the WORK changed rather than when the clock moved. Keyed on time
+    instead, ten projects on an hourly loop would be ~87,000 model calls a year.
+
+    ``state="human_held"`` records that a human has edited this overview: the
+    pass then re-hashes for free and never calls a model for that project again.
+
+    New TABLE, so ``create_all`` upgrades existing DBs without a migration.
+    """
+
+    __tablename__ = "project_overview_state"  # type: ignore[assignment]
+    id: str = Field(primary_key=True)  # org-namespaced: org::project
+    org_id: str = Field(index=True)
+    project: str = Field(index=True)
+    contributors_hash: str = Field(default="", index=True)
+    note_id: str = Field(default="")  # current overview note ("" = none written)
+    state: str = Field(default="done", index=True)
+    # done | failed | abandoned | human_held | insufficient
+    attempts: int = Field(default=0)
+    detail: str = Field(default="")
+    updated_at: str
+
+
 class KnowledgeEdgeRow(SQLModel, table=True):
     """A typed, evidenced relationship between two wiki objects.
 
@@ -327,6 +358,7 @@ SERVER_TABLES = [
     KnowledgeNoteVectorRow,
     KnowledgeEdgeRow,
     ConsolidationStateRow,
+    ProjectOverviewStateRow,
 ]
 
 __all__ = [
@@ -349,5 +381,6 @@ __all__ = [
     "KnowledgeNoteVectorRow",
     "ConsolidationStateRow",
     "KnowledgeEdgeRow",
+    "ProjectOverviewStateRow",
     "SERVER_TABLES",
 ]

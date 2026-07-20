@@ -24,7 +24,7 @@ from manthana.collectors import ClaudeCodeCollector, CodexCollector
 
 from .actions import Dispatcher, TriggerEvent, default_dispatcher
 from .capture import IngestResult, ReadableCollector, ingest_file
-from .compact import compact_settled
+from .compact import DEFAULT_SETTLE_SECONDS, compact_settled
 from .release import auto_release as _auto_release
 from .store import Store
 
@@ -56,7 +56,7 @@ def watch(
     interval: float = 5.0,
     auto_compact: bool = False,
     summarized_only: bool = False,
-    settle_seconds: float = 600.0,
+    settle_seconds: float = DEFAULT_SETTLE_SECONDS,
     max_per_cycle: int = 5,
     iterations: int | None = None,
     ingest: Callable[..., IngestResult] = ingest_file,

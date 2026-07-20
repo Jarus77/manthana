@@ -75,7 +75,7 @@ Tools (mirror local-disk exploration → no accuracy drop):
    Founder connects: `claude mcp add --transport http manthana https://api.latentspaces.in/mcp/ --header "Authorization: Bearer <founder token>"`.
 2. **Agent egress change — DONE (2026-07-18), smaller than scoped.** Discovery: the
    auto pipeline was ALREADY default-on in the shipped agent (`manthana watch`:
-   auto_compact settled 10m quiet → auto_release after a 10-min opt-out window,
+   auto_compact settled 30m quiet → auto_release after a 10-min opt-out window,
    personal/held excluded → auto-sync each cycle) — `eligible_for_sync` needed no
    loosening; release.py's opt-out window IS the "everything except personal" model.
    The only gap: the watcher's sync adapter didn't upload raw. Fixed:

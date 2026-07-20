@@ -41,6 +41,7 @@ from .tables import (
     OrgPrivacyRow,
     OrgQuotaRow,
     OrgRow,
+    ProjectOverviewStateRow,
     PurgeAuditRow,
     RawTranscriptRow,
     ReleasedCompactionRow,
@@ -647,6 +648,91 @@ class ServerStore:
             db.add(old)
             db.merge(self._note_row(new_note))
             db.commit()
+
+    # ── project-overview pass bookkeeping ────────────────────────────────
+    def overview_state(self, org_id: str) -> dict[str, ProjectOverviewStateRow]:
+        """Every project's overview state for an org, keyed by project."""
+        with DBSession(self._engine) as db:
+            stmt = select(ProjectOverviewStateRow).where(
+                ProjectOverviewStateRow.org_id == org_id
+            )
+            return {row.project: row for row in db.exec(stmt)}
+
+    def mark_overview_done(
+        self,
+        org_id: str,
+        project: str,
+        *,
+        contributors_hash: str,
+        note_id: str = "",
+        state: str = "done",
+    ) -> None:
+        with DBSession(self._engine) as db:
+            db.merge(
+                ProjectOverviewStateRow(
+                    id=_pk(org_id, project),
+                    org_id=org_id,
+                    project=project,
+                    contributors_hash=contributors_hash,
+                    note_id=note_id,
+                    state=state,
+                    attempts=0,
+                    detail="",
+                    updated_at=_now_iso(),
+                )
+            )
+            db.commit()
+
+    def record_overview_failure(self, org_id: str, project: str, *, detail: str) -> int:
+        """Bump the attempt counter. Returns the new count so the caller can
+        decide to abandon — bounded retries, same posture as enrichment."""
+        with DBSession(self._engine) as db:
+            row = db.get(ProjectOverviewStateRow, _pk(org_id, project))
+            attempts = (row.attempts if row else 0) + 1
+            db.merge(
+                ProjectOverviewStateRow(
+                    id=_pk(org_id, project),
+                    org_id=org_id,
+                    project=project,
+                    contributors_hash=row.contributors_hash if row else "",
+                    note_id=row.note_id if row else "",
+                    state="failed",
+                    attempts=attempts,
+                    detail=detail[:500],
+                    updated_at=_now_iso(),
+                )
+            )
+            db.commit()
+            return attempts
+
+    def mark_overview_abandoned(self, org_id: str, project: str, *, detail: str) -> None:
+        with DBSession(self._engine) as db:
+            row = db.get(ProjectOverviewStateRow, _pk(org_id, project))
+            db.merge(
+                ProjectOverviewStateRow(
+                    id=_pk(org_id, project),
+                    org_id=org_id,
+                    project=project,
+                    contributors_hash=row.contributors_hash if row else "",
+                    note_id=row.note_id if row else "",
+                    state="abandoned",
+                    attempts=row.attempts if row else 0,
+                    detail=detail[:500],
+                    updated_at=_now_iso(),
+                )
+            )
+            db.commit()
+
+    def list_overview_state(
+        self, org_id: str, *, state: str | None = None, limit: int = 200
+    ) -> list[ProjectOverviewStateRow]:
+        with DBSession(self._engine) as db:
+            stmt = select(ProjectOverviewStateRow).where(
+                ProjectOverviewStateRow.org_id == org_id
+            )
+            if state is not None:
+                stmt = stmt.where(ProjectOverviewStateRow.state == state)
+            return list(db.exec(stmt.limit(limit)))
 
     # ── knowledge graph edges ────────────────────────────────────────────
     def add_edges(self, org_id: str, edges: list[dict[str, Any]]) -> int:

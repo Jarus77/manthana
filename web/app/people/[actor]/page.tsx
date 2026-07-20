@@ -43,8 +43,9 @@ export default function PersonArticle({ params }: { params: Promise<{ actor: str
         const act = data.activity
         const sections = [
           ...(act ? [{ id: 'current', label: 'Current work' }] : []),
+          ...(data.projects.length ? [{ id: 'projects', label: 'Projects' }] : []),
           ...data.sections.map((s) => ({ id: s.kind, label: KIND_LABEL[s.kind] })),
-          { id: 'sessions', label: 'Sessions' },
+          ...(data.unfiled.length ? [{ id: 'unfiled', label: 'Unfiled sessions' }] : []),
           ...(data.connections.length ? [{ id: 'see-also', label: 'See also' }] : []),
         ]
 
@@ -109,14 +110,59 @@ export default function PersonArticle({ params }: { params: Promise<{ actor: str
 
             {act && (
               <Section id="current" title="Current work">
-                <p>What they have been doing, taken from their most recent sessions:</p>
-                <ul>
-                  {act.intents.map((intent, i) => (
-                    <li key={i}>{clip(intent, 200)}</li>
-                  ))}
-                </ul>
+                {act.intents.length ? (
+                  <>
+                    <p>What they have been doing, taken from their most recent sessions:</p>
+                    <ul>
+                      {act.intents.map((intent, i) => (
+                        <li key={i}>{clip(intent, 200)}</li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <Empty>
+                    Their recent sessions have not been summarised yet, so there is nothing
+                    to show here. The sessions themselves are listed below.
+                  </Empty>
+                )}
               </Section>
             )}
+
+            {/* Projects lead. An engineer has several projects and each has
+                several sessions; the old flat list could not show which link
+                belonged to what. Each block's counts come from the very
+                sessions listed beneath it. */}
+            <Section id="projects" title="Projects">
+              {data.projects.length ? (
+                <>
+                  <p className="subtle">
+                    Every project {name} has released work against, most recently active first.
+                  </p>
+                  {data.projects.map(({ rollup, sessions }) => (
+                    <div key={rollup.project} style={{ marginBottom: '1.2em' }}>
+                      <h3 id={`project-${rollup.project}`}>
+                        <ProjectLink project={rollup.project} />
+                      </h3>
+                      <p className="subtle">
+                        {rollup.sessions} session{rollup.sessions === 1 ? '' : 's'} · last{' '}
+                        {when(rollup.last_active)}
+                        {Object.keys(rollup.outcome_mix).length > 0 &&
+                          ` · ${Object.entries(rollup.outcome_mix)
+                            .map(([k, v]) => `${v} ${k}`)
+                            .join(', ')}`}
+                      </p>
+                      <ul>
+                        {sessions.map((s) => (
+                          <SessionRow key={s.id} session={s} />
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <Empty>No released sessions attributed to a project.</Empty>
+              )}
+            </Section>
 
             {data.sections.map((section) => (
               <Section
@@ -136,17 +182,19 @@ export default function PersonArticle({ params }: { params: Promise<{ actor: str
               </Section>
             ))}
 
-            <Section id="sessions" title="Sessions">
-              {data.sessions.length ? (
+            {data.unfiled.length > 0 && (
+              <Section id="unfiled" title="Unfiled sessions">
+                <p className="subtle">
+                  Sessions that ran outside a git repository, so Manthana could not attribute
+                  them to a project. Listed here so they stay reachable.
+                </p>
                 <ul>
-                  {data.sessions.map((s) => (
+                  {data.unfiled.map((s) => (
                     <SessionRow key={s.id} session={s} />
                   ))}
                 </ul>
-              ) : (
-                <Empty>No released sessions.</Empty>
-              )}
-            </Section>
+              </Section>
+            )}
 
             {data.connections.length > 0 && (
               <Section id="see-also" title="See also">

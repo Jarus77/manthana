@@ -69,6 +69,25 @@ _GRAPH_WINDOW_DAYS = 45
 _MAX_CANDIDATES = 12
 _MAX_NEW_NOTES = 3
 
+#: Kinds the per-session adjudicator may create.
+#:
+#: ``project_overview`` is excluded BY CONSTRUCTION: it describes a whole
+#: project and is written by a dedicated pass, so a single session could never
+#: ground one. ``faq`` is excluded because nothing populates it yet.
+#:
+#: This is a real gate, not documentation. ``_new_note`` builds ``NoteKind``
+#: straight from model output, so the moment a member exists a hallucinating
+#: adjudicator can create it — the prompt alone has never been able to stop that.
+#: Both the prompt and the parser read this tuple, so they cannot drift.
+ADJUDICABLE_KINDS: tuple[NoteKind, ...] = (
+    NoteKind.decision,
+    NoteKind.convention,
+    NoteKind.gotcha,
+    NoteKind.failure_pattern,
+    NoteKind.procedure_ref,
+    NoteKind.benchmark,
+)
+
 # Confidence dynamics: supports bumps toward (not past) the ceiling.
 _CONFIDENCE_BUMP = 0.1
 _CONFIDENCE_CEILING = 0.95
@@ -181,8 +200,9 @@ def build_adjudication_prompt(
         '{"verdicts": [{"note_id": "<id>", "relation":',
         '  "supports|contradicts|refines|unrelated", "updated_body": "<only for refines>",',
         '  "value": "<only for refines of a benchmark whose number moved>"}],',
-        ' "new_notes": [{"kind": "decision|convention|gotcha|failure_pattern|'
-        'procedure_ref|benchmark",',
+        # Built from ADJUDICABLE_KINDS so the prompt and the parser's allowlist
+        # cannot drift apart.
+        ' "new_notes": [{"kind": "' + "|".join(str(k) for k in ADJUDICABLE_KINDS) + '",',
         '  "title": "...", "body": "...", "files": [], "libraries": [], "concepts": [],',
         '  "metric": null, "value": null}]}',
         "",
@@ -328,6 +348,8 @@ def _new_note(
         kind = NoteKind(str(item.get("kind", "")))
     except ValueError:
         return None
+    if kind not in ADJUDICABLE_KINDS:
+        return None  # the prompt is not a gate; this is
     title = str(item.get("title") or "").strip()
     body = str(item.get("body") or "").strip()
     if not title or not body:

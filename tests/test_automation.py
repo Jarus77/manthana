@@ -154,3 +154,39 @@ def test_claude_cli_captures_cost_and_usage(monkeypatch) -> None:
     assert p.complete("x") == "ok"
     assert p.last_cost_usd == 0.0123
     assert p.last_usage == {"input_tokens": 10, "output_tokens": 5}
+
+
+# ── the settle window must never be shorter than the session gap ─────────────
+def test_settle_default_is_derived_from_the_session_gap() -> None:
+    """The anti-drift test, and the point of the constant.
+
+    `sessionize` closes a segment only when the next turn lands more than GAP
+    after the last. A settle window shorter than GAP compacts a session
+    sessionize has not yet closed — half a session, uploaded, then rewritten
+    under the same deterministic `comp-` id, which makes the server re-enrich it
+    and pay twice. These were two independently-chosen numbers (600 vs 1800) and
+    nothing caught the mismatch, so the default is now derived.
+    """
+    from manthana.agent.compact import DEFAULT_SETTLE_SECONDS
+    from manthana.collectors.sessionize import GAP
+
+    assert DEFAULT_SETTLE_SECONDS == GAP.total_seconds()
+
+
+def test_default_settle_does_not_compact_a_mid_session_pause() -> None:
+    """The regression. A 20-minute coffee break is long enough for the OLD
+    10-minute window to fire, but not long enough for sessionize to have ended
+    the session — so it produced a digest of half a session."""
+    store = Store.open_memory()
+    _seed_session(store, "s1")
+    now = 100_000.0
+    out = compact_settled(store, now=now, mtime_of=lambda _p: now - 20 * 60)
+    assert out == [] and store.get_compaction("comp-s1") is None
+
+
+def test_default_settle_compacts_once_the_gap_has_passed() -> None:
+    store = Store.open_memory()
+    _seed_session(store, "s1")
+    now = 100_000.0
+    out = compact_settled(store, now=now, mtime_of=lambda _p: now - 31 * 60)
+    assert len(out) == 1 and store.get_compaction("comp-s1") is not None

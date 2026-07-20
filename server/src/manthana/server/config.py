@@ -108,6 +108,19 @@ class ServerConfig:
     # gotchas, benchmarks) via one cheap adjudication call per session. OFF by
     # default, same posture as enable_enrichment: it spends real money in a
     # background loop. The pass is directly callable/testable regardless.
+    # ── project overviews ────────────────────────────────────────────────
+    # Writes one `project_overview` note per project describing what the project
+    # IS, because a project slug is only ever the git repo directory name and
+    # "scribe is a project in the LSIITB organisation" is not a description.
+    # OFF by default, same posture as enrichment and consolidation: it spends
+    # real money in a background loop.
+    enable_project_overview: bool = False
+    overview_interval_seconds: int = 3600  # a description changes over weeks
+    overview_max_per_pass: int = 10        # whole-pass bound across all orgs
+    overview_session_limit: int = 40       # sessions fed to one call
+    overview_min_sessions: int = 3         # below this there is nothing to describe
+    overview_max_attempts: int = 3
+
     enable_consolidation: bool = False
     # Bulk adjudication, not reasoning — same tier logic as enrich_model.
     consolidate_model: str = "claude-haiku-4-5"
@@ -167,6 +180,18 @@ class ServerConfig:
             )
         if self.max_raw_bytes < 1:
             raise ValueError(f"max_raw_bytes must be >= 1, got {self.max_raw_bytes}")
+        # An interval of 0 busy-loops the background task; the rest are counts
+        # whose only sane floor is 1 (0 would silently disable the pass while
+        # still reporting it enabled).
+        for name in (
+            "overview_interval_seconds",
+            "overview_max_per_pass",
+            "overview_session_limit",
+            "overview_min_sessions",
+            "overview_max_attempts",
+        ):
+            if getattr(self, name) < 1:
+                raise ValueError(f"{name} must be >= 1, got {getattr(self, name)}")
         if self.max_request_bytes < 1:
             raise ValueError(f"max_request_bytes must be >= 1, got {self.max_request_bytes}")
         # Enrichment bounds. A non-positive batch/attempt/age would either spin the
@@ -282,6 +307,24 @@ class ServerConfig:
             ),
             enrich_max_age_days=int(
                 env("MANTHANA_SERVER_ENRICH_MAX_AGE_DAYS", str(cls.enrich_max_age_days))
+            ),
+            enable_project_overview=(
+                env("MANTHANA_SERVER_ENABLE_PROJECT_OVERVIEW", "") in ("1", "true", "yes")
+            ),
+            overview_interval_seconds=int(
+                env("MANTHANA_SERVER_OVERVIEW_INTERVAL", str(cls.overview_interval_seconds))
+            ),
+            overview_max_per_pass=int(
+                env("MANTHANA_SERVER_OVERVIEW_MAX_PER_PASS", str(cls.overview_max_per_pass))
+            ),
+            overview_session_limit=int(
+                env("MANTHANA_SERVER_OVERVIEW_SESSION_LIMIT", str(cls.overview_session_limit))
+            ),
+            overview_min_sessions=int(
+                env("MANTHANA_SERVER_OVERVIEW_MIN_SESSIONS", str(cls.overview_min_sessions))
+            ),
+            overview_max_attempts=int(
+                env("MANTHANA_SERVER_OVERVIEW_MAX_ATTEMPTS", str(cls.overview_max_attempts))
             ),
             enable_consolidation=(
                 env("MANTHANA_SERVER_ENABLE_CONSOLIDATION", "") in ("1", "true", "yes")

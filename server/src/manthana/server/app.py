@@ -49,6 +49,7 @@ from .hardening import install_hardening
 from .llm import LLMProvider, make_consolidate_provider, make_enrich_provider, make_provider
 from .metering import MeteredProvider, QuotaExceededError, month_key
 from .mining import FAILED, QUOTA, run_mining
+from .overview import overview_provider_for, run_overview_pass
 from .purge import PurgeSelector, purge
 from .storage import ObjectStore, make_object_store
 from .store import ServerStore
@@ -200,8 +201,19 @@ def create_app(
         make_consolidate_provider(config) if config.enable_consolidation else None
     )
 
+    # Writes one project_overview note per project. Its own provider so a
+    # description backlog cannot delay the passes that feed it.
+    overview_provider = (
+        make_consolidate_provider(config) if config.enable_project_overview else None
+    )
+
     lifespan: Any = None
-    if _mcp_server is not None or enrich_provider is not None or consolidate_provider is not None:
+    if (
+        _mcp_server is not None
+        or enrich_provider is not None
+        or consolidate_provider is not None
+        or overview_provider is not None
+    ):
         # Compose the lifespans with an AsyncExitStack so enabling one background
         # feature can never disturb another — each is entered only when its own
         # feature is on, and all unwind in order on shutdown.
@@ -218,6 +230,9 @@ def create_app(
                 if consolidate_provider is not None:
                     ctask = asyncio.create_task(_consolidation_loop(consolidate_provider))
                     stack.callback(ctask.cancel)
+                if overview_provider is not None:
+                    otask = asyncio.create_task(_overview_loop(overview_provider))
+                    stack.callback(otask.cancel)
                 yield
 
         lifespan = _lifespan
@@ -258,6 +273,28 @@ def create_app(
                 raise
             except Exception:  # noqa: BLE001 - a bad pass must not kill the loop
                 _log.exception("consolidation pass failed; will retry next interval")
+
+    async def _overview_loop(inner: LLMProvider) -> None:
+        """Sibling of the other two: periodic, off-thread, error-swallowing.
+
+        Runs on a much longer interval because what a project IS changes on the
+        scale of weeks, and because the pass is a no-op whenever no new work has
+        landed — the contributors hash, not the clock, decides whether anything
+        is spent.
+        """
+        provider_for = overview_provider_for(store, config, inner)
+        while True:
+            try:
+                await asyncio.sleep(config.overview_interval_seconds)
+                stats = await asyncio.to_thread(
+                    run_overview_pass, store, config, provider_for
+                )
+                if stats.written or stats.failed:
+                    _log.info("project overview pass: %s", stats.as_dict())
+            except asyncio.CancelledError:  # shutdown
+                raise
+            except Exception:  # noqa: BLE001 - a bad pass must not kill the loop
+                _log.exception("overview pass failed; will retry next interval")
 
     app = FastAPI(title="Manthana Server", lifespan=lifespan)
     install_hardening(app, config)

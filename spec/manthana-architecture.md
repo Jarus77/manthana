@@ -1320,7 +1320,7 @@ actually re-syncs (sync dedups by id).
 
 **Watcher wiring** (`watcher.py`): compaction + release run on a `auto_min_interval` (30 s)
 throttle, **independent of file changes** (so a session that just *went* quiet is still picked
-up), emitting per-cycle call cost. `cli.py watch` defaults: `--auto-compact`, `--settle-min 10`,
+up), emitting per-cycle call cost. `cli.py watch` defaults: `--auto-compact`, `--settle-min 30`,
 `--max-per-cycle 5`, `--auto-release`, `--release-min 10`, `--sync` (auto-compact disabled when
 no real CLI is present so a Mock never silently writes empty digests).
 

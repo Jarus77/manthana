@@ -69,6 +69,7 @@ def _compaction(
     released: bool = False,
     hold: bool = False,
     days: int = 0,
+    source: str = "full",  # these fixtures model ENRICHED digests
 ) -> None:
     at = _T0 + timedelta(days=days)
     store.upsert_compaction(
@@ -82,6 +83,7 @@ def _compaction(
             ended_at=at,
             duration_seconds=60.0,
             task_intent=intent,
+            source=source,
             approach="swept temperature, fixed the harness",
             outcome=Outcome.success,
             est_cost_usd=0.5,
