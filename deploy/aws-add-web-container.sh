@@ -105,6 +105,30 @@ if [ -z "$WEB_TG" ] || [ "$WEB_TG" = "None" ]; then
 fi
 echo "ok: $WEB_TG"
 
+# ── 2b. Let the ALB reach the client's port ──────────────────────────────────
+# The task security group allowed 8000 and nothing else, because until now the
+# task only ever listened on 8000. Without this the client's health check can
+# never pass, and since ECS kills a task that stays unhealthy in ANY registered
+# target group, the server dies with it — the whole deploy fails with the server
+# looking perfectly fine in its own logs.
+say "2b. security group: allow ALB -> task:$WEB_PORT"
+TASK_SG=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --region "$REGION" \
+            --query 'services[0].networkConfiguration.awsvpcConfiguration.securityGroups[0]' --output text)
+# The ALB's own SG, taken from the rule that already admits it on 8000 — derived
+# rather than hardcoded, so this stays correct if the ALB is rebuilt.
+ALB_SG=$(aws ec2 describe-security-groups --group-ids "$TASK_SG" --region "$REGION" \
+           --query "SecurityGroups[0].IpPermissions[?FromPort==\`8000\`].UserIdGroupPairs[0].GroupId | [0]" \
+           --output text)
+echo "task SG $TASK_SG, ALB SG $ALB_SG"
+if aws ec2 describe-security-groups --group-ids "$TASK_SG" --region "$REGION" \
+     --query "SecurityGroups[0].IpPermissions[?FromPort==\`$WEB_PORT\`]" --output text | grep -q .; then
+  echo "ok: port $WEB_PORT already open"
+else
+  aws ec2 authorize-security-group-ingress --group-id "$TASK_SG" --region "$REGION" \
+    --ip-permissions "IpProtocol=tcp,FromPort=$WEB_PORT,ToPort=$WEB_PORT,UserIdGroupPairs=[{GroupId=$ALB_SG,Description=\"ALB to wiki client\"}]" \
+    --query 'SecurityGroupRules[0].SecurityGroupRuleId' --output text
+fi
+
 # ── 3. Pin the server's paths BEFORE anything can take the default ───────────
 say "3. listener rules: server paths -> server target group"
 existing=$(aws elbv2 describe-rules --listener-arn "$LISTENER_443" --region "$REGION" \
@@ -125,6 +149,26 @@ else
 fi
 echo "NOTE: behaviourally a no-op right now — the default still forwards to the"
 echo "      server. These rules are what makes step 5 safe."
+
+# ── 3b. Attach the client target group at ZERO weight ────────────────────────
+# ECS refuses to register a service against a target group that "does not have an
+# associated load balancer", and a target group only becomes associated by being
+# named in some listener action. So the default action becomes a WEIGHTED forward
+# carrying both groups — server 100, client 0.
+#
+# Behaviourally identical to the plain forward it replaces (all traffic still
+# goes to the server), but it associates the client group so step 4b can attach,
+# and it turns the cutover into a weight change rather than a target swap — which
+# also makes a gradual rollout possible if you ever want one.
+say "3b. attach client target group to the listener at weight 0"
+weights() {
+  printf '[{"Type":"forward","ForwardConfig":{"TargetGroups":[{"TargetGroupArn":"%s","Weight":%s},{"TargetGroupArn":"%s","Weight":%s}]}}]' \
+    "$SERVER_TG" "$1" "$WEB_TG" "$2"
+}
+aws elbv2 modify-listener --listener-arn "$LISTENER_443" \
+  --default-actions "$(weights 100 0)" \
+  --region "$REGION" --query 'Listeners[0].ListenerArn' --output text
+echo "ok: client attached, receiving 0% of traffic"
 
 # ── 4. Add the web container + second load-balancer mapping ──────────────────
 say "4. task definition: add the web container"
@@ -199,12 +243,12 @@ EOF
 fi
 
 # ── 5. THE CUTOVER ───────────────────────────────────────────────────────────
-say "5. flipping the listener default -> client"
-echo "Rollback (run this if anything looks wrong):"
-echo "  aws elbv2 modify-listener --listener-arn $LISTENER_443 \\"
-echo "    --default-actions Type=forward,TargetGroupArn=$SERVER_TG --region $REGION"
+say "5. shifting the listener default to the client (0% -> 100%)"
+echo "Rollback — one command, takes effect immediately:"
+echo "  aws elbv2 modify-listener --listener-arn $LISTENER_443 --region $REGION \\"
+echo "    --default-actions '$(weights 100 0)'"
 aws elbv2 modify-listener --listener-arn "$LISTENER_443" \
-  --default-actions "Type=forward,TargetGroupArn=$WEB_TG" \
+  --default-actions "$(weights 0 100)" \
   --region "$REGION" --query 'Listeners[0].ListenerArn' --output text
 
 # ── 6. Retire the HTML wiki ──────────────────────────────────────────────────
