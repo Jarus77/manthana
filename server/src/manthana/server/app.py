@@ -53,6 +53,7 @@ from .purge import PurgeSelector, purge
 from .storage import ObjectStore, make_object_store
 from .store import ServerStore
 from .ui import mount_ui
+from .wiki_api import mount_wiki_api
 from .wiki_ui import mount_wiki_ui
 
 
@@ -936,6 +937,10 @@ def create_app(
     # The wiki console shares mount_ui's cookie session (path='/ui'), so it must
     # be mounted on the same app and under the same path prefix.
     mount_wiki_ui(app, config, store, provider, provider_for=org_provider)
+    # JSON twin of the wiki for the browser client. Same cookie, same /ui prefix
+    # (the cookie is path-scoped there), same teach functions — a transport, not
+    # a second product.
+    mount_wiki_api(app, config, store, provider, provider_for=org_provider)
     if mcp_asgi is not None:
         app.mount("/mcp", mcp_asgi)
     return app
