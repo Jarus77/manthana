@@ -41,7 +41,21 @@ RATE_LIMITS: dict[tuple[str, str], int] = {
     ("POST", "/v1/founder/thread"): 30,
     ("POST", "/v1/founder/drill"): 30,
     ("POST", "/ui/query"): 30,
+    ("POST", "/ui/api/wiki/login"): 10,
+    ("POST", "/ui/api/wiki/ask"): 30,
 }
+
+#: Path prefix whose writes are authenticated by the console COOKIE rather than
+#: a header credential, and so need CSRF protection (see ``_JSON_WRITE_PREFIX``
+#: use below). The cookie is ``samesite=lax``, which already stops a cross-site
+#: form from carrying it; requiring a JSON content type closes the remaining
+#: "simple request" shape, since an HTML form can only ever send
+#: form-urlencoded, multipart, or text/plain.
+#:
+#: This lives in the middleware rather than in a route dependency because
+#: FastAPI validates the request body BEFORE dependencies run — a route-level
+#: check would return a body-shaped 422 and never reach the content-type test.
+_JSON_WRITE_PREFIX = "/ui/api/"
 
 
 class SlidingWindowLimiter:
@@ -73,6 +87,15 @@ def install_hardening(app: FastAPI, config: ServerConfig) -> None:
         declared = request.headers.get("content-length")
         if declared and declared.isdigit() and int(declared) > config.max_request_bytes:
             return JSONResponse(status_code=413, content={"detail": "request too large"})
+        if (
+            request.method in ("POST", "PUT", "PATCH", "DELETE")
+            and request.url.path.startswith(_JSON_WRITE_PREFIX)
+            and not request.headers.get("content-type", "").startswith("application/json")
+        ):
+            return JSONResponse(
+                status_code=415,
+                content={"detail": "writes require Content-Type: application/json"},
+            )
         limit = RATE_LIMITS.get((request.method, request.url.path))
         if limit is not None:
             client_ip = request.client.host if request.client else "unknown"

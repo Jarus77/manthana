@@ -134,6 +134,66 @@ def org_home(
 
 
 @dataclass(frozen=True)
+class DiscoveryFeed:
+    """The home page of the shared wiki — built for DISCOVERY, not oversight.
+
+    Two differences from ``HomeFeed``, both deliberate:
+
+      * a ``stream`` of recent sessions, so opening the wiki answers "what is
+        everyone actually doing" before you have thought of a question;
+      * ``sections`` keyed by note kind, emitted only for kinds that have fresh
+        content. ``HomeFeed`` promoted *benchmark* to a top-level field, which
+        made one org's use case part of everyone's information architecture —
+        here a benchmark is simply the kind that happens to have moved this week.
+
+    Benchmark notes still carry their prev→new delta (via ``benchmarks``, keyed
+    by note id) because that IS the readable form of a benchmark; it is a
+    rendering hint, not a section.
+    """
+
+    org_id: str
+    since: str
+    stream: list[SessionCard] = field(default_factory=list)
+    sections: list[tuple[NoteKind, list[KnowledgeNote]]] = field(default_factory=list)
+    projects: list[ProjectRollup] = field(default_factory=list)
+    people: list[ActorActivity] = field(default_factory=list)
+    benchmarks: dict[str, BenchmarkDelta] = field(default_factory=dict)
+    unreviewed: int = 0
+
+
+def discovery_feed(
+    store: ServerStore,
+    org_id: str,
+    *,
+    now: datetime | None = None,
+    days: int = HOME_WINDOW_DAYS,
+    stream_limit: int = 40,
+) -> DiscoveryFeed:
+    """This week across the org, as a browsable stream plus whatever knowledge
+    kinds actually moved."""
+    _now, since = _window(now, days)
+    comps = store.query_compactions(org_id=org_id, since=since, limit=stream_limit)
+    windowed = store.query_compactions(org_id=org_id, since=since)
+    fresh = _live_notes(store, org_id, since=since)
+    sections = [
+        (kind, [n for n in fresh if n.kind == kind])
+        for kind in SECTION_ORDER
+        if any(n.kind == kind for n in fresh)
+    ]
+    deltas = _benchmark_deltas(store, org_id, [n for n in fresh if n.kind == NoteKind.benchmark])
+    return DiscoveryFeed(
+        org_id=org_id,
+        since=since,
+        stream=session_cards(comps),
+        sections=sections,
+        projects=project_rollups(windowed),
+        people=activity_rollup(windowed),
+        benchmarks={d.note.id: d for d in deltas},
+        unreviewed=len(_live_notes(store, org_id, status=str(NoteStatus.candidate))),
+    )
+
+
+@dataclass(frozen=True)
 class ProjectPage:
     project: str
     rollup: ProjectRollup | None  # None when nothing happened in the window
@@ -239,12 +299,14 @@ def note_page(
 
 __all__ = [
     "BenchmarkDelta",
+    "DiscoveryFeed",
     "HomeFeed",
     "PersonPage",
     "ProjectPage",
     "HOME_WINDOW_DAYS",
     "PROJECT_WINDOW_DAYS",
     "SECTION_ORDER",
+    "discovery_feed",
     "note_page",
     "org_home",
     "person_page",

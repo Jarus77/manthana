@@ -1,8 +1,12 @@
 # Full Manthana org stack: the server + Postgres + MinIO, one command.
 #
 #   cp .env.example .env     # set JWT secret, admin token, (optional) ANTHROPIC_API_KEY
-#   docker compose up -d     # builds the server image, starts pg + minio + bucket + server
+#   docker compose up -d     # builds server + web images, starts pg + minio + bucket + both apps
 #   open http://localhost:8000/ui   # founder console (sign in with the admin token)
+#
+# The team wiki (web, :3000) needs the reverse proxy in deploy/Caddyfile in front
+# of it so its /ui/* API calls reach the server on the SAME origin — the session
+# cookie is path-scoped and httponly, so a cross-origin client cannot send it.
 #
 # The server container reaches pg/minio by service name (postgres:5432, minio:9000);
 # host ports below (5433, 9000/9001, 8000) are for your machine. Tests still run on
@@ -75,6 +79,21 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+
+  # The wiki client. Serves the browser UI only; every API call it makes is a
+  # same-origin request to /ui/api/wiki/*, which the reverse proxy in front of
+  # both containers routes to `server` (see deploy/Caddyfile). Reaching this on
+  # :3000 directly works for a quick look, but the API calls will 404 without
+  # that proxy — use the proxied origin for real use.
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
 
 volumes:
   pgdata:

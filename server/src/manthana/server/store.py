@@ -581,12 +581,18 @@ class ServerStore:
         project: str | None = None,
         scope: str | None = None,
         since: str | None = None,
+        until: str | None = None,
         exclude_superseded: bool = True,
         limit: int | None = None,
     ) -> list[KnowledgeNote]:
         """Live notes for an org, newest-updated first. ``exclude_superseded``
         (the default) returns only current versions — history is fetched
-        explicitly via ``note_history``."""
+        explicitly via ``note_history``.
+
+        ``until`` bounds ``updated_at`` from above, mirroring
+        ``query_compactions``: it is what makes all-time cursor pagination work
+        on the wiki's browse-by-kind pages, where ``since``-windowing would hide
+        everything older than the feed window."""
         with DBSession(self._engine) as db:
             stmt = select(KnowledgeNoteRow).where(KnowledgeNoteRow.org_id == org_id)
             if kind is not None:
@@ -604,6 +610,11 @@ class ServerStore:
             since_norm = _normalize_since(since)
             if since_norm is not None:
                 stmt = stmt.where(col(KnowledgeNoteRow.updated_at) >= since_norm)
+            bound = _until_bound(until)
+            if bound is not None:
+                op, value = bound
+                column = col(KnowledgeNoteRow.updated_at)
+                stmt = stmt.where(column < value if op == "<" else column <= value)
             stmt = stmt.order_by(KnowledgeNoteRow.updated_at.desc())  # type: ignore[attr-defined]
             if limit is not None:
                 stmt = stmt.limit(limit)

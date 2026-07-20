@@ -142,6 +142,74 @@ into a `ConsoleSession(role, org_id, actor)`:
   used **only** to print the shareable login link. A wrong value yields a bad
   link, never a security hole.
 
+## 3b. Discovery client — the wiki as a place, not a report (added 2026-07-20)
+
+The server-rendered wiki (`wiki_ui.py`) had the right data and the wrong shape.
+Three faults, each a product decision rather than a styling gap:
+
+1. **No navigation.** Its only chrome was a four-link bar ("Home / Console / Log
+   out / API"), identical on every page, so nothing ever told a reader where they
+   were or what else existed. Knowledge older than the 7-day home window was
+   unreachable unless you already knew its project.
+2. **A hardcoded taxonomy on the home page.** `<h3>Benchmarks</h3>` sat between
+   decisions and projects — one org's use case promoted to everyone's information
+   architecture, while five other note kinds had no home-page presence at all.
+3. **Colleagues' sessions were invisible to colleagues.** Wiki session links
+   pointed at founder-gated console routes, so an engineer clicking one was
+   silently bounced to `/ui/home`. A digest its author had already released to the
+   team could be read by the founder and by nobody else.
+
+### What replaced it
+
+**`web/` — a Next.js client** (App Router, ~100 kB shared JS; `swr`,
+`react-markdown`, hand-written CSS, no component framework) against a JSON API.
+
+**`server/wiki_api.py` — the JSON twin**, mounted at **`/ui/api/wiki/*`**. The
+prefix is load-bearing for the same reason `wiki_ui.py`'s routes are: the cookie
+is `path='/ui'`, so an API under `/v1` would never receive it. It reuses
+`session_for` + `scope_org` unchanged and calls the same `teach` verbs — a
+transport, not a second set of rules.
+
+**`server/graph.py` — cross-entity edges.** Three co-occurrence signals, weighted:
+shared project (3) > co-citation in a note's `actors` (2) > shared file (1), with
+generic paths (README, lockfiles) filtered out. Pure functions over lists the
+handler already loaded, so an edge costs no extra query, and edges ride along in
+detail payloads rather than needing a round trip. Two shape decisions worth
+keeping: `via_*` lists are capped for display while `shared_*` carry the true
+counts (counting the capped list under-reports exactly the strongest links), and
+`via_notes` carries **titles**, because an edge justified as `kn-d8f2c98adc69`
+tells a reader nothing.
+
+**`pages.discovery_feed`** — home as a stream of recent sessions plus a section
+per note kind that *has* fresh content. `org_home` is untouched for the legacy
+HTML wiki. Benchmark deltas survive as a rendering hint keyed by note id, not as
+a privileged section.
+
+**Sessions are org-wide** for any signed-in role. Raw transcripts are not here and
+never will be: tier-2 drill-down stays the audited, founder-only
+`POST /v1/founder/drill`.
+
+**Named, deliberately.** No k-anon on this path, matching `pages.py` — and
+consistency was the deciding argument: person pages already list a named
+colleague's digests, so de-identifying the org-wide session list would have
+protected nobody while making two views of one dataset disagree. `privacy_mode`
+still gates the founder console's oversight surfaces.
+
+**CSRF lives in the middleware** (`hardening.py`), not a route dependency:
+FastAPI validates request bodies *before* dependencies run, so a route-level
+content-type check returns a body-shaped 422 and never fires. Cookie-authed
+writes under `/ui/api/` require `application/json`, which an HTML form cannot
+send; `samesite=lax` already blocks the cross-site cookie case.
+
+**Same origin, always.** Dev proxies `/ui/*` to :8000 via `next.config.mjs`
+rewrites; prod routes by path in `deploy/Caddyfile` (`/ui*`, `/v1*`, `/mcp*`,
+`/docs*`, `/healthz`, `/readyz` → server; everything else → `web`). A separate
+hostname for the client cannot work — no CORS configuration makes a browser
+attach an httponly cookie cross-origin.
+
+The legacy HTML wiki stays mounted and unchanged; the two coexist until the
+client has been used in anger.
+
 ## 4. Known v1 limitations
 
 - `faq` exists in the enum but nothing populates it (demand mining is agent-side).
@@ -154,8 +222,19 @@ into a `ConsoleSession(role, org_id, actor)`:
 - `tests/test_projections.py`, `test_knowledge_store.py`, `test_consolidate.py`,
   `test_wiki_pages.py`, `test_ask_notes.py`, `test_teach.py`, `test_wiki_ui.py`,
   `test_personal_wiki.py`, `test_engineer_console.py`.
+- Discovery client: `tests/test_graph.py` (edge weighting, noise filters, true-vs-
+  capped counts), `tests/test_wiki_api.py` (auth, tenant scoping, org-wide digests,
+  no raw-transcript surface, data-driven sections, pagination, teach verbs, the
+  CSRF content-type guard, and that `@property` values the client renders from are
+  real serialized fields — `asdict()` drops properties silently).
+- Client: `cd web && npm run build && npx tsc --noEmit`.
 - Demo: `uv run python validation/seed_demo_org.py && uv run python validation/seed_demo_notes.py`
   (deterministic scripted adjudication; `--live` for real Haiku), then boot the
   server against `manthana-demo.db` and open `/ui/home`. The seed anchors its dates
   to the **run date** (`MANTHANA_DEMO_NOW=YYYY-MM-DD` pins it) because the feeds are
   time-windowed — fixed past dates made a fresh demo look empty.
+- Discovery client end-to-end: seed as above, boot the server against
+  `manthana-demo.db`, then `cd web && npm run dev` and open
+  `http://localhost:3000/login` (the dev rewrite proxies `/ui/*`, so the cookie
+  stays same-origin). Walk: home stream → person → connections → session digest →
+  note → confirm/edit → history → ask.
