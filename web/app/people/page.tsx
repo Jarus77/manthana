@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { Wiki } from '@/components/Loader'
 import {
   Empty,
+  clip,
   PersonLink,
   ProjectLink,
   Section,
@@ -51,7 +52,7 @@ export default function PeopleIndexPage() {
                       <td style={{ whiteSpace: 'nowrap' }}>
                         <PersonLink actor={a.actor} />
                       </td>
-                      <td>{a.intents[0] ?? '—'}</td>
+                      <td>{a.intents[0] ? clip(a.intents[0]) : '—'}</td>
                       <td>
                         {a.projects.map((p, i) => (
                           <span key={p}>

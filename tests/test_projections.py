@@ -123,3 +123,29 @@ def test_filter_since() -> None:
     comps = [_comp("c1", at=_T0), _comp("c2", at=_T0 + timedelta(days=5))]
     assert [c.id for c in filter_since(comps, _T0 + timedelta(days=1))] == ["c2"]
     assert len(filter_since(comps, None)) == 2
+
+
+# ── junk project slugs ───────────────────────────────────────────────────
+def test_junk_project_slugs_are_not_projects() -> None:
+    """`unknown`/`project`/empty are the compactor's fallback when a session had
+    no repo context. They are an ABSENCE of a project, and listing them collects
+    unrelated work from everyone into one bucket that reads like a real effort."""
+    from manthana.skills.projections import is_real_project, project_rollups
+
+    assert is_real_project("rel-bench") is True
+    for junk in ("", "unknown", "project", "Projects", " TMP ", "untitled"):
+        assert is_real_project(junk) is False, junk
+
+    comps = [
+        _comp("c1", project="rel-bench"),
+        _comp("c2", project="unknown"),
+        _comp("c3", project="project"),
+    ]
+    assert [r.project for r in project_rollups(comps)] == ["rel-bench"]
+
+
+def test_actor_activity_drops_junk_projects() -> None:
+    from manthana.skills.projections import activity_rollup
+
+    comps = [_comp("c1", project="rel-bench"), _comp("c2", project="unknown")]
+    assert activity_rollup(comps)[0].projects == ["rel-bench"]

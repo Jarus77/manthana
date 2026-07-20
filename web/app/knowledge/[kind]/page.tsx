@@ -8,12 +8,17 @@
  * Durable knowledge that expires from view is not durable.
  */
 
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense, use, useState } from 'react'
 import { qs } from '@/lib/api'
 import { Loading, Wiki } from '@/components/Loader'
 import { Empty, NoteRow, Title } from '@/components/primitives'
 import { KIND_LABEL, type Note, type NoteKind, type Page } from '@/lib/types'
+
+const KINDS: NoteKind[] = [
+  'decision', 'convention', 'gotcha', 'failure_pattern',
+  'benchmark', 'procedure_ref', 'faq',
+]
 
 const STATUSES = [
   { value: '', label: 'Any status' },
@@ -60,6 +65,7 @@ function Chunk({
 }
 
 function Browser({ kind }: { kind: string }) {
+  const router = useRouter()
   const search = useSearchParams()
   const [status, setStatus] = useState(search.get('status') ?? '')
   const [cursors, setCursors] = useState<string[]>([''])
@@ -75,7 +81,21 @@ function Browser({ kind }: { kind: string }) {
         were written by Manthana and have not been checked by anyone.
       </p>
 
-      <div style={{ margin: '0 0 1em' }}>
+      {/* Kind moved here from the sidebar: it is a way to narrow a search you
+          are already making, not a destination in its own right. */}
+      <div style={{ display: 'flex', gap: 8, margin: '0 0 1em' }}>
+        <select
+          style={{ width: 'auto' }}
+          value={isAll ? '' : kind}
+          onChange={(e) => router.push(`/knowledge/${e.target.value || 'all'}`)}
+        >
+          <option value="">Any kind</option>
+          {KINDS.map((k) => (
+            <option key={k} value={k}>
+              {KIND_LABEL[k]}
+            </option>
+          ))}
+        </select>
         <select
           style={{ width: 'auto' }}
           value={status}

@@ -15,6 +15,7 @@ import { use } from 'react'
 import { Wiki } from '@/components/Loader'
 import {
   CatLinks,
+  clip,
   Empty,
   Hatnote,
   Infobox,
@@ -111,7 +112,7 @@ export default function PersonArticle({ params }: { params: Promise<{ actor: str
                 <p>What they have been doing, taken from their most recent sessions:</p>
                 <ul>
                   {act.intents.map((intent, i) => (
-                    <li key={i}>{intent}</li>
+                    <li key={i}>{clip(intent, 200)}</li>
                   ))}
                 </ul>
               </Section>

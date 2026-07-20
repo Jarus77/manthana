@@ -41,6 +41,23 @@ export function when(iso: string): string {
   })
 }
 
+/**
+ * Clip text at a WORD boundary.
+ *
+ * An unenriched digest's `task_intent` is the engineer's raw first prompt, which
+ * can be a paragraph. Cutting it at a character count produced the "…at the
+ * architec" endings that made the wiki look broken; cutting at a space at least
+ * ends on a word. Enrichment replaces these with real summaries, so this is the
+ * floor, not the goal.
+ */
+export function clip(text: string, max = 120): string {
+  const t = (text ?? '').trim().replace(/\s+/g, ' ')
+  if (t.length <= max) return t
+  const cut = t.slice(0, max)
+  const space = cut.lastIndexOf(' ')
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[,;:]$/, '')}…`
+}
+
 export function onDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
     year: 'numeric',
@@ -61,7 +78,11 @@ export function ProjectLink({ project }: { project: string }) {
 }
 
 export function SessionLink({ session }: { session: Session }) {
-  return <Link href={`/sessions/${session.id}`}>{session.task_intent || session.session_id}</Link>
+  return (
+    <Link href={`/sessions/${session.id}`}>
+      {clip(session.task_intent) || session.session_id}
+    </Link>
+  )
 }
 
 /** Comma-separated links, with "and" before the last — reads as a sentence. */

@@ -16,6 +16,7 @@ import { AskBar } from '@/components/AskBar'
 import { Wiki } from '@/components/Loader'
 import {
   Empty,
+  clip,
   NoteRow,
   PersonLink,
   ProjectLink,
@@ -97,7 +98,7 @@ export default function MainPage() {
                           <PersonLink actor={a.actor} />
                         </td>
                         <td>
-                          {a.intents[0] ?? '—'}
+                          {a.intents[0] ? clip(a.intents[0]) : '—'}
                           <div className="faint">
                             {a.projects.map((p, i) => (
                               <span key={p}>
@@ -156,7 +157,7 @@ export default function MainPage() {
                       <td>
                         <ProjectLink project={p.project} />
                       </td>
-                      <td>{p.top_intent}</td>
+                      <td>{clip(p.top_intent)}</td>
                       <td>{p.sessions}</td>
                       <td style={{ whiteSpace: 'nowrap' }}>{when(p.last_active)}</td>
                     </tr>
