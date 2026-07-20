@@ -207,8 +207,31 @@ rewrites; prod routes by path in `deploy/Caddyfile` (`/ui*`, `/v1*`, `/mcp*`,
 hostname for the client cannot work — no CORS configuration makes a browser
 attach an httponly cookie cross-origin.
 
-The legacy HTML wiki stays mounted and unchanged; the two coexist until the
-client has been used in anger.
+### Retiring the HTML wiki
+
+`MANTHANA_SERVER_RETIRE_HTML_WIKI` (`config.retire_html_wiki`, **default off**)
+swaps `mount_wiki_ui` for `mount_retired_wiki`, so exactly one wiki is live at a
+time — a flag that left both mounted would mean two renderers claiming one URL.
+Old pages 303 to their client equivalents (`/ui/home` → `/`,
+`/ui/page/project/{p}` → `/projects/{p}`, `/ui/page/person/{a}` → `/people/{a}`,
+`/ui/note/{id}[/history]` → `/notes/{id}[/history]`), with path segments
+percent-escaped so a project named `a?b` cannot turn its tail into a query
+string. Redirects are same-origin relative paths, not a configurable URL: the
+cookie is httponly and path-scoped, so a cross-origin client could not
+authenticate anyway.
+
+The form-POST endpoints return **410 Gone**, not a redirect. A 303 would convert
+them to a GET and discard the submitted body, which reads to a user as a save
+that silently vanished.
+
+**The default is load-bearing, not caution.** The client is a *separate
+deployable*: enabling this where nothing serves it replaces a working wiki with a
+404, because the redirect targets belong to the client. As of this writing the
+hosted AWS deploy (`deploy-aws.yml`) builds only `server/Dockerfile` and updates
+`containerDefinitions[0]` of a single-container ECS task — **the client is not
+deployed there at all**. Production cannot enable this flag until the `web`
+container ships (ECR repo, second container or service, path routing at the load
+balancer). Self-hosted compose already runs `web`, so it can.
 
 ## 4. Known v1 limitations
 

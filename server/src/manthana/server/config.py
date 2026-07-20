@@ -57,6 +57,17 @@ class ServerConfig:
     # Whole-request Content-Length ceiling (bytes). Slightly above max_raw_bytes
     # so the raw endpoint's own cap stays the binding limit on its path.
     max_request_bytes: int = 30_000_000
+    # Retire the legacy server-rendered wiki: when ON, every `/ui/...` wiki page
+    # 303s to the equivalent route in the Next.js client (`web/`) instead of
+    # rendering HTML. The founder console is unaffected.
+    #
+    # OFF by default, and the default is load-bearing rather than merely cautious:
+    # the client is a SEPARATE deployable. Turning this on where the client is not
+    # being served replaces a working wiki with a 404, because the redirect
+    # targets (`/`, `/people/...`) belong to the client, not to this server. Only
+    # enable it once something in front of this process routes non-`/ui` paths to
+    # the client — see deploy/Caddyfile and the `web` service in docker-compose.
+    retire_html_wiki: bool = False
     # Founder MCP gateway (spec: manthana-founder-mcp). OFF by default: the transport
     # mount has lifespan/session-manager wiring that must be verified with a live MCP
     # client before enabling, so it never risks the main app until proven.
@@ -243,6 +254,9 @@ class ServerConfig:
             public_url=env("MANTHANA_SERVER_PUBLIC_URL", cls.public_url).rstrip("/"),
             max_request_bytes=int(
                 env("MANTHANA_SERVER_MAX_REQUEST_BYTES", str(cls.max_request_bytes))
+            ),
+            retire_html_wiki=(
+                env("MANTHANA_SERVER_RETIRE_HTML_WIKI", "") in ("1", "true", "yes")
             ),
             enable_founder_mcp=(
                 env("MANTHANA_SERVER_ENABLE_FOUNDER_MCP", "") in ("1", "true", "yes")

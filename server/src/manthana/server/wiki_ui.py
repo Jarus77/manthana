@@ -20,9 +20,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 import logging
 from collections.abc import Callable
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import Cookie, FastAPI, Form
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from manthana.schemas import KnowledgeNote, NoteKind, NoteSource, NoteStatus
 
 from .ask import ask
@@ -177,6 +178,67 @@ def _default_org(store: ServerStore, sess: ConsoleSession, requested: str) -> st
         return org_id
     orgs = store.list_orgs()
     return orgs[0].id if orgs else ""
+
+
+def mount_retired_wiki(app: FastAPI) -> None:
+    """Retire the HTML wiki: every page 303s to its equivalent in the client.
+
+    Mounted INSTEAD of ``mount_wiki_ui`` when ``config.retire_html_wiki`` is on,
+    so there is exactly one wiki implementation live at a time — a flag that
+    left both renderers mounted would mean two things claiming the same URL.
+
+    Redirects are same-origin relative paths on purpose. The session cookie is
+    ``httponly`` and scoped ``path='/ui'``, which already forces the client to be
+    served from this hostname; a configurable absolute URL would invite a
+    cross-origin deployment that silently cannot authenticate.
+
+    Old links are kept working rather than 404'd — bookmarks, Slack messages and
+    the founder console's own nav all point at these paths, and an engineer who
+    followed one should land on the new page, not on an error telling them the
+    thing they wanted moved.
+    """
+
+    def _to(path: str) -> Response:
+        return RedirectResponse(url=path, status_code=303)
+
+    @app.get("/ui/home")
+    def retired_home() -> Response:
+        return _to("/")
+
+    @app.get("/ui/page/project/{project}")
+    def retired_project(project: str) -> Response:
+        return _to(f"/projects/{quote(project, safe='')}")
+
+    @app.get("/ui/page/person/{actor}")
+    def retired_person(actor: str) -> Response:
+        return _to(f"/people/{quote(actor, safe='')}")
+
+    @app.get("/ui/note/{note_id}")
+    def retired_note(note_id: str) -> Response:
+        return _to(f"/notes/{quote(note_id, safe='')}")
+
+    @app.get("/ui/note/{note_id}/history")
+    def retired_note_history(note_id: str) -> Response:
+        return _to(f"/notes/{quote(note_id, safe='')}/history")
+
+    # The teaching POSTs and the ask form have no redirect that preserves intent:
+    # a 303 turns them into a GET and the submitted body is gone, so silently
+    # bouncing to the client would look like a write that vanished. 410 Gone says
+    # what actually happened, and nothing still posts here — the only client that
+    # did was the HTML this flag retires.
+    @app.post("/ui/ask")
+    @app.post("/ui/note/edit")
+    @app.post("/ui/note/new")
+    @app.post("/ui/note/confirm")
+    @app.post("/ui/note/revert")
+    def retired_write() -> Response:
+        return JSONResponse(
+            {
+                "detail": "the HTML wiki is retired; use the wiki client "
+                "(POST /ui/api/wiki/... for programmatic access)"
+            },
+            status_code=410,
+        )
 
 
 def mount_wiki_ui(
@@ -621,4 +683,4 @@ def mount_wiki_ui(
         return RedirectResponse(url=f"/ui/note/{new.id}?org_id={org_id}", status_code=303)
 
 
-__all__ = ["mount_wiki_ui"]
+__all__ = ["mount_retired_wiki", "mount_wiki_ui"]

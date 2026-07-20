@@ -54,7 +54,7 @@ from .storage import ObjectStore, make_object_store
 from .store import ServerStore
 from .ui import mount_ui
 from .wiki_api import mount_wiki_api
-from .wiki_ui import mount_wiki_ui
+from .wiki_ui import mount_retired_wiki, mount_wiki_ui
 
 
 class CreateOrg(BaseModel):
@@ -935,8 +935,14 @@ def create_app(
 
     mount_ui(app, config, store, provider, object_store, provider_for=org_provider)
     # The wiki console shares mount_ui's cookie session (path='/ui'), so it must
-    # be mounted on the same app and under the same path prefix.
-    mount_wiki_ui(app, config, store, provider, provider_for=org_provider)
+    # be mounted on the same app and under the same path prefix. Exactly one of
+    # these is mounted: once the Next.js client is being served in front of this
+    # process, the HTML wiki is retired to redirects (see config.retire_html_wiki
+    # — off by default, because the client is a separate deployable).
+    if config.retire_html_wiki:
+        mount_retired_wiki(app)
+    else:
+        mount_wiki_ui(app, config, store, provider, provider_for=org_provider)
     # JSON twin of the wiki for the browser client. Same cookie, same /ui prefix
     # (the cookie is path-scoped there), same teach functions — a transport, not
     # a second product.
