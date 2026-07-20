@@ -484,6 +484,24 @@ class Store:
             db.merge(row)
             db.commit()
 
+    def mark_raw_unavailable(self, compaction_id: str, when: datetime) -> None:
+        """Record that the server permanently rejected this compaction's raw
+        upload, so the sync loop stops retrying it — without marking it synced,
+        which it is not. `doctor` reads this to surface a stuck backlog."""
+        with DBSession(self._engine) as db:
+            row = db.get(SyncStateRow, compaction_id) or SyncStateRow(compaction_id=compaction_id)
+            row.raw_unavailable_at = when.isoformat()
+            db.merge(row)
+            db.commit()
+
+    def raw_unavailable_ids(self) -> set[str]:
+        with DBSession(self._engine) as db:
+            return {
+                row.compaction_id
+                for row in db.exec(select(SyncStateRow))
+                if row.raw_unavailable_at is not None
+            }
+
     def clear_synced(self, compaction_id: str) -> None:
         """Forget a compaction's sync watermark so re-compacted (resumed) content
         re-syncs to the server (sync dedups by id, so a changed digest must be re-marked

@@ -120,6 +120,12 @@ class SyncStateRow(SQLModel, table=True):
     compaction_id: str = Field(primary_key=True)
     synced_at: str | None = Field(default=None)
     raw_synced_at: str | None = Field(default=None)
+    # Set when the server PERMANENTLY rejected a raw upload — a 4xx, in practice
+    # a 404 meaning the digest is not on the server (purged, or synced to a
+    # server since re-onboarded). Distinct from raw_synced_at: this stops the
+    # retry WITHOUT claiming success, so `doctor` can surface it. Cleared for
+    # free when the session re-compacts, since that deletes the whole row.
+    raw_unavailable_at: str | None = Field(default=None)
 
 
 __all__ = [

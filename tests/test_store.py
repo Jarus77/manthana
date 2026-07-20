@@ -128,8 +128,8 @@ def test_mark_released_updates_column_and_data(store: Store) -> None:
 
 def test_migrations_idempotent() -> None:
     engine = create_db_engine(":memory:")
-    assert run_migrations(engine) == [1, 2, 3, 4]
-    assert run_migrations(engine) == [1, 2, 3, 4]  # re-run applies nothing new
+    assert run_migrations(engine) == [1, 2, 3, 4, 5]
+    assert run_migrations(engine) == [1, 2, 3, 4, 5]  # re-run applies nothing new
 
 
 def test_missing_rows_return_none(store: Store) -> None:
