@@ -213,6 +213,19 @@ def test_session_detail_carries_the_digest_but_never_raw_turns() -> None:
     assert "jsonl" not in resp.text
 
 
+def test_session_detail_exposes_the_released_digest_verbatim() -> None:
+    # The verbatim page reads these. native_summary is redacted on the way off
+    # the laptop (it is not in the redactor's KEEP set), so it is exactly as
+    # shareable as `approach` — unlike the raw transcript, which is not here.
+    client, store, config = _make()
+    _seed(store)
+    _login(client, _engineer(config))
+    payload = client.get(f"{API}/sessions/c1").json()
+    assert "native_summary" in payload
+    assert "source" in payload
+    assert payload["session"]["approach"] == "swept temperature"
+
+
 def test_sessions_filter_by_actor_and_project() -> None:
     client, store, config = _make()
     _seed(store)

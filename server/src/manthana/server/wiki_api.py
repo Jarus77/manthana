@@ -372,8 +372,17 @@ def mount_wiki_api(
         notes = store.query_notes(org_id, exclude_superseded=True)
         links = session_related(comp, notes, _graph_window(org_id))
         card = session_card(comp)
+        # The digest AS RELEASED, verbatim. `native_summary` is the coding
+        # agent's own compaction summary — the prose the engineer's tool wrote
+        # about the session, which the structured fields were derived from. It
+        # is redacted on the way off the laptop like every other free-text field
+        # (it is not in the redactor's KEEP set), so it is exactly as shareable
+        # as `approach` already is. It is NOT the raw transcript, which stays
+        # behind the audited founder drill-down.
         return {
             "session": _jsonable(card),
+            "native_summary": getattr(comp, "native_summary", None),
+            "source": getattr(comp, "source", None),
             "notes": _jsonable(links.notes),
             "disputes": _jsonable(links.disputes),
             "same_actor": _jsonable(session_cards(links.same_actor)),
