@@ -195,6 +195,10 @@ export interface ProjectPage {
 
 export interface SessionPage {
   session: Session
+  /** The coding agent's own compaction summary, redacted like every other free
+   *  text field. Null when the session carried none. NOT the raw transcript. */
+  native_summary: string | null
+  source: string | null
   notes: Note[]
   disputes: Note[]
   same_actor: Session[]

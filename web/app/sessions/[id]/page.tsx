@@ -8,6 +8,7 @@
  * and nothing here hints at a route to it.
  */
 
+import Link from 'next/link'
 import { use } from 'react'
 import { Wiki } from '@/components/Loader'
 import {
@@ -66,7 +67,9 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
 
             <Hatnote>
               This is the digest its author released to the team. The full transcript is not
-              part of the wiki.
+              part of the wiki. To check what was released without any of this page&rsquo;s
+              framing, read the{' '}
+              <Link href={`/sessions/${s.id}/verbatim`}>released compaction verbatim</Link>.
             </Hatnote>
 
             <Infobox
