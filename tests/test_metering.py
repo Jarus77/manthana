@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from manthana.schemas import EngineeringCompaction, Outcome, Surface
 from manthana.server import ServerConfig, ServerStore, create_app
-from manthana.server.llm import ScriptedProvider
+from manthana.server.llm import MockProvider, ScriptedProvider
 from manthana.server.metering import (
     MeteredProvider,
     QuotaExceededError,
@@ -198,3 +198,51 @@ def test_console_shows_monthly_budget_column() -> None:
     page = client.get("/ui").text
     assert "AI budget (mo)" in page
     assert "$0.50 / $25.00" in page
+
+
+# ── per-pass attribution ─────────────────────────────────────────────────
+def _usage_store() -> ServerStore:
+    store = ServerStore.open("sqlite://")
+    store.create_org("o1", "Org")
+    return store
+
+
+def test_purpose_rows_accumulate_alongside_the_org_bucket() -> None:
+    store = _usage_store()
+    p1 = MeteredProvider(MockProvider("x" * 40), store, "o1", 0.0, purpose="enrich")
+    p2 = MeteredProvider(MockProvider("y" * 40), store, "o1", 0.0, purpose="ask")
+    p1.complete("prompt one")
+    p1.complete("prompt two")
+    p2.complete("prompt three")
+
+    from manthana.server.metering import month_key
+
+    month = month_key()
+    org = store.get_llm_usage("o1", month)
+    purposes = {r.purpose: r for r in store.list_llm_usage_purposes("o1", month)}
+    assert org.calls == 3
+    assert purposes["enrich"].calls == 2 and purposes["ask"].calls == 1
+    # Attribution reconciles with the bucket the cap enforces against.
+    assert sum(r.calls for r in purposes.values()) == org.calls
+    assert abs(sum(r.est_cost_usd for r in purposes.values()) - org.est_cost_usd) < 1e-9
+
+
+def test_unlabelled_provider_writes_only_the_org_bucket() -> None:
+    store = _usage_store()
+    MeteredProvider(MockProvider("z" * 40), store, "o1", 0.0).complete("p")
+    from manthana.server.metering import month_key
+
+    assert store.get_llm_usage("o1", month_key()).calls == 1
+    assert store.list_llm_usage_purposes("o1", month_key()) == []
+
+
+def test_cap_enforcement_ignores_purpose_mix() -> None:
+    """The cap stays whole-org: attribution is a lens, never a loophole."""
+    store = _usage_store()
+    spender = MeteredProvider(MockProvider("x" * 4000), store, "o1", 0.000001, purpose="ask")
+    spender.complete("first call is allowed to overshoot")
+    try:
+        MeteredProvider(MockProvider("y"), store, "o1", 0.000001, purpose="enrich").complete("p")
+        raise AssertionError("expected QuotaExceededError")
+    except QuotaExceededError:
+        pass

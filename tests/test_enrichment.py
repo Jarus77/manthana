@@ -160,25 +160,28 @@ def test_waits_when_neither_summary_nor_raw_has_arrived() -> None:
     assert provider.calls == []  # nothing spent
     assert _fetch(store).source == "pending"  # untouched
     state = store.get_enrichment_state("o1", "c1")
-    assert state is not None and state.state == "waiting" and state.attempts == 1
+    assert state is not None and state.state == "waiting"
+    # Waiting is not failure: attempts stay 0 so a late raw upload can never
+    # find the digest already abandoned. (Counting waits burned all five
+    # attempts in ~25 minutes and permanently stranded the session.)
+    assert state.attempts == 0
 
 
-def test_waiting_digest_is_abandoned_after_max_attempts() -> None:
-    # A bounded number of attempts — it can never retry forever.
+def test_waiting_never_abandons_by_attempt_count() -> None:
+    """The regression that stranded the wiki: five 5-minute waiting passes used
+    to count as five failed attempts and permanently abandon the digest ~25
+    minutes after ingest, even though its raw upload was merely late. Waiting
+    digests now retire on wall age ONLY (covered by the next test)."""
     store, obj = _seeded()
     config = _config(enrich_max_attempts=3)
     provider = MockProvider(_GOOD)
 
-    for _ in range(3):
+    for _ in range(10):  # far past the attempt cap
         enrich_org(store, obj, provider, config, org_id="o1", limit=10)
     stats = enrich_org(store, obj, provider, config, org_id="o1", limit=10)
 
-    assert stats.abandoned == 1
-    assert _state(store).state == "abandoned"
-    # Abandoned digests are never picked up again.
-    assert store.list_pending_for_enrichment(
-        "o1", skip_ids=store.abandoned_enrichment_ids("o1")
-    ) == []
+    assert stats.abandoned == 0
+    assert _state(store).state == "waiting"
     assert provider.calls == []
 
 
@@ -328,3 +331,140 @@ def test_enriched_digests_are_not_picked_up_again() -> None:
     assert first.enriched == 1
     assert second.enriched == 0  # no longer "pending"
     assert store.get_enrichment_state("o1", "c1") is None  # bookkeeping cleared
+
+
+# ── recovery: raw arriving un-sticks a digest ────────────────────────────
+def test_raw_arrival_requeues_a_waiting_digest() -> None:
+    store, obj = _seeded()
+    provider = MockProvider(_GOOD)
+    enrich_org(store, obj, provider, _config(), org_id="o1", limit=10)  # waits
+    assert _state(store).state == "waiting"
+
+    _put_raw(store, obj)  # the input it was waiting FOR
+    assert store.get_enrichment_state("o1", "c1") is None, "state row must reset"
+    enrich_org(store, obj, provider, _config(), org_id="o1", limit=10)
+    assert _fetch(store).source != "pending"
+
+
+def test_raw_arrival_recovers_an_abandoned_digest() -> None:
+    """Abandonment means 'gave up waiting for input'. The input arriving is the
+    one event that invalidates that judgement, so it must clear it — the old
+    behaviour skipped abandoned ids forever and the wiki filled with sessions
+    that could never be summarised."""
+    store, obj = _seeded()
+    provider = MockProvider(_GOOD)
+    config = _config(enrich_max_age_days=7)
+    enrich_org(store, obj, provider, config, org_id="o1", limit=10)
+    # age it out
+    later = datetime.now(UTC) + timedelta(days=8)
+    enrich_org(store, obj, provider, config, org_id="o1", limit=10, now=later)
+    assert _state(store).state == "abandoned"
+
+    _put_raw(store, obj)
+    enrich_org(store, obj, provider, config, org_id="o1", limit=10, now=later)
+    assert _fetch(store).source != "pending"
+
+
+def test_raw_arrival_leaves_failed_state_alone() -> None:
+    # `failed` attempts describe real model failures, not missing input.
+    store, obj = _seeded()
+    _put_raw(store, obj)
+    bad = ScriptedProvider(["not json at all"])
+    enrich_org(store, obj, bad, _config(), org_id="o1", limit=10)
+    assert _state(store).state == "failed"
+    before = _state(store).attempts
+    store.record_raw("c1", "o1", "o1/t1/c1.jsonl")  # a re-upload
+    assert _state(store).state == "failed" and _state(store).attempts == before
+
+
+def test_reset_abandoned_respects_input_gate_and_limit() -> None:
+    store, obj = _seeded()
+    provider = MockProvider(_GOOD)
+    config = _config(enrich_max_age_days=7)
+    enrich_org(store, obj, provider, config, org_id="o1", limit=10)
+    later = datetime.now(UTC) + timedelta(days=8)
+    enrich_org(store, obj, provider, config, org_id="o1", limit=10, now=later)
+    assert _state(store).state == "abandoned"
+
+    # No input exists → the gate refuses to requeue it (would re-abandon).
+    assert store.reset_abandoned_enrichment("o1") == []
+    # Input arrives (record_raw itself already clears it — simulate the pure
+    # endpoint path by re-abandoning first).
+    _put_raw(store, obj)
+    assert store.get_enrichment_state("o1", "c1") is None  # record_raw cleared it
+
+
+# ── ingest never downgrades an enriched digest ───────────────────────────
+def test_pending_resync_does_not_clobber_an_enriched_digest() -> None:
+    """Agents re-compact resumed sessions under the SAME id and re-sync as
+    pending. A blind overwrite threw away the paid-for summary and made the
+    server buy it again — every resume cost a second enrichment call."""
+    store, obj = _seeded()
+    _put_raw(store, obj)
+    enrich_org(store, obj, MockProvider(_GOOD), _config(), org_id="o1", limit=10)
+    enriched = _fetch(store)
+    assert enriched.source != "pending"
+
+    resync = _pending()  # same id, source="pending", no qualitative fields
+    store.ingest_compaction(resync, org_id="o1", team_id="t1")
+    after = _fetch(store)
+    assert after.source != "pending", "enriched source must survive a pending re-sync"
+    assert after.task_intent == enriched.task_intent
+    assert after.approach == enriched.approach
+
+
+def test_pending_resync_backfills_a_missing_native_summary() -> None:
+    store, obj = _seeded()
+    _put_raw(store, obj)
+    enrich_org(store, obj, MockProvider(_GOOD), _config(), org_id="o1", limit=10)
+
+    resync = _pending().model_copy(update={"native_summary": "the agent's own compact"})
+    store.ingest_compaction(resync, org_id="o1", team_id="t1")
+    assert _fetch(store).native_summary == "the agent's own compact"
+
+
+def test_enriched_resync_still_wins_wholesale() -> None:
+    # A re-released digest that already carries qualitative fields is
+    # authoritative — the guard only blocks DOWNGRADES.
+    store, obj = _seeded()
+    _put_raw(store, obj)
+    enrich_org(store, obj, MockProvider(_GOOD), _config(), org_id="o1", limit=10)
+
+    newer = _pending().model_copy(
+        update={"source": "full", "approach": "a fresh, fuller account"}
+    )
+    store.ingest_compaction(newer, org_id="o1", team_id="t1")
+    assert _fetch(store).approach == "a fresh, fuller account"
+
+
+def test_admin_retry_endpoint_unabandons_bounded() -> None:
+    from fastapi.testclient import TestClient
+    from manthana.server import create_app
+    from manthana.server.llm import MockProvider as MP
+    from manthana.server.storage import InMemoryObjectStore as Obj
+
+    store, obj = _seeded()
+    provider = MockProvider(_GOOD)
+    config = ServerConfig(jwt_secret="x" * 40, admin_token="adm")
+    # abandon it by age
+    enrich_org(store, obj, provider, _config(enrich_max_age_days=7), org_id="o1", limit=10)
+    later = datetime.now(UTC) + timedelta(days=8)
+    enrich_org(
+        store, obj, provider, _config(enrich_max_age_days=7), org_id="o1", limit=10, now=later
+    )
+    assert _state(store).state == "abandoned"
+    # record_raw would auto-clear; simulate raw existing WITHOUT the auto-clear
+    # by re-abandoning after the upload to exercise the endpoint's own gate.
+    _put_raw(store, obj)
+    store.mark_enrichment_abandoned("o1", "c1", detail="re-stuck")
+
+    client = TestClient(create_app(config, store, Obj(), MP("{}")), follow_redirects=False)
+    denied = client.post("/v1/admin/enrichment/retry?org_id=o1")
+    assert denied.status_code in (401, 403, 422)
+
+    resp = client.post(
+        "/v1/admin/enrichment/retry?org_id=o1", headers={"x-admin-token": "adm"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["reset"] == 1 and resp.json()["ids"] == ["c1"]
+    assert store.get_enrichment_state("o1", "c1") is None

@@ -306,7 +306,7 @@ def create_app(
         cap = store.get_org_quota(org_id)
         if cap is None:
             cap = config.llm_monthly_cap_usd
-        return MeteredProvider(provider, store, org_id, cap)
+        return MeteredProvider(provider, store, org_id, cap, purpose="founder")
 
     def privacy_open(org_id: str) -> bool:
         """True when this org waived anonymization (named, per-individual
@@ -732,6 +732,16 @@ def create_app(
             "month": month_key(),
             "monthly_cap_usd": cap,
             "cap_is_override": override is not None,
+            # Which pass spent it — the question a stalled org actually asks.
+            "purposes": {
+                r.purpose: {
+                    "calls": r.calls,
+                    "input_tokens": r.input_tokens,
+                    "output_tokens": r.output_tokens,
+                    "est_cost_usd": round(r.est_cost_usd, 6),
+                }
+                for r in store.list_llm_usage_purposes(org_id, month_key())
+            },
             "months": [
                 {
                     "month": r.month,
@@ -787,12 +797,35 @@ def create_app(
             else MeteredProvider(
                 enrich_provider, store, org_id,
                 store.get_org_quota(org_id) or config.llm_monthly_cap_usd,
+                purpose="enrich",
             ),
             config,
             org_id=org_id,
             limit=config.enrich_batch_per_org,
         )
         return stats.as_dict()
+
+    @app.post("/v1/admin/enrichment/retry")
+    def enrichment_retry(
+        org_id: str,
+        _: Annotated[None, Depends(require_admin)],
+        limit: int = 200,
+        include_without_input: bool = False,
+    ) -> dict[str, Any]:
+        """Un-abandon enrichment for digests that gave up waiting for input.
+
+        Recovery for the backlog stranded by the old waiting-counts-as-attempt
+        semantics: their raw may exist NOW even though it was late then. By
+        default only digests that could actually enrich (raw uploaded or a
+        native summary present, still pending) are reset, so the retry queue is
+        never refilled with the same nothing that abandoned them. Bounded —
+        un-abandoning re-enters the metered queue, and a big backlog should
+        drain in deliberate slices against the org's cap.
+        """
+        ids = store.reset_abandoned_enrichment(
+            org_id, only_with_input=not include_without_input, limit=min(max(1, limit), 500)
+        )
+        return {"reset": len(ids), "ids": ids}
 
     @app.get("/v1/admin/consolidation")
     def consolidation_status(
@@ -835,6 +868,7 @@ def create_app(
             MeteredProvider(
                 inner, store, org_id,
                 store.get_org_quota(org_id) or config.llm_monthly_cap_usd,
+                purpose="consolidate",
             ),
             config,
             org_id=org_id,

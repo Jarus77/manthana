@@ -606,7 +606,7 @@ def consolidate_provider_for(
         cap = store.get_org_quota(org_id)
         if cap is None:
             cap = config.llm_monthly_cap_usd
-        return MeteredProvider(inner, store, org_id, cap)
+        return MeteredProvider(inner, store, org_id, cap, purpose="consolidate")
 
     return _for
 
