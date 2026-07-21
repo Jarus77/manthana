@@ -349,3 +349,87 @@ def test_resync_help_says_it_re_uploads_and_deletes_nothing_locally() -> None:
     # Declared parameters, not rendered help — rich lays the options panel out
     # differently on a non-tty (CI), where the flag names don't reach stdout.
     assert "--confirm" in _param_opts(cli_app, "resync")
+
+
+# ── permanent raw failures must stop retrying ────────────────────────────
+def test_raw_404_stops_retrying_instead_of_looping_forever() -> None:
+    """A 404 means the server does not have this compaction — retrying the raw
+    can never succeed, and each retry re-redacts and re-uploads the whole
+    transcript. The old code treated it as transient and hammered forever."""
+    local = Store.open_memory()
+    _session(local, "w", Mode.work)
+    _comp(local, "cw", "w", released=True)
+    local.add_turns(
+        [Turn(id="t0", session_id="w", actor="eng@x.com", seq=0, role=Role.user, content="hi")]
+    )
+    fake = _FakeClient(raw_status=404)
+    client = SyncClient("", "tok", client=fake)
+
+    client.sync(local, include_raw=True)
+    assert "cw" in local.raw_unavailable_ids()
+    assert "cw" not in local.raw_synced_ids()  # NOT a false success
+    raw_posts = sum(1 for u in fake.posts if u.endswith("/raw"))
+    assert raw_posts == 1
+
+    # A second sync must NOT re-attempt it — that is the loop this fixes.
+    client.sync(local, include_raw=True)
+    assert sum(1 for u in fake.posts if u.endswith("/raw")) == 1
+
+
+def test_transient_5xx_still_retries() -> None:
+    # A server hiccup is not permanent; it must stay a candidate.
+    local = Store.open_memory()
+    _session(local, "w", Mode.work)
+    _comp(local, "cw", "w", released=True)
+    local.add_turns(
+        [Turn(id="t0", session_id="w", actor="eng@x.com", seq=0, role=Role.user, content="hi")]
+    )
+    fake = _FakeClient(raw_status=503)
+    client = SyncClient("", "tok", client=fake)
+    client.sync(local, include_raw=True)
+    assert "cw" not in local.raw_unavailable_ids()  # NOT given up
+    fake.raw_status = 200
+    client.sync(local, include_raw=True)
+    assert "cw" in local.raw_synced_ids()  # retried and landed
+
+
+def test_resync_clears_a_permanent_raw_rejection() -> None:
+    """resync is the recovery when the server was re-onboarded. A laptop whose
+    only watermark is a raw rejection must still be able to resync."""
+    local = Store.open_memory()
+    _session(local, "w", Mode.work)
+    _comp(local, "cw", "w", released=True)
+    local.add_turns(
+        [Turn(id="t0", session_id="w", actor="eng@x.com", seq=0, role=Role.user, content="hi")]
+    )
+    SyncClient("", "tok", client=_FakeClient(raw_status=404)).sync(local, include_raw=True)
+    assert local.raw_unavailable_ids() == {"cw"}
+    local.clear_synced("cw")  # what `manthana resync --confirm` does per id
+    assert local.raw_unavailable_ids() == set()
+
+
+def test_migration_adds_raw_unavailable_to_a_v4_database() -> None:
+    """A laptop already at v4 must gain the column, not crash on open."""
+    from manthana.agent.store import tables
+    from manthana.agent.store.migrations import run_migrations
+    from sqlalchemy import text
+    from sqlmodel import create_engine
+
+    engine = create_engine("sqlite://")
+    # Fake a DB that stopped at v4.
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, "
+            "name TEXT NOT NULL, applied_at TEXT NOT NULL)"
+        ))
+        for v in (1, 2, 3, 4):
+            conn.execute(
+                text("INSERT INTO schema_migrations VALUES (:v, 'x', '2026-01-01')"), {"v": v}
+            )
+        tables.SyncStateRow.__table__.create(conn)  # type: ignore[attr-defined]  # v3 shape
+
+    versions = run_migrations(engine)
+    assert 5 in versions
+    with engine.begin() as conn:
+        cols = {r[1] for r in conn.execute(text("PRAGMA table_info(sync_state)"))}
+        assert "raw_unavailable_at" in cols

@@ -273,6 +273,22 @@ def doctor() -> None:
         f"  • data: {n_sess} sessions · {n_comp} compactions "
         f"({store.count_pending()} pending) · {len(store.synced_ids())} synced · last sync {when}"
     )
+    # A stuck raw backlog is otherwise silent: the server 404s these forever in
+    # its logs, but the engineer sees nothing. Surface it with the one recovery
+    # that fixes the common cause.
+    n_unavailable = len(store.raw_unavailable_ids())
+    check(
+        n_unavailable == 0,
+        "raw transcripts sync",
+        "" if n_unavailable == 0
+        else (
+            f"{n_unavailable} rejected by the server as unknown — their digests "
+            "are missing there. If your org's server was wiped or re-onboarded, "
+            "run `manthana resync --confirm` then `manthana sync`; otherwise they "
+            "were purged and this is expected."
+        ),
+        critical=False,
+    )
     if failed:
         raise typer.Exit(code=1)
 
@@ -638,7 +654,9 @@ def resync(
     # what `sync` would push, so personal-mode and unreleased work is never counted
     # (nor made syncable) by clearing a watermark.
     eligible = eligible_for_sync(compactions, sessions)
-    marked = store.synced_ids() | store.raw_synced_ids()
+    # Include raw-unavailable: a laptop whose ONLY watermarks are permanent
+    # raw rejections must still be able to resync, or the recovery never triggers.
+    marked = store.synced_ids() | store.raw_synced_ids() | store.raw_unavailable_ids()
     held_back = len(compactions) - len(eligible)
 
     typer.echo(f"{len(eligible)} released, non-personal compaction(s) would be re-pushed")

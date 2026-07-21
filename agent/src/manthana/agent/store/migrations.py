@@ -65,6 +65,20 @@ def _create_vector_table(conn: Connection) -> None:
     SQLModel.metadata.create_all(conn, tables=[tables.CompactionVectorRow.__table__])  # type: ignore[list-item]
 
 
+def _add_raw_unavailable(conn: Connection) -> None:
+    """Add sync_state.raw_unavailable_at (v5) so a permanently-rejected raw
+    upload stops retrying. SQLite backfills NULL, which reads as "never
+    rejected", so existing rows keep their current behaviour.
+
+    Guarded: an OLD database created sync_state at v3 without this column and
+    needs the ALTER, but a FRESH database created it at v3 from the current
+    model (which already has the column), so the ALTER would duplicate it.
+    SQLite has no ADD COLUMN IF NOT EXISTS, so we check first."""
+    cols = {row[1] for row in conn.execute(text("PRAGMA table_info(sync_state)"))}
+    if "raw_unavailable_at" not in cols:
+        conn.execute(text("ALTER TABLE sync_state ADD COLUMN raw_unavailable_at TEXT"))
+
+
 # Each migration creates exactly the tables it introduces (create_all is
 # idempotent / checkfirst), so a database at an older version gains the new
 # tables when later migrations apply, and fresh databases get everything in order.
@@ -73,6 +87,7 @@ MIGRATIONS: list[Migration] = [
     Migration(version=2, name="002_action_consent_tables", apply=_create_action_consent_tables),
     Migration(version=3, name="003_sync_state", apply=_create_sync_state_table),
     Migration(version=4, name="004_compaction_vectors", apply=_create_vector_table),
+    Migration(version=5, name="005_raw_unavailable", apply=_add_raw_unavailable),
 ]
 
 _SCHEMA_MIGRATIONS_DDL = text(
