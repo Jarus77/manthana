@@ -37,7 +37,13 @@ from .enums import (
 )
 from .friction import FrictionPoint
 from .invite import decode_invite, encode_invite
-from .knowledge import BODY_CHAR_CAP, KnowledgeNote, NoteEntities
+from .knowledge import (
+    BODY_CHAR_CAP,
+    OVERVIEW_BODY_CHAR_CAP,
+    KnowledgeNote,
+    NoteEntities,
+    body_char_cap,
+)
 from .session import Session
 from .turn import Turn
 
@@ -57,6 +63,8 @@ __all__ = [
     "KnowledgeNote",
     "NoteEntities",
     "BODY_CHAR_CAP",
+    "OVERVIEW_BODY_CHAR_CAP",
+    "body_char_cap",
     # enums
     "Surface",
     "Role",

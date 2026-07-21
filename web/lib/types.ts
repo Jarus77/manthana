@@ -46,6 +46,8 @@ export interface Note {
   confirmed_by: string | null
   version: number
   supersedes: string | null
+  /** One line: what changed since the previous version (article refreshes). */
+  change_summary: string | null
   superseded_by: string | null
   metric: string | null
   value: string | null
@@ -153,22 +155,20 @@ export interface Me {
   author: string
   can_switch_org: boolean
   orgs: string[]
-  kinds: NoteKind[]
-  kind_counts: Record<NoteKind, number>
   total_notes: number
 }
+
+export type ProjectStatus = 'active' | 'stale'
 
 export interface HomeFeed {
   org_id: string
   since: string
+  /** The last ≤10 SUMMARISED sessions — a glance, never an archive. */
   stream: Session[]
-  sections: Section[]
-  projects: ProjectRollup[]
+  /** Sessions awaiting summary, collapsed to [project, count] lines. */
+  pending_counts: Array<[string, number]>
+  projects: Array<ProjectRollup & { status: ProjectStatus }>
   people: ActorActivity[]
-  // `moved` is a server-side @property and so is absent from JSON — compare the
-  // values here instead.
-  benchmarks: Record<string, { note: Note; previous_value: string | null }>
-  unreviewed: number
 }
 
 export interface Page<T> {
@@ -182,13 +182,17 @@ export interface Page<T> {
  *  computed over exactly the sessions listed, so its counts always match. */
 export interface PersonProject {
   rollup: ProjectRollup
+  status: ProjectStatus
+  /** The project article's "What this is" line — what the project IS. */
+  what_this_is: string
+  /** The last ≤3 summarised sessions; pending collapse to the count. */
   sessions: Session[]
+  pending_count: number
 }
 
 export interface PersonPage {
   actor: string
   activity: ActorActivity | null
-  sections: Section[]
   projects: PersonProject[]
   /** Sessions that ran outside a git repo, so no project could be named. */
   unfiled: Session[]
@@ -197,14 +201,24 @@ export interface PersonPage {
   org_id: string
 }
 
+export interface ChangelogEntry {
+  date: string
+  version: number
+  note_id: string
+  source: string
+  change_summary: string
+}
+
 export interface ProjectPage {
   project: string
-  /** What the project IS — a versioned, human-correctable note. */
+  status: ProjectStatus
+  /** The living article — a versioned, human-correctable note. */
   overview: Note | null
+  /** Append-only, from the article's version chain. Newest first. */
+  changelog: ChangelogEntry[]
   rollup: ProjectRollup | null
-  sections: Section[]
   sessions: Session[]
-  note_count: number
+  pending_count: number
   neighbors: ProjectEdge[]
   org_id: string
 }

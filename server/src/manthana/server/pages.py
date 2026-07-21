@@ -31,6 +31,7 @@ from manthana.skills.projections import (
     SessionCard,
     activity_rollup,
     project_rollups,
+    project_status,
     session_cards,
 )
 
@@ -43,6 +44,19 @@ if TYPE_CHECKING:
 #: slower-moving project still reads as alive.
 HOME_WINDOW_DAYS = 7
 PROJECT_WINDOW_DAYS = 14
+
+#: Sessions shown per project block on a person page — a glance, not a log.
+PERSON_SESSIONS_PER_PROJECT = 3
+
+
+def _article_lead(body: str) -> str:
+    """The article's "What this is" line: first non-heading, non-empty line."""
+    for line in (body or "").splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and not stripped.startswith("-"):
+            return stripped
+    return ""
+
 
 #: Notes are grouped into these sections, in this order, on a project page.
 SECTION_ORDER = [
@@ -87,6 +101,26 @@ def _readable(compactions: list[BaseCompaction]) -> list[BaseCompaction]:
     weaker act is justified by a heuristic.
     """
     return [c for c in compactions if not is_structural_junk(c)]
+
+
+def split_summarised(
+    cards: list[SessionCard],
+) -> tuple[list[SessionCard], list[tuple[str, int]]]:
+    """Summarised cards, plus per-project counts of the pending ones.
+
+    A pending digest has no summary — its title is the engineer's raw first
+    prompt — so a reader gets nothing from a list of them. They collapse to one
+    count per project ("bird-sql: 14 awaiting summary") and the article surfaces
+    only work that can actually be read. Server-side, because the projections
+    that quote intents are bare strings the client cannot classify.
+    """
+    summarised = [c for c in cards if c.source != "pending"]
+    counts: dict[str, int] = {}
+    for c in cards:
+        if c.source == "pending":
+            counts[c.project or ""] = counts.get(c.project or "", 0) + 1
+    ordered = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+    return summarised, ordered
 
 
 @dataclass(frozen=True)
@@ -174,12 +208,13 @@ class DiscoveryFeed:
 
     org_id: str
     since: str
+    #: The last few SUMMARISED sessions — never raw prompts. Capped hard: the
+    #: front page is a glance, not an archive.
     stream: list[SessionCard] = field(default_factory=list)
-    sections: list[tuple[NoteKind, list[KnowledgeNote]]] = field(default_factory=list)
+    #: Sessions awaiting summary, collapsed to (project, count). One line each.
+    pending_counts: list[tuple[str, int]] = field(default_factory=list)
     projects: list[ProjectRollup] = field(default_factory=list)
     people: list[ActorActivity] = field(default_factory=list)
-    benchmarks: dict[str, BenchmarkDelta] = field(default_factory=dict)
-    unreviewed: int = 0
 
 
 def discovery_feed(
@@ -188,45 +223,45 @@ def discovery_feed(
     *,
     now: datetime | None = None,
     days: int = HOME_WINDOW_DAYS,
-    stream_limit: int = 40,
+    stream_limit: int = 10,
 ) -> DiscoveryFeed:
-    """This week across the org, as a browsable stream plus whatever knowledge
-    kinds actually moved."""
+    """This week across the org: who is active, what the projects are, and the
+    last few sessions a reader can actually read. Note-kind sections are gone —
+    the taxonomy is a retrieval substrate now, not reading material."""
     _now, since = _window(now, days)
-    comps = _readable(store.query_compactions(org_id=org_id, since=since, limit=stream_limit))
     windowed = _readable(store.query_compactions(org_id=org_id, since=since))
-    fresh = _live_notes(store, org_id, since=since)
-    sections = [
-        (kind, [n for n in fresh if n.kind == kind])
-        for kind in SECTION_ORDER
-        if any(n.kind == kind for n in fresh)
-    ]
-    deltas = _benchmark_deltas(store, org_id, [n for n in fresh if n.kind == NoteKind.benchmark])
+    summarised, pending = split_summarised(session_cards(windowed))
     return DiscoveryFeed(
         org_id=org_id,
         since=since,
-        stream=session_cards(comps),
-        sections=sections,
+        stream=summarised[:stream_limit],
+        pending_counts=pending,
         projects=project_rollups(windowed),
         people=activity_rollup(windowed),
-        benchmarks={d.note.id: d for d in deltas},
-        unreviewed=len(_live_notes(store, org_id, status=str(NoteStatus.candidate))),
     )
 
 
 @dataclass(frozen=True)
 class ProjectPage:
+    """One project as a living article.
+
+    The page IS the article (the overview note) plus live facts: status from
+    timestamps, sessions as the primary-source layer, and a changelog projected
+    from the article's version chain. Note-kind sections are gone — notes are a
+    retrieval substrate now, reachable as citations, not page furniture.
+    """
+
     project: str
     rollup: ProjectRollup | None  # None when nothing happened in the window
-    #: What the project IS, as a versioned, human-correctable note. None until
-    #: the overview pass has run (or when it is disabled).
+    #: "active" | "stale", from the last session timestamp. Zero-LLM.
+    status: str = "stale"
+    #: The living article. None until the overview pass has run.
     overview: KnowledgeNote | None = None
-    sections: list[tuple[NoteKind, list[KnowledgeNote]]] = field(default_factory=list)
+    #: Append-only, one line per article revision: the version chain's
+    #: change_summary values. Never part of the body, so the body stays O(1).
+    changelog: list[dict[str, object]] = field(default_factory=list)
     sessions: list[SessionCard] = field(default_factory=list)
-
-    @property
-    def note_count(self) -> int:
-        return sum(len(notes) for _kind, notes in self.sections)
+    pending_count: int = 0
 
 
 def project_page(
@@ -240,37 +275,45 @@ def project_page(
 ) -> ProjectPage:
     """State of one project: a live header, its notes grouped by kind, and the
     sessions behind them."""
-    _now, since = _window(now, days)
+    now_dt, since = _window(now, days)
     windowed = _readable(store.query_compactions(org_id=org_id, project=project, since=since))
     recent = _readable(store.query_compactions(org_id=org_id, project=project, limit=session_limit))
     rollups = project_rollups(windowed)
 
-    notes = _live_notes(store, org_id, project=project)
-    # Org-scoped notes that name this project apply here too (a convention can be
-    # org-wide but still be *about* a project).
-    have = {n.id for n in notes}
-    notes += [
-        n
-        for n in _live_notes(store, org_id, scope="org")
-        if n.id not in have and project in n.entities.projects
-    ]
-    sections = [
-        (kind, [n for n in notes if n.kind == kind])
-        for kind in SECTION_ORDER
-        if any(n.kind == kind for n in notes)
-    ]
-    # The description lives in a note so it can be versioned and corrected.
-    # Excluded from SECTION_ORDER, so it never doubles as a "knowledge" section.
     overviews = _live_notes(
         store, org_id, kind=str(NoteKind.project_overview), scope=f"project:{project}"
     )
+    overview = overviews[0] if overviews else None
 
+    # Status from the newest session we can see, windowed or not — a project
+    # untouched for months should read stale, not vanish.
+    latest = recent[0].started_at if recent else None
+    status = project_status(latest, now=now_dt) if latest is not None else "stale"
+
+    changelog: list[dict[str, object]] = []
+    if overview is not None:
+        history = store.note_history(overview.id, org_id)
+        for note in sorted(history, key=lambda n: n.version, reverse=True)[:50]:
+            changelog.append(
+                {
+                    "date": _iso(note.updated_at),
+                    "version": note.version,
+                    "note_id": note.id,
+                    "source": str(note.source),
+                    "change_summary": note.change_summary
+                    or ("edited by " + note.author if note.author else "updated"),
+                }
+            )
+
+    summarised, pending = split_summarised(session_cards(recent))
     return ProjectPage(
         project=project,
         rollup=rollups[0] if rollups else None,
-        overview=overviews[0] if overviews else None,
-        sections=sections,
-        sessions=session_cards(recent),
+        status=status,
+        overview=overview,
+        changelog=changelog,
+        sessions=summarised,
+        pending_count=sum(n for _p, n in pending),
     )
 
 
@@ -284,14 +327,21 @@ class PersonProject:
     """
 
     rollup: ProjectRollup
+    #: "active" | "stale" from the newest session in this block. Zero-LLM.
+    status: str = "active"
+    #: The project article's "What this is" line — a real description, so the
+    #: person page can say what each project IS instead of only naming it.
+    what_this_is: str = ""
+    #: The last few SUMMARISED sessions only; the block is a glance, not a log.
     sessions: list[SessionCard] = field(default_factory=list)
+    #: Sessions awaiting summary, collapsed to a count — never listed as rows.
+    pending_count: int = 0
 
 
 @dataclass(frozen=True)
 class PersonPage:
     actor: str
     activity: ActorActivity | None  # None when quiet in the window
-    notes: list[KnowledgeNote] = field(default_factory=list)
     #: The engineer's work, grouped: an engineer has several projects and each
     #: project has several sessions. A flat list cannot show which link belongs
     #: to what, which is the whole reason this page was hard to read.
@@ -315,19 +365,25 @@ def person_page(
     days: int = PROJECT_WINDOW_DAYS,
     session_limit: int = 50,
 ) -> PersonPage:
-    """What one person is working on (live) and what durable knowledge their work
-    produced (notes whose evidence names them).
+    """One engineer: their projects, what each project IS, and the last few
+    readable sessions per project.
 
-    Deliberately un-gated: for a consented ~10-person startup the founder's
-    flagship question IS person-shaped, and the k-anon floor made it
-    unanswerable. Note membership comes from ``actors``, derived at consolidation
-    time from the evidence compactions — no entity resolution needed.
+    Deliberately un-gated (consented-startup segment). Note-kind sections are
+    gone from this page — the taxonomy is a retrieval substrate, not reading
+    material, and a founder visiting a person wants "which projects, what are
+    they, how's it going", not 458 gotchas.
     """
-    _now, since = _window(now, days)
+    now_dt, since = _window(now, days)
     windowed = _readable(store.query_compactions(org_id=org_id, actor=actor, since=since))
     recent = _readable(store.query_compactions(org_id=org_id, actor=actor, limit=session_limit))
     acts = activity_rollup(windowed)
-    notes = [n for n in _live_notes(store, org_id) if actor in n.actors]
+
+    # One query for every article lead, matched by scope — not per-project.
+    leads: dict[str, str] = {}
+    for note in _live_notes(store, org_id, kind=str(NoteKind.project_overview)):
+        slug = note.scope.removeprefix("project:")
+        if slug and slug not in leads:
+            leads[slug] = _article_lead(note.body)
 
     # Grouped over ``recent`` — the same rows that get listed — so every block's
     # header describes exactly the sessions beneath it. project_rollups already
@@ -337,17 +393,28 @@ def person_page(
     by_project: dict[str, list[SessionCard]] = {}
     for card in cards:
         by_project.setdefault(card.project, []).append(card)
-    projects = [
-        PersonProject(rollup=r, sessions=by_project.get(r.project, [])) for r in rollups
-    ]
+    projects = []
+    for r in rollups:
+        block_summarised, block_pending = split_summarised(by_project.get(r.project, []))
+        projects.append(
+            PersonProject(
+                rollup=r,
+                status=project_status(r.last_active, now=now_dt),
+                what_this_is=leads.get(r.project, ""),
+                sessions=block_summarised[:PERSON_SESSIONS_PER_PROJECT],
+                pending_count=sum(n for _p, n in block_pending),
+            )
+        )
     named = {r.project for r in rollups}
 
+    unfiled_summarised, unfiled_pending = split_summarised(
+        [c for c in cards if c.project not in named]
+    )
     return PersonPage(
         actor=actor,
         activity=acts[0] if acts else None,
-        notes=notes,
         projects=projects,
-        unfiled=[c for c in cards if c.project not in named],
+        unfiled=unfiled_summarised,
         sessions=cards,
     )
 

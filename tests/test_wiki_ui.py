@@ -178,15 +178,16 @@ def test_home_defaults_to_first_org_for_admin() -> None:
 
 
 # ── project / person / note pages ────────────────────────────────────────
-def test_project_page_renders_notes_and_sessions() -> None:
+def test_project_page_renders_sessions_without_note_sections() -> None:
+    """Kind sections left the legacy wiki too — same product decision as the
+    client: the taxonomy is a retrieval substrate, not page furniture."""
     client, store, _ = _make()
     _seed(store)
     store.upsert_note(_note("kn-2", kind=NoteKind.gotcha, title="Stale cache"))
     _login(client)
     resp = client.get("/ui/page/project/bench?org_id=o1")
     assert resp.status_code == 200
-    assert "Pin torch 2.4" in resp.text and "Stale cache" in resp.text
-    assert "Decision" in resp.text and "Gotcha" in resp.text  # grouped sections
+    assert "Stale cache" not in resp.text  # notes are not page furniture
     assert "run the BIRD benchmark" in resp.text  # recent sessions
 
 
@@ -200,7 +201,7 @@ def test_person_page_is_first_class_with_single_contributor() -> None:
     assert resp.status_code == 200
     assert "Currently working on" in resp.text
     assert "run the BIRD benchmark" in resp.text  # live activity
-    assert "Pin torch 2.4" in resp.text  # notes whose evidence names them
+    assert "Pin torch 2.4" not in resp.text  # notes left the person page
     assert "ship bm25" not in resp.text  # not their work
 
 
@@ -456,8 +457,9 @@ def test_note_bodies_are_html_escaped() -> None:
               body="<script>alert('xss')</script>")
     )
     _login(client)
-    for url in ("/ui/note/kn-x?org_id=o1", "/ui/page/project/bench?org_id=o1",
-                "/ui/note/kn-x/history?org_id=o1"):
+    # Project pages no longer render notes, so the escape surface is the note
+    # page and its history — the places note text still becomes HTML.
+    for url in ("/ui/note/kn-x?org_id=o1", "/ui/note/kn-x/history?org_id=o1"):
         resp = client.get(url)
         # The property that matters: no attacker-controlled TAG can form. The
         # payload text may appear, but only with its angle brackets escaped.

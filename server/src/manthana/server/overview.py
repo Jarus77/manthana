@@ -41,13 +41,13 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from manthana.schemas import (
-    BODY_CHAR_CAP,
     BaseCompaction,
     KnowledgeNote,
     NoteEntities,
     NoteKind,
     NoteSource,
     NoteStatus,
+    body_char_cap,
 )
 from manthana.skills.projections import is_real_project
 
@@ -140,19 +140,30 @@ def _distinct(comps: Sequence[BaseCompaction], attr: str, n: int = 12) -> list[s
 
 
 def build_overview_prompt(
-    project: str, org_id: str, comps: Sequence[BaseCompaction]
+    project: str,
+    org_id: str,
+    comps: Sequence[BaseCompaction],
+    *,
+    prior_body: str = "",
 ) -> str:
-    """The prompt. Session lines deliberately OMIT the actor field — the rule
-    against naming people is then unbreakable rather than merely instructed."""
+    """The article prompt. Session lines deliberately OMIT the actor field — the
+    rule against naming people is then unbreakable rather than merely
+    instructed. The PRIOR article rides along so "What this is" can be copied
+    verbatim and "Current state" rewritten against it, which is the whole
+    living-article discipline: the stable section stays stable, the volatile
+    section never accumulates."""
     lines = [
-        "You are writing the encyclopedia lead for ONE software project in a",
-        "startup's engineering wiki. Describe what the project IS — its purpose,",
-        "what it does, its main components and the technologies it is built on —",
-        "for a reader who has never seen it before.",
+        "You maintain the LIVING ARTICLE for ONE software project in a startup's",
+        "engineering wiki. The article is small and dense: a fresh session should",
+        "read it in ten seconds and be caught up.",
         "",
         f"PROJECT: {project}",
         f"ORGANISATION: {org_id}",
         "",
+    ]
+    if prior_body.strip():
+        lines += ["THE CURRENT ARTICLE (your starting point):", prior_body.strip(), ""]
+    lines += [
         f"RECENT WORK ({len(comps)} sessions, newest first):",
     ]
     for c in comps:
@@ -168,10 +179,16 @@ def build_overview_prompt(
         f"FRAMEWORKS: {', '.join(_distinct(comps, 'frameworks')) or '(unknown)'}",
         "",
         "Return ONLY a JSON object:",
-        '{"title": "<the project\'s name as an article heading>",',
-        ' "body": "<2-4 short markdown paragraphs, under 300 tokens. The FIRST',
-        '           paragraph must be ONE self-contained sentence stating what the',
-        '           project is; it is shown alone as the article lead.>",',
+        '{"what_this_is": "<1-2 sentences: what the project IS. Copy the previous',
+        "                  version's text VERBATIM unless the work shows it has",
+        '                  become wrong — this section is meant to be stable.>",',
+        ' "current_state": ["4-6 short bullets describing where the work stands',
+        '                   NOW. REWRITE this section completely each time — never',
+        '                   append to the old bullets; stale bullets must vanish."],',
+        ' "open_questions": ["0-4 bullets: unresolved questions or obvious next',
+        '                    steps the sessions point at"],',
+        ' "change_summary": "<ONE line, past tense: what changed since the previous',
+        '                    version. This becomes a changelog entry.>",',
         ' "concepts": ["..."], "libraries": ["..."]}',
         "",
         "Rules:",
@@ -185,15 +202,37 @@ def build_overview_prompt(
         '  {"insufficient": true} and nothing else.',
         "- No decisions, conventions, gotchas, failure patterns or benchmark",
         "  results — those are separate note kinds written by a different pass.",
-        "- Plain declarative prose. No marketing language, no feature bullet lists.",
+        "- Plain declarative prose. No marketing language.",
     ]
     return "\n".join(lines)
 
 
 def _clip(body: str) -> str:
-    if len(body) <= BODY_CHAR_CAP:
+    cap = body_char_cap(NoteKind.project_overview)
+    if len(body) <= cap:
         return body
-    return body[: BODY_CHAR_CAP - 12].rstrip() + " …[truncated]"
+    return body[: cap - 12].rstrip() + " …[truncated]"
+
+
+def compose_article_body(data: dict[str, Any]) -> str:
+    """The article markdown from the model's sections. Pure.
+
+    Section discipline is enforced by SHAPE: "Current state" is whatever the
+    model returned this time — there is no append path — and the changelog is
+    not part of the body at all (it is the version chain's change_summary
+    lines), so the body cannot grow without bound.
+    """
+    what = str(data.get("what_this_is") or "").strip()
+    state = [str(b).strip() for b in data.get("current_state") or [] if str(b).strip()]
+    questions = [str(b).strip() for b in data.get("open_questions") or [] if str(b).strip()]
+    if not what or not state:
+        return ""
+    parts = ["## What this is", "", what, "", "## Current state", ""]
+    parts += [f"- {b}" for b in state]
+    if questions:
+        parts += ["", "## Open questions / next steps", ""]
+        parts += [f"- {b}" for b in questions]
+    return "\n".join(parts)
 
 
 def build_overview_note(
@@ -206,10 +245,10 @@ def build_overview_note(
     now: datetime,
 ) -> KnowledgeNote | None:
     """Pure: model output → a note version. None when the payload is unusable."""
-    body = str(data.get("body") or "").strip()
+    body = compose_article_body(data)
     if not body:
         return None
-    title = str(data.get("title") or project).strip()[:200]
+    title = str(data.get("title") or project).strip()[:200] or project
     status = (
         NoteStatus.established
         if prior is not None and prior.status == NoteStatus.established
@@ -235,6 +274,10 @@ def build_overview_note(
         confidence=0.5,
         version=(prior.version + 1) if prior else 1,
         supersedes=prior.id if prior else None,
+        change_summary=(
+            str(data.get("change_summary") or "").strip()[:200]
+            or ("article created" if prior is None else "updated")
+        ),
         created_at=now,
         updated_at=now,
     )
@@ -306,7 +349,12 @@ def refresh_org_overviews(
             continue
 
         try:
-            raw = provider.complete(build_overview_prompt(project, org_id, comps))
+            raw = provider.complete(
+                build_overview_prompt(
+                    project, org_id, comps,
+                    prior_body=prior.body if prior is not None else "",
+                )
+            )
         except QuotaExceededError:
             stats.quota_blocked += 1
             return stats  # defer the whole org; retry next interval

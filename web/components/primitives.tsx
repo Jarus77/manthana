@@ -127,7 +127,13 @@ export function PersonList({ actors }: { actors: string[] }) {
 
 /* ── article furniture ──────────────────────────────────────────────────── */
 
-export function Title({ children, tagline }: { children: React.ReactNode; tagline?: string }) {
+export function Title({
+  children,
+  tagline,
+}: {
+  children: React.ReactNode
+  tagline?: React.ReactNode
+}) {
   return (
     <>
       <h1 className="firstHeading">{children}</h1>
@@ -283,6 +289,16 @@ export function CatLinks({ categories }: { categories: Array<{ label: string; hr
         ))}
       </ul>
     </div>
+  )
+}
+
+/** Status as text with the wiki's editorial colours — active green, stale amber.
+ *  Computed from timestamps server-side; this only words it. */
+export function StatusWord({ status }: { status: 'active' | 'stale' }) {
+  return (
+    <span className={status === 'active' ? 'status-confirmed' : 'status-unreviewed'}>
+      {status}
+    </span>
   )
 }
 

@@ -395,10 +395,12 @@ def mount_wiki_ui(
                 f"outcomes {_e(r.outcome_mix)} · last active {_e(str(r.last_active)[:16])}</p>"
             )
         back = f"/ui/page/project/{project}?org_id={org_id}"
-        sections = "".join(
-            f"<h3>{_e(str(kind).replace('_', ' ').title())}</h3>"
-            + "".join(_note_block(n, org_id, back) for n in notes)
-            for kind, notes in page.sections
+        # Note-kind sections removed here too: the taxonomy is a retrieval
+        # substrate, not reading material — same product decision as the client.
+        sections = (
+            f"<h3>About</h3>{_note_block(page.overview, org_id, back)}"
+            if page.overview is not None
+            else ""
         )
         sessions = "".join(
             f"<tr><td class='muted'>{_e(str(c.started_at)[:16])}</td>"
@@ -440,7 +442,7 @@ def mount_wiki_ui(
                 f"{_e(', '.join(a.projects) or '—')} · outcomes {_e(a.outcome_mix)}</p>"
                 f"<h3>Currently working on</h3><ul>{intents or '<li>—</li>'}</ul>"
             )
-        notes = "".join(_note_block(n, org_id) for n in page.notes[:20])
+        notes = ""  # kind sections removed — same decision as the client
         sessions = "".join(
             f"<tr><td class='muted'>{_e(str(c.started_at)[:16])}</td>"
             f"<td><a href='/ui/page/project/{_e(c.project)}?org_id={_e(org_id)}'>"

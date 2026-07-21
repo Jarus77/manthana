@@ -11,6 +11,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from manthana.schemas import (
     EngineeringCompaction,
@@ -36,6 +37,7 @@ def _comp(
     days_ago: int = 1,
     intent: str = "run the BIRD benchmark",
     outcome: Outcome = Outcome.success,
+    source: Literal["pending", "full", "claude_summary"] = "full",
 ) -> EngineeringCompaction:
     at = _NOW - timedelta(days=days_ago)
     return EngineeringCompaction(
@@ -53,7 +55,7 @@ def _comp(
         est_cost_usd=1.0,
         total_tokens=500,
         released=True,
-        source="full",
+        source=source,
     )
 
 
@@ -141,34 +143,58 @@ def test_benchmark_delta_only_when_predecessor_parses() -> None:
 
 
 # ── project page ─────────────────────────────────────────────────────────
-def test_project_page_groups_notes_and_includes_org_scoped() -> None:
+def test_project_page_is_an_article_not_a_note_dump() -> None:
+    """The taxonomy is a retrieval substrate now: a project page carries its
+    article, status, changelog and sessions — never kind sections. Notes stay
+    reachable through search/ask and as citations, not as page furniture."""
     store = _store(_comp("c1", project="bench"), _comp("c2", project="other"))
     store.upsert_note(_note("kn-1", kind=NoteKind.decision, project="bench"))
-    store.upsert_note(_note("kn-2", kind=NoteKind.gotcha, title="Stale cache", project="bench"))
-    # An org-scoped note that names the project applies to it too.
-    store.upsert_note(
-        _note("kn-3", kind=NoteKind.convention, title="Ruff 100 cols",
-              project="bench", scope="org")
-    )
-    store.upsert_note(_note("kn-other", kind=NoteKind.decision, project="other"))
 
     page = project_page(store, "o1", "bench", now=_NOW)
-    kinds = {kind: [n.id for n in notes] for kind, notes in page.sections}
-    assert kinds[NoteKind.decision] == ["kn-1"]
-    assert kinds[NoteKind.gotcha] == ["kn-2"]
-    assert kinds[NoteKind.convention] == ["kn-3"]
-    assert page.note_count == 3  # 'other' project's note excluded
+    assert not hasattr(page, "sections")
+    assert page.status in ("active", "stale")
     assert page.rollup is not None and page.rollup.sessions == 1
     assert [c.id for c in page.sessions] == ["c1"]
 
 
-def test_project_page_excludes_superseded_notes() -> None:
-    store = _store(_comp("c1"))
-    store.upsert_note(_note("kn-1"))
-    v2 = _note("kn-2", body="revised").model_copy(update={"version": 2, "supersedes": "kn-1"})
-    store.supersede_note("kn-1", v2, "o1")
+def test_project_page_status_reflects_last_session_age() -> None:
+    fresh = _store(_comp("c1", project="bench", days_ago=1))
+    assert project_page(fresh, "o1", "bench", now=_NOW).status == "active"
+    idle = _store(_comp("c1", project="bench", days_ago=30))
+    assert project_page(idle, "o1", "bench", now=_NOW).status == "stale"
+
+
+def test_project_page_collapses_pending_sessions_to_a_count() -> None:
+    store = _store(
+        _comp("c1", project="bench", days_ago=1),
+        _comp("c2", project="bench", days_ago=2, source="pending"),
+        _comp("c3", project="bench", days_ago=3, source="pending"),
+    )
     page = project_page(store, "o1", "bench", now=_NOW)
-    assert [n.id for _k, notes in page.sections for n in notes] == ["kn-2"]
+    assert [c.id for c in page.sessions] == ["c1"]  # only the summarised one listed
+    assert page.pending_count == 2
+
+
+def test_project_page_changelog_is_the_articles_version_chain() -> None:
+    store = _store(_comp("c1", project="bench"))
+    v1 = _note(
+        "kn-a1", kind=NoteKind.project_overview, title="bench",
+        body="## What this is\n\nbench measures rerankers.",
+        project="bench",
+    ).model_copy(update={"scope": "project:bench", "change_summary": "article created"})
+    store.upsert_note(v1)
+    v2 = v1.model_copy(
+        update={
+            "id": "kn-a2", "version": 2, "supersedes": "kn-a1",
+            "change_summary": "added the GPU path",
+        }
+    )
+    store.supersede_note("kn-a1", v2, "o1")
+
+    page = project_page(store, "o1", "bench", now=_NOW)
+    assert page.overview is not None and page.overview.id == "kn-a2"
+    lines = [entry["change_summary"] for entry in page.changelog]
+    assert lines == ["added the GPU path", "article created"]  # newest first
 
 
 def test_project_page_quiet_project_has_no_rollup() -> None:
@@ -194,9 +220,11 @@ def test_person_page_is_live_activity_plus_their_notes() -> None:
     assert page.activity.sessions == 2
     assert page.activity.intents[0] == "run the BIRD benchmark"
     assert page.activity.projects == ["bench", "search"]
-    # A single contributor is enough — no k-anonymity floor on this path.
-    assert [n.id for n in page.notes] == ["kn-mine"]
+    # Notes are no longer page furniture on a person page.
+    assert not hasattr(page, "notes")
     assert [c.id for c in page.sessions] == ["c1", "c2"]
+    # Each project block carries its status.
+    assert all(b.status in ("active", "stale") for b in page.projects)
 
 
 # ── note page ────────────────────────────────────────────────────────────

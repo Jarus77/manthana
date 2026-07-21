@@ -268,35 +268,42 @@ def test_home_streams_recent_sessions_for_discovery() -> None:
     assert stream["c2"]["project"] == "search"
 
 
-def test_home_sections_follow_the_data_not_a_hardcoded_list() -> None:
+def test_home_carries_no_note_sections_at_all() -> None:
+    """The taxonomy left the front page: notes are a retrieval substrate now
+    (ask/search + citations), not reading material. Home is people, projects
+    with status, and a short stream of readable sessions."""
     client, store, config = _make()
-    _seed(store)  # a decision note only
-    _login(client, _engineer(config))
-    kinds = [s["kind"] for s in client.get(f"{API}/home").json()["sections"]]
-    assert kinds == ["decision"]
-    # benchmark is not a privileged section — it appears only once one exists.
+    _seed(store)
     store.upsert_note(_note("kn-2", kind=NoteKind.benchmark, title="BIRD 64%", value="64%"))
-    kinds = [s["kind"] for s in client.get(f"{API}/home").json()["sections"]]
-    assert kinds == ["decision", "benchmark"]
+    _login(client, _engineer(config))
+    payload = client.get(f"{API}/home").json()
+    for gone in ("sections", "benchmarks", "unreviewed"):
+        assert gone not in payload, gone
+    assert "pending_counts" in payload
+    assert all("status" in r for r in payload["projects"])
 
 
-def test_benchmark_notes_keep_their_delta_as_a_rendering_hint() -> None:
+def test_home_stream_is_capped_and_summarised_only() -> None:
     client, store, config = _make()
     _seed(store)
-    old = _note("kn-old", kind=NoteKind.benchmark, title="BIRD", value="61%")
-    store.upsert_note(old)
-    new = _note("kn-new", kind=NoteKind.benchmark, title="BIRD", value="64%")
-    store.supersede_note("kn-old", new, "o1")
-    _login(client, _engineer(config))
-    benchmarks = client.get(f"{API}/home").json()["benchmarks"]
-    assert benchmarks["kn-new"]["previous_value"] == "61%"
+    for i in range(15):
+        store.ingest_compaction(
+            _comp(f"cs{i}", intent=f"work item {i}"), org_id="o1", team_id="t1"
+        )
+    store.ingest_compaction(
+        _comp("cp1", intent="raw pasted prompt"), org_id="o1", team_id="t1"
+    )
+    # make cp1 pending by re-ingesting with source=pending is blocked by the
+    # no-downgrade guard, so build it pending from the start:
+    pending = _comp("cp2", intent="raw prompt two")
+    pending = pending.model_copy(update={"source": "pending"})
+    store.ingest_compaction(pending, org_id="o1", team_id="t1")
 
-
-def test_home_counts_unreviewed_ai_notes() -> None:
-    client, store, config = _make()
-    _seed(store)
     _login(client, _engineer(config))
-    assert client.get(f"{API}/home").json()["unreviewed"] == 1
+    payload = client.get(f"{API}/home").json()
+    assert len(payload["stream"]) <= 10
+    assert all(s["source"] != "pending" for s in payload["stream"])
+    assert dict((p, n) for p, n in payload["pending_counts"]).get("bench") == 1
 
 
 # ── people, projects, and the connections between them ───────────────────
@@ -322,7 +329,8 @@ def test_person_page_links_to_collaborators_with_a_reason() -> None:
     edges = payload["connections"]
     assert [e["actor"] for e in edges] == ["mira@x.com"]
     assert edges[0]["via_projects"] == ["bench"]
-    assert payload["sections"][0]["kind"] == "decision"  # their work's knowledge
+    # Note sections are gone from person pages — projects lead instead.
+    assert "sections" not in payload and payload["projects"]
 
 
 def test_edges_serialize_the_fields_the_client_renders_from() -> None:
@@ -342,16 +350,14 @@ def test_edges_serialize_the_fields_the_client_renders_from() -> None:
     }
 
 
-def test_benchmark_delta_exposes_previous_value_as_a_field() -> None:
+def test_project_payload_carries_status_and_changelog() -> None:
     client, store, config = _make()
     _seed(store)
-    store.upsert_note(_note("kn-b", kind=NoteKind.benchmark, title="BIRD", value="61%"))
-    store.supersede_note(
-        "kn-b", _note("kn-b2", kind=NoteKind.benchmark, title="BIRD", value="64%"), "o1"
-    )
     _login(client, _engineer(config))
-    delta = client.get(f"{API}/home").json()["benchmarks"]["kn-b2"]
-    assert "previous_value" in delta and "note" in delta
+    payload = client.get(f"{API}/projects/bench").json()
+    assert payload["status"] in ("active", "stale")
+    assert "changelog" in payload and "pending_count" in payload
+    assert "sections" not in payload
 
 
 def test_person_payload_carries_projects_and_unfiled() -> None:
@@ -391,7 +397,9 @@ def test_projects_index_lists_active_and_dormant_projects() -> None:
     _login(client, _engineer(config))
     payload = client.get(f"{API}/projects").json()
     assert {p["project"] for p in payload["active"]} == {"bench", "search"}
-    assert payload["quiet"] == ["legacy"]  # old, but still reachable
+    assert all(p["status"] in ("active", "stale") for p in payload["active"])
+    # Quiet = no session in the window = stale by construction; still reachable.
+    assert payload["quiet"] == [{"project": "legacy", "status": "stale"}]
 
 
 # ── knowledge browse: all-time, not just this week ───────────────────────
@@ -401,12 +409,8 @@ def test_notes_browse_reaches_knowledge_older_than_the_feed_window() -> None:
     store.upsert_note(_note("kn-old", title="Ancient convention", kind=NoteKind.convention,
                             days_ago=300))
     _login(client, _engineer(config))
-    # The home feed is a week wide, so the old note is absent there…
-    home_titles = {
-        n["title"] for s in client.get(f"{API}/home").json()["sections"] for n in s["notes"]
-    }
-    assert "Ancient convention" not in home_titles
-    # …but browsing by kind finds it.
+    # Notes are a retrieval substrate now — home carries no note sections at
+    # all — but the browse endpoint still reaches all-time knowledge.
     browsed = client.get(f"{API}/notes?kind=convention").json()["items"]
     assert [n["title"] for n in browsed] == ["Ancient convention"]
 
@@ -584,10 +588,9 @@ def test_project_overview_is_not_a_browsable_kind() -> None:
     _seed(store)
     _login(client, _engineer(config))
     me = client.get(f"{API}/me").json()
-    assert "project_overview" not in me["kinds"]
-    assert "project_overview" not in me["kind_counts"]
-    sections = client.get(f"{API}/projects/bench").json()["sections"]
-    assert all(s["kind"] != "project_overview" for s in sections)
+    # The whole taxonomy left the nav, not just this kind.
+    assert "kinds" not in me and "kind_counts" not in me
+    assert "sections" not in client.get(f"{API}/projects/bench").json()
 
 
 def test_project_payload_carries_the_overview_field() -> None:

@@ -48,6 +48,7 @@ from manthana.schemas import KnowledgeNote, NoteKind
 from manthana.skills.projections import (
     activity_rollup,
     project_rollups,
+    project_status,
     session_card,
     session_cards,
 )
@@ -215,12 +216,10 @@ def mount_wiki_api(
     def wiki_me(manthana_admin: Annotated[str, Cookie()] = "") -> dict[str, Any]:
         sess = _session(manthana_admin)
         org_id = _org(sess, "")
-        # Per-kind counts let the nav show how much is behind each link, and let
-        # the client tell an empty section from an unbuilt one. `faq` is defined
-        # in the taxonomy but nothing populates it yet, so without counts the nav
-        # would advertise a page that is permanently blank.
+        # The kind taxonomy left the navigation: notes are a retrieval substrate
+        # (ask/search + citations), not reading material, so the nav no longer
+        # advertises "458 gotchas" as a destination.
         live = store.query_notes(org_id, exclude_superseded=True)
-        counts = {str(k): sum(1 for n in live if n.kind == k) for k in SECTION_ORDER}
         return {
             "role": sess.role,
             "org_id": org_id,
@@ -228,8 +227,6 @@ def mount_wiki_api(
             "author": sess.author,
             "can_switch_org": sess.org_id is None,
             "orgs": [o.id for o in store.list_orgs()] if sess.org_id is None else [org_id],
-            "kinds": [str(k) for k in SECTION_ORDER],
-            "kind_counts": counts,
             "total_notes": len(live),
         }
 
@@ -245,9 +242,10 @@ def mount_wiki_api(
         org_id = _org(sess, org_id)
         feed = discovery_feed(store, org_id, days=max(1, min(days, 90)))
         payload = _jsonable(feed)
-        payload["stream"] = _jsonable(feed.stream)
-        payload["sections"] = [
-            {"kind": str(kind), "notes": _jsonable(notes)} for kind, notes in feed.sections
+        # Status per project, computed here because rollups are built without a
+        # clock and staleness is a fact about timestamps, not a stored field.
+        payload["projects"] = [
+            {**_jsonable(r), "status": project_status(r.last_active)} for r in feed.projects
         ]
         return payload
 
@@ -283,7 +281,6 @@ def mount_wiki_api(
         return {
             "actor": page.actor,
             "activity": _jsonable(page.activity),
-            "sections": _note_sections(page.notes),
             "projects": _jsonable(page.projects),
             "unfiled": _jsonable(page.unfiled),
             "sessions": _jsonable(page.sessions),
@@ -303,8 +300,15 @@ def mount_wiki_api(
         rollups = project_rollups(comps)
         seen = {r.project for r in rollups}
         return {
-            "active": _jsonable(rollups),
-            "quiet": [p for p in store.list_projects(org_id) if p not in seen],
+            "active": [
+                {**_jsonable(r), "status": project_status(r.last_active)} for r in rollups
+            ],
+            # Quiet = no session in the window = stale by construction.
+            "quiet": [
+                {"project": p, "status": "stale"}
+                for p in store.list_projects(org_id)
+                if p not in seen
+            ],
             "org_id": org_id,
         }
 
@@ -318,13 +322,12 @@ def mount_wiki_api(
         edges = project_neighbors(_graph_window(org_id), project)
         return {
             "project": page.project,
+            "status": page.status,
             "overview": _jsonable(page.overview),
+            "changelog": _jsonable(page.changelog),
             "rollup": _jsonable(page.rollup),
-            "sections": [
-                {"kind": str(kind), "notes": _jsonable(notes)} for kind, notes in page.sections
-            ],
             "sessions": _jsonable(page.sessions),
-            "note_count": page.note_count,
+            "pending_count": page.pending_count,
             "neighbors": _jsonable(edges),
             "org_id": org_id,
         }

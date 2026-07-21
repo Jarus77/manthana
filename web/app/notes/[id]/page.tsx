@@ -156,13 +156,11 @@ export default function NoteArticle({ params }: { params: Promise<{ id: string }
 
             <CatLinks
               categories={[
-                { label: KIND_SINGULAR[note.kind] ?? note.kind, href: `/knowledge/${note.kind}` },
+                { label: KIND_SINGULAR[note.kind] ?? note.kind },
                 ...(note.project
                   ? [{ label: note.project, href: `/projects/${encodeURIComponent(note.project)}` }]
                   : []),
-                ...(note.status === 'candidate'
-                  ? [{ label: 'Unreviewed entries', href: '/knowledge/all?status=candidate' }]
-                  : []),
+                ...(note.status === 'candidate' ? [{ label: 'Unreviewed' }] : []),
                 ...(note.source === 'human' ? [{ label: 'Human-written entries' }] : []),
               ]}
             />
