@@ -27,12 +27,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from manthana.schemas import (
-    BODY_CHAR_CAP,
     KnowledgeNote,
     NoteEntities,
     NoteKind,
     NoteSource,
     NoteStatus,
+    body_char_cap,
 )
 
 from .graph import entity_edges
@@ -53,10 +53,13 @@ def _note_id() -> str:
     return f"kn-{uuid.uuid4().hex[:12]}"
 
 
-def _clip(body: str) -> str:
-    if len(body) <= BODY_CHAR_CAP:
+def _clip(body: str, kind: NoteKind | str = "") -> str:
+    """Kind-aware: a project_overview holds a whole living article, so a human
+    correcting one must not have their edit truncated at the ordinary note cap."""
+    cap = body_char_cap(kind)
+    if len(body) <= cap:
         return body
-    return body[: BODY_CHAR_CAP - 12].rstrip() + " …[truncated]"
+    return body[: cap - 12].rstrip() + " …[truncated]"
 
 
 def _require(store: ServerStore, org_id: str, note_id: str) -> KnowledgeNote:
@@ -88,7 +91,7 @@ def edit(
         update={
             "id": _note_id(),
             "title": title.strip() or old.title,
-            "body": _clip(body.strip()),
+            "body": _clip(body.strip(), old.kind),
             "source": NoteSource.human,
             "author": author,
             "status": NoteStatus.established,
@@ -128,7 +131,7 @@ def create(
         org_id=org_id,
         kind=kind,
         title=title.strip(),
-        body=_clip(body.strip()),
+        body=_clip(body.strip(), kind),
         scope=f"project:{project}" if project else "org",
         entities=NoteEntities(projects=[project] if project else []),
         actors=actors or [],

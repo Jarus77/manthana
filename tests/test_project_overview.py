@@ -31,7 +31,13 @@ _NOW = datetime(2026, 3, 1, tzinfo=UTC)
 _GOOD = json.dumps(
     {
         "title": "scribe",
-        "body": "scribe is a transcription service.\n\nIt wraps a Whisper model.",
+        "what_this_is": "scribe is a transcription service.",
+        "current_state": [
+            "Whisper wrapper wired to the API endpoint",
+            "latency under two seconds on the eval set",
+        ],
+        "open_questions": ["should diarisation ship in v1?"],
+        "change_summary": "wired the transcription endpoint",
         "libraries": ["whisper"],
         "concepts": ["speech to text"],
     }
@@ -213,14 +219,20 @@ def test_junk_project_slugs_are_never_described() -> None:
 
 
 # ── the pure builder ─────────────────────────────────────────────────────
-def test_build_overview_note_rejects_an_empty_body() -> None:
-    assert (
-        build_overview_note(
-            {"title": "x", "body": "   "},
-            prior=None, comps=[_comp("c1")], org_id="o1", project="scribe", now=_NOW,
+def test_build_overview_note_rejects_a_shapeless_payload() -> None:
+    # No what_this_is or no current_state = no article.
+    for bad in (
+        {"title": "x"},
+        {"what_this_is": "  ", "current_state": ["a"]},
+        {"what_this_is": "a thing", "current_state": []},
+    ):
+        assert (
+            build_overview_note(
+                bad, prior=None, comps=[_comp("c1")], org_id="o1",
+                project="scribe", now=_NOW,
+            )
+            is None
         )
-        is None
-    )
 
 
 def test_built_note_is_scoped_and_cites_its_evidence() -> None:
@@ -233,3 +245,114 @@ def test_built_note_is_scoped_and_cites_its_evidence() -> None:
     assert note.scope == "project:scribe"
     assert set(note.evidence) == {"c1", "c2"}
     assert note.entities.libraries == ["whisper"]
+    # The article structure is the body.
+    assert "## What this is" in note.body and "## Current state" in note.body
+    assert note.change_summary == "wired the transcription endpoint"
+
+
+# ── the living-article discipline ────────────────────────────────────────
+def test_current_state_is_rewritten_not_appended() -> None:
+    """The key discipline from the product spec: 'Current state' is overwritten
+    each update, which is what keeps the article at a few bullets forever
+    instead of turning into another growing log."""
+    second = json.dumps(
+        {
+            "what_this_is": "scribe is a transcription service.",
+            "current_state": ["diarisation landed", "GPU batch path in review"],
+            "open_questions": [],
+            "change_summary": "diarisation landed",
+        }
+    )
+    store = _store(_comp("c1"), _comp("c2"))
+    provider = _CountingProvider([_GOOD, second])
+    _run(store, provider)
+    store.ingest_compaction(_comp("c3"), org_id="o1", team_id="t1")
+    _run(store, provider)
+
+    article = _overview(store)
+    assert article is not None
+    assert "diarisation landed" in article.body
+    # The old bullets are GONE from the live article (still in the version chain).
+    assert "Whisper wrapper wired" not in article.body
+
+
+def test_changelog_falls_out_of_the_version_chain() -> None:
+    """The changelog is the supersede chain's change_summary lines — append-only
+    by construction, and it costs the article body nothing."""
+    second = json.dumps(
+        {
+            "what_this_is": "scribe is a transcription service.",
+            "current_state": ["diarisation landed"],
+            "change_summary": "diarisation landed",
+        }
+    )
+    store = _store(_comp("c1"), _comp("c2"))
+    provider = _CountingProvider([_GOOD, second])
+    _run(store, provider)
+    store.ingest_compaction(_comp("c3"), org_id="o1", team_id="t1")
+    _run(store, provider)
+
+    current = _overview(store)
+    assert current is not None
+    history = store.note_history(current.id, "o1")
+    summaries = [n.change_summary for n in sorted(history, key=lambda n: n.version)]
+    assert summaries == ["wired the transcription endpoint", "diarisation landed"]
+
+
+def test_article_body_may_exceed_the_ordinary_note_cap() -> None:
+    from manthana.schemas import BODY_CHAR_CAP, OVERVIEW_BODY_CHAR_CAP
+
+    long_bullets = [f"bullet {i}: " + "x" * 300 for i in range(6)]
+    data = {
+        "what_this_is": "a project with a lot of state.",
+        "current_state": long_bullets,
+        "change_summary": "big update",
+    }
+    note = build_overview_note(
+        data, prior=None, comps=[_comp("c1")], org_id="o1", project="scribe", now=_NOW
+    )
+    assert note is not None
+    assert len(note.body) > BODY_CHAR_CAP  # would have been clipped at 1600
+    assert len(note.body) <= OVERVIEW_BODY_CHAR_CAP
+
+
+def test_human_edit_of_an_article_survives_the_teach_clip() -> None:
+    """A human correcting an article must not have their edit truncated at the
+    ordinary 1600-char note cap."""
+    from manthana.server.teach import edit
+
+    store = _store(_comp("c1"), _comp("c2"))
+    _run(store, _CountingProvider([_GOOD]))
+    article = _overview(store)
+    assert article is not None
+
+    long_body = "## What this is\n\n" + "carefully written prose " + "y" * 2500
+    edited = edit(store, "o1", article.id, title="scribe", body=long_body, author="me@x.com")
+    assert len(edited.body) > 1600
+    assert "…[truncated]" not in edited.body
+
+
+def test_prior_article_is_fed_back_into_the_prompt() -> None:
+    class _Capture(_CountingProvider):
+        def __init__(self, responses):  # noqa: ANN001
+            super().__init__(responses)
+            self.prompts: list[str] = []
+
+        def complete(self, prompt: str) -> str:
+            self.prompts.append(prompt)
+            return super().complete(prompt)
+
+    second = json.dumps(
+        {
+            "what_this_is": "scribe is a transcription service.",
+            "current_state": ["new state"],
+            "change_summary": "x",
+        }
+    )
+    store = _store(_comp("c1"), _comp("c2"))
+    provider = _Capture([_GOOD, second])
+    _run(store, provider)
+    store.ingest_compaction(_comp("c3"), org_id="o1", team_id="t1")
+    _run(store, provider)
+    assert "THE CURRENT ARTICLE" in provider.prompts[1]
+    assert "Whisper wrapper wired" in provider.prompts[1]

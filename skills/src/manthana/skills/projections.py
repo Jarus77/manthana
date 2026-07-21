@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 
@@ -66,6 +66,23 @@ def is_pending(compaction: Any) -> bool:
     them, so a renderer has no way to tell a summary from a raw prompt.
     """
     return str(getattr(compaction, "source", "")) == "pending"
+
+
+#: A project with no released session in this window reads as stale. 7 days
+#: matches the wiki's home window: "active" means "someone touched it this week".
+STALE_AFTER_DAYS = 7
+
+
+def project_status(
+    last_active: datetime, *, now: datetime | None = None, stale_days: int = STALE_AFTER_DAYS
+) -> str:
+    """"active" | "stale", computed from the last session time. Deliberately a
+    pure function and deliberately not an LLM call — staleness is a fact about
+    timestamps, and the product spec calls for exactly this: status detection is
+    free because the sessions already carry times."""
+    now = now or datetime.now(UTC)
+    anchor = last_active if last_active.tzinfo else last_active.replace(tzinfo=UTC)
+    return "stale" if (now - anchor) > timedelta(days=stale_days) else "active"
 
 
 def is_real_project(project: str | None) -> bool:

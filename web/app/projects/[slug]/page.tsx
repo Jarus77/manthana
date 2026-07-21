@@ -1,6 +1,19 @@
 'use client'
 
-/** A project, as an article: lead + infobox of live facts, then its knowledge. */
+/**
+ * A project, as a LIVING ARTICLE.
+ *
+ * The page follows the two-layer model: the article is the small, curated
+ * surface a fresh reader absorbs in ten seconds; the sessions below it are the
+ * primary sources it cites. Structure per the product spec:
+ *
+ *   Status (computed from timestamps, no LLM) · What this is · Current state
+ *   (rewritten each update, never appended) · Open questions · Related ·
+ *   Changelog (append-only — projected from the article's version chain).
+ *
+ * Note-kind sections are gone: notes are a retrieval substrate, reachable via
+ * search and citations, not page furniture.
+ */
 
 import Link from 'next/link'
 import { use } from 'react'
@@ -8,21 +21,20 @@ import { Wiki } from '@/components/Loader'
 import {
   CatLinks,
   Empty,
+  Infobox,
   Markdown,
   NoteBanners,
-  leadParagraph,
-  restOfBody,
-  Infobox,
-  NoteRow,
   PersonList,
   ProjectLink,
   Section,
   SessionRow,
+  StatusWord,
   Title,
   Toc,
+  onDate,
   when,
 } from '@/components/primitives'
-import { KIND_LABEL, type ProjectPage } from '@/lib/types'
+import type { ProjectPage } from '@/lib/types'
 
 export default function ProjectArticle({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = use(params)
@@ -32,118 +44,66 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
     <Wiki<ProjectPage> path={`/projects/${encodeURIComponent(decoded)}`}>
       {(data) => {
         const r = data.rollup
-        const outcomes = r ? Object.entries(r.outcome_mix) : []
         const sections = [
-          ...(data.overview && restOfBody(data.overview.body)
-            ? [{ id: 'overview', label: 'Overview' }]
-            : []),
-          ...data.sections.map((s) => ({ id: s.kind, label: KIND_LABEL[s.kind] })),
+          ...(data.overview ? [{ id: 'article', label: 'Article' }] : []),
           { id: 'sessions', label: 'Sessions' },
-          ...(data.neighbors.length ? [{ id: 'see-also', label: 'See also' }] : []),
+          ...(data.neighbors.length ? [{ id: 'related', label: 'Related' }] : []),
+          ...(data.changelog.length ? [{ id: 'changelog', label: 'Changelog' }] : []),
         ]
 
         return (
           <>
-            <Title>{data.project}</Title>
+            <Title
+              tagline={
+                <>
+                  A project in the {data.org_id} organisation ·{' '}
+                  <StatusWord status={data.status} />
+                </>
+              }
+            >
+              {data.project}
+            </Title>
 
             <Infobox
               title={data.project}
               subtitle="Project"
               rows={[
+                ['Status', <StatusWord status={data.status} />],
                 ['Sessions', r ? r.sessions : '—'],
                 ['Contributors', r ? <PersonList actors={r.actors} /> : '—'],
-                [
-                  'Outcomes',
-                  outcomes.length
-                    ? outcomes.map(([k, v]) => `${v} ${k}`).join(', ')
-                    : '—',
-                ],
-                ['Entries', data.note_count],
                 ['Last active', r ? when(r.last_active) : '—'],
-                ['Estimated cost', r ? `$${r.est_cost_usd.toFixed(2)}` : '—'],
+                [
+                  'Article revisions',
+                  data.changelog.length ? data.changelog.length : '—',
+                ],
               ]}
             />
 
-            {/* The lead is a versioned, human-correctable note when one exists.
-                The factual sentence below it stays either way: session counts and
-                activity are computed live, and the overview prompt forbids the
-                model from writing them into a note where they would go stale. */}
-            {data.overview && (
-              <>
+            {data.overview ? (
+              <div id="article">
                 <NoteBanners note={data.overview} />
-                <div className="lead">
-                  <Markdown>{leadParagraph(data.overview.body)}</Markdown>
-                </div>
-              </>
-            )}
-            <p className={data.overview ? undefined : 'lead'}>
-              <b>{data.project}</b> is a project in the {data.org_id} organisation.{' '}
-              {r ? (
-                <>
-                  It has seen <b>{r.sessions}</b> released session
-                  {r.sessions === 1 ? '' : 's'} in the last fortnight, worked on by{' '}
-                  <PersonList actors={r.actors} />, most recently {when(r.last_active)}.
-                </>
-              ) : (
-                <>Nothing has been released against it in the last fortnight.</>
-              )}{' '}
-              {data.note_count > 0 && (
-                <>
-                  The team has recorded <b>{data.note_count}</b> durable entr
-                  {data.note_count === 1 ? 'y' : 'ies'} from this work.
-                </>
-              )}
-            </p>
-
-            {data.overview && (
-              <p className="faint">
-                This description was written by Manthana from the sessions below.{' '}
-                <Link href={`/notes/${data.overview.id}`}>Correct it</Link>
-                {data.overview.version > 1 && (
-                  <>
-                    {' · '}
-                    <Link href={`/notes/${data.overview.id}/history`}>
-                      {data.overview.version} versions
-                    </Link>
-                  </>
-                )}
+                <Markdown>{data.overview.body}</Markdown>
+                <p className="faint">
+                  This article is written by Manthana from the sessions below and rewritten as
+                  the work changes.{' '}
+                  <Link href={`/notes/${data.overview.id}`}>Correct it</Link> — a human edit
+                  becomes the permanent version.
+                </p>
+              </div>
+            ) : (
+              <p className="lead">
+                <b>{data.project}</b> is a project in the {data.org_id} organisation. No
+                article has been written yet — one appears once enough summarised work lands.
               </p>
             )}
 
             <Toc sections={sections} />
             <div className="clear" />
 
-            {data.overview && restOfBody(data.overview.body) && (
-              <Section id="overview" title="Overview">
-                <Markdown>{restOfBody(data.overview.body)}</Markdown>
-              </Section>
-            )}
-
-            {data.sections.length ? (
-              data.sections.map((section) => (
-                <Section
-                  key={section.kind}
-                  id={section.kind}
-                  title={KIND_LABEL[section.kind]}
-                  action={<Link href={`/knowledge/${section.kind}`}>all</Link>}
-                >
-                  <ul>
-                    {section.notes.map((n) => (
-                      <NoteRow key={n.id} note={n} />
-                    ))}
-                  </ul>
-                </Section>
-              ))
-            ) : (
-              <Section title="Knowledge">
-                <Empty>
-                  Nothing durable has been consolidated from this project yet. Entries appear
-                  once its sessions have been read.
-                </Empty>
-              </Section>
-            )}
-
             <Section id="sessions" title="Sessions">
+              <p className="subtle">
+                The primary sources: what actually happened, session by session.
+              </p>
               {data.sessions.length ? (
                 <ul>
                   {data.sessions.map((s) => (
@@ -151,16 +111,18 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
                   ))}
                 </ul>
               ) : (
-                <Empty>No released sessions.</Empty>
+                <Empty>No summarised sessions yet.</Empty>
+              )}
+              {data.pending_count > 0 && (
+                <p className="faint">
+                  {data.pending_count} session{data.pending_count === 1 ? '' : 's'} awaiting
+                  summary
+                </p>
               )}
             </Section>
 
             {data.neighbors.length > 0 && (
-              <Section id="see-also" title="See also">
-                <p className="subtle">
-                  Projects worked on by the same people — how work actually flows across the
-                  org.
-                </p>
+              <Section id="related" title="Related">
                 <ul>
                   {data.neighbors.map((n) => (
                     <li key={n.project}>
@@ -172,12 +134,27 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
               </Section>
             )}
 
-            <CatLinks
-              categories={[
-                { label: 'Projects', href: '/projects' },
-                ...(r ? [{ label: `${r.sessions} sessions` }] : []),
-              ]}
-            />
+            {data.changelog.length > 0 && (
+              <Section id="changelog" title="Changelog">
+                <p className="subtle">
+                  One line per article revision — the growing part of the article lives here,
+                  not in the body.
+                </p>
+                <ul>
+                  {data.changelog.map((entry) => (
+                    <li key={entry.note_id}>
+                      {onDate(entry.date)} — {entry.change_summary}{' '}
+                      <span className="faint">
+                        (<Link href={`/notes/${entry.note_id}`}>v{entry.version}</Link>
+                        {entry.source === 'human' && ', human'})
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </Section>
+            )}
+
+            <CatLinks categories={[{ label: 'Projects', href: '/projects' }]} />
           </>
         )
       }}
