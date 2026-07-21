@@ -177,7 +177,8 @@ def test_waiting_never_abandons_by_attempt_count() -> None:
     provider = MockProvider(_GOOD)
 
     for _ in range(10):  # far past the attempt cap
-        stats = enrich_org(store, obj, provider, config, org_id="o1", limit=10)
+        enrich_org(store, obj, provider, config, org_id="o1", limit=10)
+    stats = enrich_org(store, obj, provider, config, org_id="o1", limit=10)
 
     assert stats.abandoned == 0
     assert _state(store).state == "waiting"
