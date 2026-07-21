@@ -36,6 +36,7 @@ from .tables import (
     KnowledgeEdgeRow,
     KnowledgeNoteRow,
     KnowledgeNoteVectorRow,
+    LlmUsagePurposeRow,
     LlmUsageRow,
     OrgConsentRow,
     OrgPrivacyRow,
@@ -96,6 +97,42 @@ def _until_bound(until: str | None) -> tuple[str, str] | None:
         except ValueError:
             return ("<=", until)
     return ("<=", until)
+
+
+def _no_downgrade_merge(
+    existing_data: dict[str, Any], incoming: BaseCompaction
+) -> tuple[dict[str, Any], str]:
+    """Merge a re-synced digest into a stored row without losing enrichment.
+
+    The failure this prevents: agents re-compact resumed sessions under the SAME
+    id and re-sync with ``source="pending"``. A blind overwrite threw away the
+    server's paid-for summary (task_intent, approach, friction) and made the
+    enrichment pass buy it again — every resume of a session cost a second model
+    call and briefly regressed the wiki to "awaiting summary".
+
+    Rules, returning (data, outcome):
+      * incoming enriched (source != pending) → incoming wins wholesale — a
+        re-released digest that already carries qualitative fields is
+        authoritative, exactly as before;
+      * incoming pending over a stored PENDING row → normal overwrite (nothing
+        enriched exists to protect);
+      * incoming pending over a stored ENRICHED row → keep the enriched data,
+        backfill ``native_summary`` from the incoming payload if the stored one
+        is empty (the one input a re-sync can add that future enrichment cares
+        about), and keep the stored outcome (enrichment may have corrected it).
+    """
+    incoming_data = incoming.model_dump(mode="json")
+    incoming_outcome = str(incoming.outcome)
+    if incoming_data.get("source") != "pending":
+        return incoming_data, incoming_outcome
+    if existing_data.get("source") in (None, "", "pending"):
+        return incoming_data, incoming_outcome
+    merged = dict(existing_data)
+    if not str(merged.get("native_summary") or "").strip():
+        incoming_summary = str(incoming_data.get("native_summary") or "").strip()
+        if incoming_summary:
+            merged["native_summary"] = incoming_summary
+    return merged, str(merged.get("outcome") or incoming_outcome)
 
 
 class ServerStore:
@@ -284,6 +321,11 @@ class ServerStore:
             raise NotReleasedError(f"compaction {compaction.id} is not released")
         self.upsert_actor(compaction.actor, org_id, team_id)
         with DBSession(self._engine) as db:
+            existing = db.get(ReleasedCompactionRow, _pk(org_id, compaction.id))
+            data = compaction.model_dump(mode="json")
+            outcome = str(compaction.outcome)
+            if existing is not None:
+                data, outcome = _no_downgrade_merge(existing.data, compaction)
             db.merge(
                 ReleasedCompactionRow(
                     id=_pk(org_id, compaction.id),
@@ -292,13 +334,13 @@ class ServerStore:
                     actor=compaction.actor,
                     project=compaction.project,
                     surface=str(compaction.surface),
-                    outcome=str(compaction.outcome),
+                    outcome=outcome,
                     started_at=_utc_iso(compaction.started_at),
                     kind=compaction.kind,
                     released=True,
                     tier_used=compaction.tier_used,
                     est_cost_usd=compaction.est_cost_usd,
-                    data=compaction.model_dump(mode="json"),
+                    data=data,
                 )
             )
             db.commit()
@@ -380,6 +422,15 @@ class ServerStore:
             return row.object_key if row else None
 
     def record_raw(self, compaction_id: str, org_id: str, object_key: str) -> None:
+        """Record a raw transcript upload — and UN-STICK its digest.
+
+        Raw arriving is the event a waiting digest was waiting FOR, and the
+        event that invalidates an abandonment (the input it gave up on now
+        exists). Deleting the state row resets both the attempt counter and the
+        age clock, so the digest re-enters the pending queue cleanly on the next
+        pass. ``failed`` rows are left alone — their attempts describe real
+        model failures, not missing input.
+        """
         with DBSession(self._engine) as db:
             db.merge(
                 RawTranscriptRow(
@@ -390,6 +441,9 @@ class ServerStore:
                     uploaded_at=_now_iso(),
                 )
             )
+            state = db.get(EnrichmentStateRow, _pk(org_id, compaction_id))
+            if state is not None and state.state in ("waiting", "abandoned"):
+                db.delete(state)
             db.commit()
 
     # ── server-side enrichment (pending digests → qualitative fields) ─────
@@ -473,10 +527,19 @@ class ServerStore:
             return db.get(EnrichmentStateRow, _pk(org_id, compaction_id))
 
     def record_enrichment_attempt(
-        self, org_id: str, compaction_id: str, *, state: str, detail: str = ""
+        self, org_id: str, compaction_id: str, *, state: str, detail: str = "",
+        count_attempt: bool = True,
     ) -> int:
-        """Bump the attempt counter for a digest that could NOT be enriched and
-        record why. Returns the new attempt count so the caller can age it out."""
+        """Record why a digest could not be enriched. Returns the attempt count.
+
+        ``count_attempt=False`` is for WAITING — a digest whose raw simply has
+        not arrived yet. Waiting is not failure: counting it burned all five
+        attempts in ~25 minutes at the 5-minute pass interval, permanently
+        abandoning any session whose raw upload ran late. Attempts now measure
+        only real failed model calls; waiting digests retire on wall age alone.
+        The row is still created either way, so ``first_seen_at`` starts the
+        age-out clock on first sight.
+        """
         now = _now_iso()
         with DBSession(self._engine) as db:
             row = db.get(EnrichmentStateRow, _pk(org_id, compaction_id))
@@ -489,13 +552,58 @@ class ServerStore:
                     first_seen_at=now,
                     updated_at=now,
                 )
-            row.attempts += 1
+            if count_attempt:
+                row.attempts += 1
             row.state = state
             row.detail = detail[:500]
             row.updated_at = now
             db.add(row)
             db.commit()
             return row.attempts
+
+    def reset_abandoned_enrichment(
+        self, org_id: str, *, only_with_input: bool = True, limit: int = 200
+    ) -> list[str]:
+        """Recovery for the abandoned backlog: forget the give-up markers so the
+        next pass retries those digests.
+
+        ``only_with_input`` (the default) resets only digests that could now
+        actually enrich — a raw transcript exists, or a native summary does —
+        so the retry queue is never refilled with the same nothing that
+        abandoned them. Bounded, because un-abandoning re-enters the metered
+        queue and a large backlog should drain in deliberate slices.
+        """
+        reset: list[str] = []
+        with DBSession(self._engine) as db:
+            stmt = (
+                select(EnrichmentStateRow)
+                .where(EnrichmentStateRow.org_id == org_id)
+                .where(EnrichmentStateRow.state == "abandoned")
+                .limit(max(1, limit))
+            )
+            for row in db.exec(stmt):
+                if only_with_input:
+                    has_raw = (
+                        db.get(RawTranscriptRow, f"raw::{org_id}::{row.compaction_id}")
+                        is not None
+                    )
+                    comp_row = db.get(
+                        ReleasedCompactionRow, _pk(org_id, row.compaction_id)
+                    )
+                    has_summary = bool(
+                        comp_row is not None
+                        and str(comp_row.data.get("native_summary") or "").strip()
+                    )
+                    still_pending = bool(
+                        comp_row is not None
+                        and comp_row.data.get("source") == "pending"
+                    )
+                    if not still_pending or not (has_raw or has_summary):
+                        continue
+                db.delete(row)
+                reset.append(row.compaction_id)
+            db.commit()
+        return reset
 
     def mark_enrichment_abandoned(self, org_id: str, compaction_id: str, *, detail: str) -> None:
         """Terminal state: never picked up again. Set when attempts or age are
@@ -1205,6 +1313,54 @@ class ServerStore:
                         },
                     )
             db.commit()
+
+    def add_llm_usage_purpose(
+        self,
+        org_id: str,
+        month: str,
+        purpose: str,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        est_cost_usd: float,
+    ) -> None:
+        """Attribution twin of ``add_llm_usage`` — same race-safe SQL increment,
+        keyed by (org, month, purpose). The cap check never reads this table;
+        it exists so an exhausted cap can be traced to the pass that spent it."""
+        row_id = f"{org_id}::{month}::{purpose}"
+        params = {"i": input_tokens, "o": output_tokens, "c": est_cost_usd, "id": row_id}
+        stmt = text(
+            "UPDATE llm_usage_purpose SET calls = calls + 1, "
+            "input_tokens = input_tokens + :i, "
+            "output_tokens = output_tokens + :o, "
+            "est_cost_usd = est_cost_usd + :c WHERE id = :id"
+        )
+        with DBSession(self._engine) as db:
+            updated = db.execute(stmt, params)
+            if getattr(updated, "rowcount", 0) == 0:
+                try:
+                    db.add(
+                        LlmUsagePurposeRow(
+                            id=row_id, org_id=org_id, month=month, purpose=purpose,
+                            calls=1, input_tokens=input_tokens,
+                            output_tokens=output_tokens, est_cost_usd=est_cost_usd,
+                        )
+                    )
+                    db.commit()
+                    return
+                except Exception:  # noqa: BLE001 - insert race
+                    db.rollback()
+                    db.execute(stmt, params)
+            db.commit()
+
+    def list_llm_usage_purposes(self, org_id: str, month: str) -> list[LlmUsagePurposeRow]:
+        with DBSession(self._engine) as db:
+            stmt = (
+                select(LlmUsagePurposeRow)
+                .where(LlmUsagePurposeRow.org_id == org_id)
+                .where(LlmUsagePurposeRow.month == month)
+            )
+            return list(db.exec(stmt))
 
     def get_llm_usage(self, org_id: str, month: str) -> LlmUsageRow:
         """The org's usage bucket for a month (a zeroed row when none exists yet)."""

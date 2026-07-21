@@ -197,6 +197,13 @@ def enrich_org(
         # Age-out BEFORE spending anything: a digest whose raw never arrived must
         # not retry forever. Either bound (attempts or wall age) retires it.
         if state is not None:
+            # Attempts now count only real failed model calls — waiting for raw
+            # does NOT increment them. Before that distinction, five 5-minute
+            # passes (~25 min) with a late raw upload permanently abandoned the
+            # digest, which is how the wiki filled with "awaiting summary"
+            # sessions that could never recover. Waiting digests retire on wall
+            # age alone; a raw upload arriving deletes this row entirely
+            # (store.record_raw), restarting both clocks.
             too_many = state.attempts >= max(1, config.enrich_max_attempts)
             first_seen = datetime.fromisoformat(state.first_seen_at)
             if first_seen.tzinfo is None:
@@ -204,7 +211,7 @@ def enrich_org(
             too_old = (now - first_seen) > max_age
             if too_many or too_old:
                 reason = (
-                    f"gave up after {state.attempts} attempts"
+                    f"gave up after {state.attempts} failed attempts"
                     if too_many
                     else f"no input within {config.enrich_max_age_days}d"
                 )
@@ -222,7 +229,8 @@ def enrich_org(
         if not summary and not turns:
             # Neither input has arrived. WAIT — do not burn a call on nothing.
             store.record_enrichment_attempt(
-                org_id, compaction.id, state="waiting", detail="no native_summary and no raw yet"
+                org_id, compaction.id, state="waiting",
+                detail="no native_summary and no raw yet", count_attempt=False,
             )
             stats.waiting += 1
             continue
@@ -316,7 +324,7 @@ def enrich_provider_for(
         cap = store.get_org_quota(org_id)
         if cap is None:
             cap = config.llm_monthly_cap_usd
-        return MeteredProvider(inner, store, org_id, cap)
+        return MeteredProvider(inner, store, org_id, cap, purpose="enrich")
 
     return _for
 

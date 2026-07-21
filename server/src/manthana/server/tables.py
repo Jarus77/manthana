@@ -150,6 +150,30 @@ class LlmUsageRow(SQLModel, table=True):
     est_cost_usd: float = Field(default=0.0)
 
 
+class LlmUsagePurposeRow(SQLModel, table=True):
+    """Month-to-date LLM spend per (org, purpose) — which PASS spent the money.
+
+    Exists because the org-month bucket alone could not answer the only question
+    that matters when a $25 cap stalls a whole org: which of enrich /
+    consolidate / overview / founder / ask consumed it. The cap check stays on
+    the whole-org bucket; this table is attribution, not enforcement.
+
+    A NEW TABLE rather than a column on ``llm_usage`` because the server
+    upgrades by ``create_all`` only — a new column would silently not exist in
+    deployed databases.
+    """
+
+    __tablename__ = "llm_usage_purpose"  # type: ignore[assignment]
+    id: str = Field(primary_key=True)  # org::YYYY-MM::purpose
+    org_id: str = Field(index=True)
+    month: str = Field(index=True)
+    purpose: str = Field(index=True)
+    calls: int = Field(default=0)
+    input_tokens: int = Field(default=0)
+    output_tokens: int = Field(default=0)
+    est_cost_usd: float = Field(default=0.0)
+
+
 class OrgPrivacyRow(SQLModel, table=True):
     """Per-org privacy posture. ``open`` = consenting org: the founder sees named,
     per-individual results. ``k_anon`` = the original contract:
@@ -350,6 +374,7 @@ SERVER_TABLES = [
     ReleasedCompactionVectorRow,
     InviteRow,
     LlmUsageRow,
+    LlmUsagePurposeRow,
     OrgQuotaRow,
     OrgPrivacyRow,
     EnrichmentStateRow,
@@ -373,6 +398,7 @@ __all__ = [
     "ReleasedCompactionVectorRow",
     "InviteRow",
     "LlmUsageRow",
+    "LlmUsagePurposeRow",
     "OrgQuotaRow",
     "OrgPrivacyRow",
     "EnrichmentStateRow",

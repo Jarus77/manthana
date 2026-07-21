@@ -75,12 +75,22 @@ class MeteredProvider:
     name = "metered"
 
     def __init__(
-        self, inner: LLMProvider, store: ServerStore, org_id: str, cap_usd: float
+        self,
+        inner: LLMProvider,
+        store: ServerStore,
+        org_id: str,
+        cap_usd: float,
+        *,
+        purpose: str = "",
     ) -> None:
         self._inner = inner
         self._store = store
         self._org_id = org_id
         self._cap_usd = cap_usd
+        #: Which pass this provider serves (enrich/consolidate/overview/founder/
+        #: ask). Attribution only — the CAP stays whole-org, so no purpose mix
+        #: can sneak past the budget.
+        self._purpose = purpose
 
     def complete(self, prompt: str) -> str:
         month = month_key()
@@ -96,13 +106,23 @@ class MeteredProvider:
         else:  # mock/scripted providers → chars/4 heuristic
             input_tokens, output_tokens = len(prompt) // 4, len(text) // 4
         model = getattr(base, "model", "") or ""
+        cost = estimate_cost_usd(model, input_tokens, output_tokens)
         self._store.add_llm_usage(
             self._org_id,
             month,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            est_cost_usd=estimate_cost_usd(model, input_tokens, output_tokens),
+            est_cost_usd=cost,
         )
+        if self._purpose:
+            try:
+                self._store.add_llm_usage_purpose(
+                    self._org_id, month, self._purpose,
+                    input_tokens=input_tokens, output_tokens=output_tokens,
+                    est_cost_usd=cost,
+                )
+            except Exception:  # noqa: BLE001 - attribution must never fail the call
+                pass
         return text
 
 
