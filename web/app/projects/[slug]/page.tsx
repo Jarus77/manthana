@@ -93,7 +93,23 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
             ) : (
               <p className="lead">
                 <b>{data.project}</b> is a project in the {data.org_id} organisation. No
-                article has been written yet — one appears once enough summarised work lands.
+                article has been written yet.{' '}
+                {data.sessions.length > 0 ? (
+                  <>
+                    Manthana writes one from the {data.sessions.length} summarised session
+                    {data.sessions.length === 1 ? '' : 's'} below; it appears on the next pass.
+                  </>
+                ) : data.pending_count > 0 ? (
+                  <>
+                    Articles are written from summarised sessions, and{' '}
+                    {data.pending_count === 1
+                      ? 'the one session here is'
+                      : `all ${data.pending_count} sessions here are`}{' '}
+                    still awaiting a summary.
+                  </>
+                ) : (
+                  <>An article appears once the first session here is summarised.</>
+                )}
               </p>
             )}
 
@@ -111,7 +127,11 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
                   ))}
                 </ul>
               ) : (
-                <Empty>No summarised sessions yet.</Empty>
+                <Empty>
+                  {data.pending_count > 0
+                    ? 'Nothing readable yet — every session here is still awaiting its summary.'
+                    : 'No sessions have been released to this project.'}
+                </Empty>
               )}
               {data.pending_count > 0 && (
                 <p className="faint">

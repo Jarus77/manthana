@@ -13,6 +13,9 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "httpx>=0.27",
+    # PEP 440 version ordering for the update notice — a string compare would put
+    # 0.10.0 before 0.9.0 (updatecheck.is_newer).
+    "packaging>=23",
 ]
 
 [project.optional-dependencies]

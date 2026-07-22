@@ -96,10 +96,12 @@ export default function VerbatimCompaction({ params }: { params: Promise<{ id: s
               </>
             ) : (
               <Empty>
-                This session carried no agent summary
+                This session carried no agent summary — most do not. Claude Code and Codex
+                only write one when a conversation is long enough to be compacted, so for a
+                typical session there is no narrative to quote here
                 {data.source === 'pending'
-                  ? ' — its digest has not been enriched yet, so the fields below are the deterministic extraction.'
-                  : '. The fields below were derived from the transcript instead.'}
+                  ? '. Its digest has not been enriched yet either, so the fields below are the deterministic extraction — nothing has read the transcript.'
+                  : '; the fields below were written by reading the transcript instead.'}
               </Empty>
             )}
 

@@ -31,12 +31,19 @@ import {
 } from '@/components/primitives'
 import type { SessionPage } from '@/lib/types'
 
+/**
+ * A named list of things the session produced.
+ *
+ * Deliberately NOT monospaced any more. These are sentences the model wrote
+ * ("gaol.md: project goal statement"), not identifiers, and setting prose in a
+ * code face was most of what made this block look like a machine dump.
+ */
 function ItemList({ title, items }: { title: string; items: string[] }) {
   if (!items.length) return null
   return (
     <>
       <h3>{title}</h3>
-      <ul className="mono">
+      <ul>
         {items.map((item, i) => (
           <li key={i}>{item}</li>
         ))}
@@ -52,15 +59,20 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
     <Wiki<SessionPage> path={`/sessions/${encodeURIComponent(id)}`}>
       {(data) => {
         const s = data.session
-        const touched =
-          s.files_touched.length + s.prs_opened.length + s.tests_added.length + s.artifacts.length
+        // What a colleague can read, not what a machine recorded. File paths are
+        // deliberately excluded from this count: they are absolute, laptop-specific
+        // and unreadable, so they no longer justify a section on their own — they
+        // collapse to a count that links to the verbatim digest.
+        const produced =
+          s.artifacts.length + s.prs_opened.length + s.tests_added.length + s.files_touched.length
         const sections = [
           ...(isPending(s) && s.task_intent
             ? [{ id: 'prompt', label: 'Opening prompt' }]
             : []),
           { id: 'approach', label: 'Approach' },
           ...(s.friction.length ? [{ id: 'friction', label: 'Friction' }] : []),
-          ...(touched ? [{ id: 'touched', label: 'What it touched' }] : []),
+          ...(produced ? [{ id: 'produced', label: 'What came out of it' }] : []),
+          ...(s.dead_end_branches.length ? [{ id: 'dead-ends', label: 'Dead ends' }] : []),
           ...(data.notes.length ? [{ id: 'knowledge', label: 'Knowledge produced' }] : []),
           { id: 'see-also', label: 'See also' },
         ]
@@ -90,6 +102,13 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
                 ['Tool', s.surface],
                 ['Files touched', s.files_touched.length || '—'],
                 ['Pull requests', s.prs_opened.length || '—'],
+                // A fixed row rather than only the hatnote sentence: this is the
+                // page's provenance link, and it was previously findable only by
+                // reading a paragraph of prose.
+                [
+                  'Released digest',
+                  <Link href={`/sessions/${s.id}/verbatim`}>view verbatim</Link>,
+                ],
                 ...(s.est_cost_usd
                   ? ([['Cost', `$${s.est_cost_usd.toFixed(2)}`]] as Array<[string, React.ReactNode]>)
                   : []),
@@ -159,12 +178,32 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
               </Section>
             )}
 
-            {touched > 0 && (
-              <Section id="touched" title="What it touched">
-                <ItemList title="Files" items={s.files_touched} />
+            {produced > 0 && (
+              <Section id="produced" title="What came out of it">
+                <ItemList title="Artifacts" items={s.artifacts} />
                 <ItemList title="Pull requests" items={s.prs_opened} />
                 <ItemList title="Tests added" items={s.tests_added} />
-                <ItemList title="Artifacts" items={s.artifacts} />
+                {s.files_touched.length > 0 && (
+                  <p className="faint">
+                    Touched {s.files_touched.length} file
+                    {s.files_touched.length === 1 ? '' : 's'} —{' '}
+                    <Link href={`/sessions/${s.id}/verbatim`}>listed in the released digest</Link>.
+                  </p>
+                )}
+              </Section>
+            )}
+
+            {s.dead_end_branches.length > 0 && (
+              <Section id="dead-ends" title="Dead ends">
+                <p className="subtle">
+                  Approaches tried here and abandoned. Recorded so the next person does not
+                  spend the same hours finding out.
+                </p>
+                <ul>
+                  {s.dead_end_branches.map((d, i) => (
+                    <li key={i}>{d}</li>
+                  ))}
+                </ul>
               </Section>
             )}
 

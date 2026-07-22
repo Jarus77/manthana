@@ -74,6 +74,8 @@ export interface Session {
   prs_opened: string[]
   tests_added: string[]
   languages: string[]
+  /** What was tried and abandoned — the one thing no other tool records. */
+  dead_end_branches: string[]
   tier_used: string | null
   est_cost_usd: number | null
   total_tokens: number | null

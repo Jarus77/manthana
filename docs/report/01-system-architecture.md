@@ -608,6 +608,7 @@ manthana-server token acme engineering  # issue JWT for agents
 - `$MANTHANA_DATA_HOME/manthana.toml` — optional config ([redaction], [embeddings]).
 - `$MANTHANA_SERVER_URL` — server URL for sync.
 - `$MANTHANA_TEAM_TOKEN` — JWT for agent → server authentication.
+- `$MANTHANA_NO_UPDATE_NOTIFIER` — silence the update-available notice (cache: `$MANTHANA_DATA_HOME/update-check.json`).
 
 ### Server
 - `MANTHANA_SERVER_DB_URL` — Postgres/SQLite connection string.

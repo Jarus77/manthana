@@ -58,6 +58,22 @@ from .wiki_api import mount_wiki_api
 from .wiki_ui import mount_retired_wiki, mount_wiki_ui
 
 
+def _server_version() -> str:
+    """The deployed manthana-server version, advertised on /healthz.
+
+    Resolved once per call rather than at import so a hot-reloaded dev server does
+    not serve a stale number; falls back to the not-installed sentinel the agent
+    already knows to ignore (running from a source checkout, e.g. under pytest).
+    """
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as pkg_version
+
+    try:
+        return pkg_version("manthana-server")
+    except PackageNotFoundError:
+        return "0+unknown"
+
+
 class CreateOrg(BaseModel):
     org_id: str
     name: str
@@ -367,7 +383,17 @@ def create_app(
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
-        return {"status": "ok"}
+        # Also the agent's "what version should I be on?" channel. The agent and the
+        # server ship in lockstep, so the deployed server's version IS the version an
+        # engineer's agent should converge on — better than the newest public tag,
+        # which their org may not have rolled out (and which is unreachable anywhere
+        # GitHub egress is blocked). Piggybacking on /healthz rather than adding an
+        # endpoint is safe and free: this route has no response_model, and every
+        # agent caller (doctor, login, setup, sync --check) only reads the status
+        # code, so old agents ignore the extra keys and new agents get the number
+        # from a request they were already making.
+        version = _server_version()
+        return {"status": "ok", "server_version": version, "latest_agent_version": version}
 
     @app.get("/readyz")
     def readyz(response: Response) -> dict[str, str]:
@@ -727,11 +753,19 @@ def create_app(
         """Month-by-month server-side LLM usage for an org, plus its effective cap."""
         override = store.get_org_quota(org_id)
         cap = override if override is not None else config.llm_monthly_cap_usd
+        # Read spend from the same row MeteredProvider gates on, so this endpoint
+        # can never disagree with the thing actually blocking the pass.
+        spent = store.get_llm_usage(org_id, month_key()).est_cost_usd
         return {
             "org_id": org_id,
             "month": month_key(),
             "monthly_cap_usd": cap,
             "cap_is_override": override is not None,
+            "spent_usd": round(spent, 6),
+            # The whole point of this endpoint. A hit cap doesn't error anywhere a
+            # human looks — it just stops enrichment, and the wiki fills with
+            # unsummarised sessions that read as a bug. Say it plainly, here.
+            "quota_blocked": cap > 0 and spent >= cap,
             # Which pass spent it — the question a stalled org actually asks.
             "purposes": {
                 r.purpose: {

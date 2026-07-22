@@ -6,15 +6,20 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import os
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as _pkg_version
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import typer
+from manthana.agent import updatecheck
 from manthana.agent.actions import TriggerEvent, default_dispatcher, tag_all
 from manthana.agent.capture import ingest_all
-from manthana.agent.compact import DEFAULT_SETTLE_SECONDS, compact_pending, compact_session
+from manthana.agent.compact import (
+    DEFAULT_SETTLE_SECONDS,
+    compact_pending,
+    compact_session,
+    compact_settled,
+)
 from manthana.agent.datahome import db_path, resolve_data_home
 from manthana.agent.store import Store
 from manthana.schemas import ActionOutcome, Mode
@@ -79,10 +84,15 @@ app = typer.Typer(
 @app.command()
 def version() -> None:
     """Print the installed Manthana version."""
-    try:
-        typer.echo(_pkg_version("manthana"))
-    except PackageNotFoundError:
-        typer.echo("0+unknown")
+    typer.echo(updatecheck.current_version())
+
+
+@app.command(name=updatecheck.HIDDEN_COMMAND, hidden=True)
+def _update_check() -> None:
+    """Refresh the update-check cache (spawned detached; not for humans to run)."""
+    updatecheck.suppress()  # a child must never print or spawn another child
+    base, token = _resolve_server()
+    updatecheck.refresh(base, token, force=True)
 
 
 @app.command()
@@ -203,6 +213,68 @@ def setup(
 
 
 @app.command()
+def solo(
+    service_install: bool = typer.Option(
+        True, "--service/--no-service", help="install the auto-capture daemon at login"
+    ),
+    open_dashboard: bool = typer.Option(
+        True, "--dashboard/--no-dashboard", help="serve the personal wiki when setup finishes"
+    ),
+    port: int = 8765,
+) -> None:
+    """Set Manthana up for yourself alone — no org, no server, nothing leaves this laptop.
+
+    The counterpart to `setup`, which needs an invite from an admin. Everything the
+    solo path needs already worked; what was missing was a way to SAY you are solo.
+    Without that, `doctor` could not tell "hasn't onboarded yet" from "is one person
+    and always will be", so it reported a healthy personal install as broken.
+
+    This captures your Claude Code and Codex history, compacts what has settled, and
+    opens your personal wiki. `manthana ask` runs on the Claude CLI you already have
+    — no API key is involved at any point, and no request is made to us.
+    """
+    from manthana.agent.config import load_config, save_config
+
+    cfg = load_config()
+    if cfg.server_url or cfg.team_token:
+        typer.echo("✗ this install is already connected to an org server.")
+        typer.echo(f"  server: {cfg.server_url}")
+        typer.echo("  Solo mode is for installs with no org. Nothing was changed.")
+        raise typer.Exit(code=1)
+    save_config(replace(cfg, solo=True))
+
+    store = Store.open()
+    ingest_all(store)
+    n_sessions = len(store.list_sessions(limit=1_000_000))
+    n_comp = len(compact_settled(store, settle_seconds=DEFAULT_SETTLE_SECONDS))
+
+    if not service_install:
+        daemon = "skipped (--no-service) — run `manthana watch` yourself"
+    else:
+        try:
+            service("install")
+            daemon = "installed (runs at login)"
+        except typer.Exit:
+            daemon = "install failed — run `manthana service install`"
+
+    url = f"http://127.0.0.1:{port}"
+    typer.echo("")
+    typer.echo("✓ solo mode — Manthana runs entirely on this laptop")
+    typer.echo(f"  captured {n_sessions} session(s) · compacted {n_comp} · auto-capture: {daemon}")
+    typer.echo(f"  your wiki:  {url}")
+    typer.echo("  ask it:     manthana ask \"what did I try for X?\"")
+    typer.echo("  check it:   manthana doctor")
+    if not open_dashboard:
+        typer.echo(f"\n  start the wiki when you want it:  manthana dashboard --port {port}")
+        return
+    typer.echo(f"\nserving your wiki at {url} — ctrl-c to stop\n")
+    import uvicorn
+    from manthana.agent.dashboard import create_app
+
+    uvicorn.run(create_app(store), host="127.0.0.1", port=port)
+
+
+@app.command()
 def config() -> None:
     """Show the resolved agent config (token masked)."""
     from manthana.agent.config import config_path, load_config
@@ -236,11 +308,17 @@ def doctor() -> None:
         if not ok and critical:
             failed = True
 
-    typer.echo("Manthana doctor")
+    # A solo install has no server BY DESIGN. Before this, doctor reported a
+    # perfectly healthy personal wiki as two critical failures and exited 1 —
+    # which is exactly the signal a new user reads as "this thing is broken".
+    typer.echo("Manthana doctor" + (" (solo — no org server)" if cfg.solo else ""))
     check(
         bool(cfg.server_url and cfg.team_token),
         "configured",
-        f"server={cfg.server_url or '(unset)'} · actor={cfg.actor or '(auto)'}",
+        f"server={cfg.server_url or '(unset)'} · actor={cfg.actor or '(auto)'}"
+        if not cfg.solo
+        else "solo mode — everything stays on this laptop",
+        critical=not cfg.solo,
     )
     if base and token:
         reachable, token_ok = _verify_connection(base, token)
@@ -251,6 +329,22 @@ def doctor() -> None:
         except httpx.HTTPError:
             ready = False
         check(ready, "server DB ready", critical=False)
+        # doctor is where engineers look when something is off, and version drift
+        # against the org server is a real cause of "why isn't my data showing up".
+        # It already talks to /healthz, so this costs one more request at most.
+        installed = updatecheck.current_version()
+        latest, _source = updatecheck.fetch_latest(base, token)
+        if latest and updatecheck.is_newer(installed, latest):
+            check(
+                False, "agent version", f"{installed} → {latest}; run: "
+                f"{updatecheck.install_command()}", critical=False,
+            )
+        else:
+            check(True, "agent version", installed, critical=False)
+    elif cfg.solo:
+        check(
+            True, "no server", "by design — `manthana dashboard` is your wiki", critical=False
+        )
     else:
         check(False, "server reachable", "not configured — run `manthana setup <invite>`")
 
@@ -330,6 +424,10 @@ def watch(
     from manthana.agent.sync_client import SyncClient
     from manthana.agent.watcher import watch as run_watch
 
+    # The daemon refreshes the update cache but never prints the notice: under
+    # launchd its streams are a log file (so isatty already says no), but a
+    # foreground `manthana watch` in a terminal would otherwise nag on every cycle.
+    updatecheck.suppress()
     store = Store.open()
     base, token = _resolve_server()
     client: SyncClient | None = None
@@ -366,6 +464,7 @@ def watch(
             auto_release=auto_release,
             release_window=release_min * 60.0,
             sync_fn=sync_fn,
+            update_fn=lambda: updatecheck.refresh(base, token),
             log=typer.echo,
         )
     except KeyboardInterrupt:
@@ -941,9 +1040,27 @@ def mcp() -> None:
 
 
 def main() -> None:
-    """Console-script entry point."""
+    """Console-script entry point.
+
+    The update notice is printed here rather than from a ``@app.callback()``,
+    because a callback runs *before* the subcommand and so cannot know whether the
+    command succeeded. Typer always leaves via ``SystemExit``, so the ``finally``
+    is the one place that sees both the command's output and its exit code — and
+    the notice is only shown on success (code 0), since appending "by the way,
+    upgrade" to a failure is noise on top of a problem the engineer is already
+    debugging. This is what ``gh`` does.
+    """
     _apply_identity_from_config()
-    app()
+    code = 0
+    try:
+        app()
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+        raise
+    finally:
+        if code == 0:
+            updatecheck.maybe_notify()  # cache read only — no network, never raises
+            updatecheck.maybe_spawn_check()  # detached; result lands on the NEXT run
 
 
 if __name__ == "__main__":

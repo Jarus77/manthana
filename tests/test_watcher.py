@@ -323,6 +323,53 @@ def test_auto_sync_is_rate_limited(tmp_path: Path) -> None:
     assert synced == [1]  # only the first cycle synced
 
 
+def test_update_check_is_throttled_and_logged_once(tmp_path: Path) -> None:
+    # The daemon is the primary update checker, so it must be cheap and quiet: one
+    # call per `update_min_interval`, and a log line only when `update_fn` reports a
+    # release it hasn't reported before (it returns None once the cache has caught up).
+    proj = tmp_path / "projects"
+    _touch(proj / "p1" / "s1.jsonl")
+    _calls, ingest = _recorder()
+    checks: list[int] = []
+    lines: list[str] = []
+
+    def fake_update() -> str | None:
+        checks.append(1)
+        return "0.7.0" if len(checks) == 1 else None
+
+    watch(
+        Store.open_memory(),
+        collector=_collector(proj),
+        ingest=ingest,  # type: ignore[arg-type]
+        update_fn=fake_update,
+        update_min_interval=0.0,  # no throttle: check every cycle
+        sleep=_noop_sleep,
+        iterations=3,
+        log=lines.append,
+    )
+    assert len(checks) == 3
+    assert len([line for line in lines if "update available" in line]) == 1
+
+
+def test_update_check_error_does_not_kill_loop(tmp_path: Path) -> None:
+    proj = tmp_path / "projects"
+    _touch(proj / "p1" / "s1.jsonl")
+    calls, ingest = _recorder()
+
+    def boom_update() -> str | None:
+        raise RuntimeError("github is down")
+
+    watch(  # must not raise
+        Store.open_memory(),
+        collector=_collector(proj),
+        ingest=ingest,  # type: ignore[arg-type]
+        update_fn=boom_update,
+        sleep=_noop_sleep,
+        iterations=1,
+    )
+    assert calls == [str(proj / "p1" / "s1.jsonl")]  # capture still happened
+
+
 def test_auto_sync_error_does_not_kill_loop(tmp_path: Path) -> None:
     proj = tmp_path / "projects"
     _touch(proj / "p1" / "s1.jsonl")

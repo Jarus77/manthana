@@ -9,8 +9,11 @@
  * thing on screen, which is exactly backwards from a dashboard, where the
  * chrome competes with the content.
  *
- * The knowledge portal is built from the org's own note kinds (served by /me),
- * so a taxonomy change on the server needs no client release.
+ * The rail is two portals: a fixed NAV (main page, sessions, people, projects)
+ * and an identity portal built from /me. It deliberately does NOT enumerate the
+ * org's note kinds — that navigation was removed because a taxonomy-shaped
+ * sidebar made the reader choose a category before they could read anything,
+ * which is the opposite of what an article surface wants.
  */
 
 import Link from 'next/link'

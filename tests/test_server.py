@@ -62,7 +62,19 @@ def _team_auth(org: str = "o1", team: str = "t1", actor: str = "e@x.com") -> dic
 # ── auth + bootstrap + ingestion ──────────────────────────────────────────
 def test_health() -> None:
     client, *_ = _make()
-    assert client.get("/healthz").json() == {"status": "ok"}
+    body = client.get("/healthz").json()
+    # The liveness contract old agents rely on (they only read the status code, but
+    # `status: ok` is the documented body) must survive the version fields.
+    assert body["status"] == "ok"
+
+
+def test_health_advertises_the_agent_version_engineers_should_match() -> None:
+    # The agent's update check reads this: agent and server ship in lockstep, so the
+    # deployed server's version is the one an engineer's agent should converge on.
+    client, *_ = _make()
+    body = client.get("/healthz").json()
+    assert body["server_version"] == body["latest_agent_version"]
+    assert isinstance(body["latest_agent_version"], str) and body["latest_agent_version"]
 
 
 def test_admin_endpoints_require_admin_token() -> None:

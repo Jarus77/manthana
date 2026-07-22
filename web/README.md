@@ -4,7 +4,10 @@ The browser UI for the org wiki: what everyone is working on, what the team has
 learned, and how the two connect. Talks to `server/src/manthana/server/wiki_api.py`
 over `/ui/api/wiki/*`.
 
-Design notes live in `spec/manthana-org-wiki.md` §3b.
+Design notes live in `spec/manthana-org-wiki.md` §3b. **Deploying** this client —
+the same-origin constraint, the reverse proxy, and
+`MANTHANA_SERVER_RETIRE_HTML_WIKI` — is documented for users in
+[`docs/self-hosting/web-client.md`](../docs/self-hosting/web-client.md).
 
 ## Run it locally
 
@@ -53,7 +56,7 @@ npx tsc --noEmit
 
 ```
 app/          routes (App Router; every page is a client component + SWR)
-components/   primitives.tsx (chips, badges, cards), Shell, ConnectionsPanel,
+components/   primitives.tsx (chips, badges, cards), Shell (the wiki chrome),
               TeachControls, AskBar, Loader
 lib/          api.ts (fetch wrapper), types.ts (payload shapes + labels)
 ```

@@ -65,6 +65,7 @@ def _comp(
         artifacts=["eval.md"],
         files_touched=["rerank.py"],
         languages=["python"],
+        dead_end_branches=["tried a cross-encoder; too slow to serve"],
         released=True,
     )
 
@@ -97,6 +98,10 @@ def test_session_card_projects_full_compaction() -> None:
     assert card.files_touched == ["rerank.py"]
     assert card.artifacts == ["eval.md"]
     assert card.languages == ["python"]
+    # The digest has always carried abandoned approaches; the wiki dropped them on
+    # the floor. A colleague about to walk down the same dead end is the reader
+    # this wiki helps most, so the projection must not lose it again.
+    assert card.dead_end_branches == ["tried a cross-encoder; too slow to serve"]
     assert card.est_cost_usd == 0.5 and card.total_tokens == 1000
     assert card.released is True and card.hold is False
 

@@ -140,6 +140,92 @@ class AnthropicProvider:
         return "".join(parts).strip()
 
 
+class ClaudeCLIProvider:
+    """Shells out to a Claude CLI already installed and logged in as this user.
+
+    This is the bring-your-own-model path, and it exists for one specific person:
+    someone running Manthana entirely on their own laptop. They already pay for
+    Claude Code. Asking them for a second, separately-billed ``ANTHROPIC_API_KEY``
+    to summarise sessions they just paid to have is an absurd toll, and it was the
+    only thing standing between a solo user and a complete local install.
+
+    ``claude -p`` is headless — no TTY, no interactive login — but it DOES read the
+    credentials in ``$HOME/.claude``. So this provider works when the server runs as
+    a human's own user (``manthana-server serve`` on a laptop) and will not work in
+    the shipped container images, which have neither the binary nor a logged-in
+    home. That asymmetry is the whole reason it is opt-in via config rather than
+    an automatic fallback: silently degrading to it in a container would turn a
+    misconfiguration into a mystery.
+
+    Copied from the agent's provider rather than imported: the AGPL server stays
+    decoupled from the Apache-2.0 agent, and that boundary is worth more than
+    forty lines of deduplication.
+    """
+
+    name = "claude-cli"
+
+    def __init__(self, *, model: str = "", binary: str = "claude", timeout: int = 180) -> None:
+        # Recorded for cost attribution, not passed to the CLI: the binary uses
+        # whatever model its own configuration selects, and pretending otherwise
+        # would put a number in the usage table that nothing produced.
+        self.model = model
+        self.binary = binary
+        self.timeout = timeout
+        #: (input_tokens, output_tokens) of the most recent call, in the shape
+        #: MeteredProvider expects. None when the envelope omitted usage — the
+        #: meter then falls back to its own heuristic rather than recording zero.
+        self.last_usage: tuple[int, int] | None = None
+        #: What the CLI itself said the call cost. This is the ENGINEER's spend on
+        #: their own subscription, not ours, which is exactly why a BYO deploy
+        #: should leave llm_monthly_cap_usd at 0 — our cap has no business
+        #: throttling a bill we are not paying.
+        self.last_cost_usd: float | None = None
+
+    def available(self) -> bool:
+        import shutil
+
+        return shutil.which(self.binary) is not None
+
+    def complete(self, prompt: str) -> str:
+        import json
+        import subprocess  # noqa: S404 - invoking a user-installed CLI is the point
+
+        self.last_usage = None
+        self.last_cost_usd = None
+        try:
+            out = subprocess.run(  # noqa: S603 - fixed argv, no shell, prompt is not a command
+                [self.binary, "-p", prompt, "--output-format", "json"],
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"claude CLI invocation failed: {exc}") from exc
+        if out.returncode != 0:
+            raise RuntimeError(
+                f"claude CLI exited {out.returncode}: {out.stderr.strip()[:500]}"
+            )
+        try:
+            envelope = json.loads(out.stdout)
+        except json.JSONDecodeError:
+            return out.stdout
+        if not isinstance(envelope, dict):
+            return out.stdout
+        cost = envelope.get("total_cost_usd")
+        if isinstance(cost, int | float):
+            self.last_cost_usd = float(cost)
+        usage = envelope.get("usage")
+        if isinstance(usage, dict):
+            self.last_usage = (
+                int(usage.get("input_tokens", 0) or 0),
+                int(usage.get("output_tokens", 0) or 0),
+            )
+        if "result" in envelope:
+            return str(envelope["result"])
+        return out.stdout
+
+
 class ResilientProvider:
     """Wraps a real provider with bounded retry/backoff on TRANSIENT failures (rate
     limit, connection, 5xx). Auth / bad-request errors are not retried. After exhausting
@@ -180,25 +266,49 @@ class ResilientProvider:
         raise last if last else RuntimeError("LLM call failed")
 
 
+def _build(config: ServerConfig, *, model: str, max_tokens: int, pass_name: str) -> LLMProvider:
+    """Construct the configured provider for one pass, degrading rather than crashing.
+
+    Every pass shares this because the failure contract matters more than the
+    per-pass differences: a missing SDK, key, or CLI binary must fall back to the
+    mock with a loud log, never take the server down at boot. A mock returns
+    ``{}``, which every caller already treats as "no data" — the wiki stays
+    honest, it just stays empty.
+    """
+    if config.llm_provider == "anthropic":
+        try:
+            return ResilientProvider(AnthropicProvider(model=model, max_tokens=max_tokens))
+        except Exception as exc:  # noqa: BLE001 - missing SDK/key → degrade, don't crash boot
+            _log.warning(
+                "anthropic %s provider unavailable (%s); falling back to mock — set the "
+                "'manthana-server[llm]' extra + ANTHROPIC_API_KEY to enable",
+                pass_name, exc,
+            )
+            return MockProvider("{}")
+    if config.llm_provider == "claude_cli":
+        cli = ClaudeCLIProvider(model=model, binary=config.claude_cli_binary)
+        if not cli.available():
+            _log.warning(
+                "claude_cli %s provider selected but %r is not on PATH; falling back to "
+                "mock — this mode requires the Claude CLI installed and logged in as the "
+                "user running the server, so it does not work inside the container images",
+                pass_name, config.claude_cli_binary,
+            )
+            return MockProvider("{}")
+        return ResilientProvider(cli)
+    return MockProvider("{}")
+
+
 def make_provider(config: ServerConfig) -> LLMProvider:
     """Select the founder-narrative provider from config (arch §9).
 
-    Defaults to the deterministic mock so dev/tests need no API key; the org flips
-    ``MANTHANA_SERVER_LLM=anthropic`` (single server-wide ``ANTHROPIC_API_KEY``) for a real
-    model. If the anthropic SDK / key is missing, FALL BACK to the mock with a clear log
-    rather than crashing the server; the real provider is wrapped in ``ResilientProvider``."""
-    if config.llm_provider == "anthropic":
-        try:
-            inner = AnthropicProvider(model=config.llm_model, max_tokens=config.llm_max_tokens)
-        except Exception as exc:  # noqa: BLE001 - missing SDK/key → degrade, don't crash boot
-            _log.warning(
-                "anthropic provider unavailable (%s); falling back to mock — set the "
-                "'manthana-server[llm]' extra + ANTHROPIC_API_KEY to enable",
-                exc,
-            )
-            return MockProvider("{}")
-        return ResilientProvider(inner)
-    return MockProvider("{}")
+    Defaults to the deterministic mock so dev/tests need no API key; a hosted org
+    flips ``MANTHANA_SERVER_LLM=anthropic`` (server-wide ``ANTHROPIC_API_KEY``),
+    and a solo self-hoster flips ``claude_cli`` to spend their own Claude
+    subscription instead of buying a second, separately-billed one."""
+    return _build(
+        config, model=config.llm_model, max_tokens=config.llm_max_tokens, pass_name="narrative"
+    )
 
 
 def make_enrich_provider(config: ServerConfig) -> LLMProvider:
@@ -209,18 +319,12 @@ def make_enrich_provider(config: ServerConfig) -> LLMProvider:
     narrative may stay on a stronger tier. Same degrade-don't-crash contract — a
     missing SDK/key falls back to the mock so the server still boots.
     """
-    if config.llm_provider == "anthropic":
-        try:
-            inner = AnthropicProvider(
-                model=config.enrich_model, max_tokens=config.enrich_max_tokens
-            )
-        except Exception as exc:  # noqa: BLE001 - missing SDK/key → degrade, don't crash boot
-            _log.warning(
-                "anthropic enrichment provider unavailable (%s); falling back to mock", exc
-            )
-            return MockProvider("{}")
-        return ResilientProvider(inner)
-    return MockProvider("{}")
+    return _build(
+        config,
+        model=config.enrich_model,
+        max_tokens=config.enrich_max_tokens,
+        pass_name="enrichment",
+    )
 
 
 def make_consolidate_provider(config: ServerConfig) -> LLMProvider:
@@ -230,18 +334,12 @@ def make_consolidate_provider(config: ServerConfig) -> LLMProvider:
     (``consolidate_model``), separate from the founder-narrative tier. Same
     degrade-don't-crash contract.
     """
-    if config.llm_provider == "anthropic":
-        try:
-            inner = AnthropicProvider(
-                model=config.consolidate_model, max_tokens=config.consolidate_max_tokens
-            )
-        except Exception as exc:  # noqa: BLE001 - missing SDK/key → degrade, don't crash boot
-            _log.warning(
-                "anthropic consolidation provider unavailable (%s); falling back to mock", exc
-            )
-            return MockProvider("{}")
-        return ResilientProvider(inner)
-    return MockProvider("{}")
+    return _build(
+        config,
+        model=config.consolidate_model,
+        max_tokens=config.consolidate_max_tokens,
+        pass_name="consolidation",
+    )
 
 
 __all__ = [
@@ -249,6 +347,7 @@ __all__ = [
     "MockProvider",
     "ScriptedProvider",
     "AnthropicProvider",
+    "ClaudeCLIProvider",
     "ResilientProvider",
     "make_provider",
     "make_enrich_provider",
