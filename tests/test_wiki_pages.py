@@ -24,7 +24,13 @@ from manthana.schemas import (
     Surface,
 )
 from manthana.server import ServerStore
-from manthana.server.pages import note_page, org_home, person_page, project_page
+from manthana.server.pages import (
+    PERSON_SESSIONS_PER_PROJECT,
+    note_page,
+    org_home,
+    person_page,
+    project_page,
+)
 
 _NOW = datetime(2026, 3, 1, tzinfo=UTC)
 
@@ -275,6 +281,40 @@ def test_person_page_project_counts_match_the_sessions_listed() -> None:
         )
     for block in person_page(store, "o1", "suraj@x.com").projects:
         assert block.rollup.sessions == len(block.sessions)
+
+
+def test_person_page_lists_projects_beyond_the_newest_50_sessions() -> None:
+    """A released project must never vanish because the engineer has been busy.
+
+    The project list used to be rolled up from the newest `session_limit` (50)
+    rows, so an engineer with 120 sessions got their projects derived from 50 of
+    them — while the same page's infobox announced all 120. Work that was
+    released, attributed and readable simply had no entry. Which projects someone
+    works on and how many sessions to LIST under each are different questions,
+    and this is the one that must not be truncated.
+    """
+    store = _store()
+    # 60 recent sessions on one project, and an older one on another — the older
+    # project falls outside any newest-50 slice.
+    for i in range(60):
+        store.ingest_compaction(
+            _comp(f"new{i}", actor="suraj@x.com", project="bench", days_ago=1),
+            org_id="o1", team_id="t1",
+        )
+    store.ingest_compaction(
+        _comp("old1", actor="suraj@x.com", project="archived-thing", days_ago=30),
+        org_id="o1", team_id="t1",
+    )
+
+    page = person_page(store, "o1", "suraj@x.com")
+    named = {p.rollup.project for p in page.projects}
+    assert "archived-thing" in named, "a released project fell off the page"
+    assert "bench" in named
+
+    # …while the LISTS stay short: the page is a glance, not a log.
+    for block in page.projects:
+        assert len(block.sessions) <= PERSON_SESSIONS_PER_PROJECT
+    assert len(page.sessions) <= 50
 
 
 def test_person_page_still_exposes_the_flat_session_list() -> None:
