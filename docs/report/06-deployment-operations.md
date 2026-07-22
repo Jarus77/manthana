@@ -541,6 +541,8 @@ Approve proposals via the `/ui` console or directly via the API.
 | `MANTHANA_ACTOR` | `{git email} \| {OS user}` | Identity | Contributor identity (overrides git/user) |
 | `MANTHANA_SERVER_URL` | `[server].url` in toml | Sync | Org server URL |
 | `MANTHANA_TEAM_TOKEN` | `[server].token` in toml | Sync | Agent JWT (from `manthana login`) |
+| `MANTHANA_NO_UPDATE_NOTIFIER` | — | UX | Any value silences the "a new version is available" stderr notice (persistent form: `[update] notifier = false` in `manthana.toml`) |
+| `MANTHANA_REPO` | `Jarus77/manthana` | Updates | Release repo used by `install.sh` and the update check's GitHub fallback |
 
 ---
 

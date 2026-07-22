@@ -34,7 +34,9 @@ def test_readyz_ok_when_db_reachable() -> None:
 
 def test_healthz_liveness() -> None:
     client, _ = _client()
-    assert client.get("/healthz").json() == {"status": "ok"}
+    # Liveness is `status: ok`; the version fields ride along for the agent's update
+    # check, so assert the contract rather than the exact shape of the body.
+    assert client.get("/healthz").json()["status"] == "ok"
 
 
 def test_store_ping_true_on_live_engine() -> None:

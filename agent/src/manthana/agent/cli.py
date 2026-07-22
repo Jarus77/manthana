@@ -6,12 +6,11 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import os
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import typer
+from manthana.agent import updatecheck
 from manthana.agent.actions import TriggerEvent, default_dispatcher, tag_all
 from manthana.agent.capture import ingest_all
 from manthana.agent.compact import DEFAULT_SETTLE_SECONDS, compact_pending, compact_session
@@ -79,10 +78,15 @@ app = typer.Typer(
 @app.command()
 def version() -> None:
     """Print the installed Manthana version."""
-    try:
-        typer.echo(_pkg_version("manthana"))
-    except PackageNotFoundError:
-        typer.echo("0+unknown")
+    typer.echo(updatecheck.current_version())
+
+
+@app.command(name=updatecheck.HIDDEN_COMMAND, hidden=True)
+def _update_check() -> None:
+    """Refresh the update-check cache (spawned detached; not for humans to run)."""
+    updatecheck.suppress()  # a child must never print or spawn another child
+    base, token = _resolve_server()
+    updatecheck.refresh(base, token, force=True)
 
 
 @app.command()
@@ -251,6 +255,18 @@ def doctor() -> None:
         except httpx.HTTPError:
             ready = False
         check(ready, "server DB ready", critical=False)
+        # doctor is where engineers look when something is off, and version drift
+        # against the org server is a real cause of "why isn't my data showing up".
+        # It already talks to /healthz, so this costs one more request at most.
+        installed = updatecheck.current_version()
+        latest, _source = updatecheck.fetch_latest(base, token)
+        if latest and updatecheck.is_newer(installed, latest):
+            check(
+                False, "agent version", f"{installed} → {latest}; run: "
+                f"{updatecheck.install_command()}", critical=False,
+            )
+        else:
+            check(True, "agent version", installed, critical=False)
     else:
         check(False, "server reachable", "not configured — run `manthana setup <invite>`")
 
@@ -330,6 +346,10 @@ def watch(
     from manthana.agent.sync_client import SyncClient
     from manthana.agent.watcher import watch as run_watch
 
+    # The daemon refreshes the update cache but never prints the notice: under
+    # launchd its streams are a log file (so isatty already says no), but a
+    # foreground `manthana watch` in a terminal would otherwise nag on every cycle.
+    updatecheck.suppress()
     store = Store.open()
     base, token = _resolve_server()
     client: SyncClient | None = None
@@ -366,6 +386,7 @@ def watch(
             auto_release=auto_release,
             release_window=release_min * 60.0,
             sync_fn=sync_fn,
+            update_fn=lambda: updatecheck.refresh(base, token),
             log=typer.echo,
         )
     except KeyboardInterrupt:
@@ -941,9 +962,27 @@ def mcp() -> None:
 
 
 def main() -> None:
-    """Console-script entry point."""
+    """Console-script entry point.
+
+    The update notice is printed here rather than from a ``@app.callback()``,
+    because a callback runs *before* the subcommand and so cannot know whether the
+    command succeeded. Typer always leaves via ``SystemExit``, so the ``finally``
+    is the one place that sees both the command's output and its exit code — and
+    the notice is only shown on success (code 0), since appending "by the way,
+    upgrade" to a failure is noise on top of a problem the engineer is already
+    debugging. This is what ``gh`` does.
+    """
     _apply_identity_from_config()
-    app()
+    code = 0
+    try:
+        app()
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+        raise
+    finally:
+        if code == 0:
+            updatecheck.maybe_notify()  # cache read only — no network, never raises
+            updatecheck.maybe_spawn_check()  # detached; result lands on the NEXT run
 
 
 if __name__ == "__main__":

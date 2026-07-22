@@ -68,6 +68,8 @@ def watch(
     dispatcher: Dispatcher | None = None,
     sync_fn: Callable[[Store], int] | None = None,
     sync_min_interval: float = 60.0,
+    update_fn: Callable[[], str | None] | None = None,
+    update_min_interval: float = 3600.0,
     clock: Callable[[], float] = time.monotonic,
     wall_clock: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
@@ -92,6 +94,7 @@ def watch(
     emit = log or _log.info
     seen: dict[str, float] = {}
     last_sync: float | None = None
+    last_update: float | None = None
     last_auto: float | None = None
     cycle = 0
     while iterations is None or cycle < iterations:
@@ -166,6 +169,24 @@ def watch(
             except Exception:  # noqa: BLE001 - a sync failure must not kill the loop
                 _log.exception("watch: auto-sync failed")
             last_sync = clock()  # set even on failure, so a failing sync doesn't retry-spam
+        # Refresh the update-check cache. The daemon is the right place for this: it
+        # already holds the server URL and is already doing network I/O, and because
+        # most engineers run it under launchd their interactive commands then never
+        # touch the network to learn about a new release. This throttle only bounds
+        # how often we *ask*; `update_fn` itself honours the 24 h cache TTL, and it
+        # returns a version only the first time a given release is seen — so the log
+        # gets one line per release, not one per hour, which is what makes fleet
+        # drift visible in the daemon log without drowning it.
+        if update_fn is not None and (
+            last_update is None or clock() - last_update >= update_min_interval
+        ):
+            try:
+                found = update_fn()
+                if found:
+                    emit(f"update available: Manthana {found} (re-run install.sh to upgrade)")
+            except Exception:  # noqa: BLE001 - a version check must not kill the loop
+                _log.exception("watch: update check failed")
+            last_update = clock()
         # Forget files that disappeared so a recreated path re-ingests.
         seen = {path: mtime for path, mtime in seen.items() if path in current}
         cycle += 1
