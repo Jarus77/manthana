@@ -448,6 +448,135 @@ def set_quota(
     typer.echo(f"org={org_id} monthly cap → ${monthly_cap_usd:.2f}")
 
 
+def _wrap(text: str, indent: str, width: int = 96) -> str:
+    """Field text, wrapped for a terminal. Empty renders as an explicit marker —
+    a blank line would read as "same as above" when it actually means the model
+    returned nothing for that field, which is a finding."""
+    import textwrap
+
+    if not text:
+        return f"{indent}(empty)"
+    lines = textwrap.wrap(text, width=width - len(indent)) or [text]
+    return "\n".join(f"{indent}{ln}" for ln in lines)
+
+
+def _print_comparison(data: dict) -> None:
+    """Render the compare report for a human.
+
+    Deliberately prints only the fields that DIFFER, with the identical ones
+    named on one line. Dumping all twelve fields per session buries the three
+    that moved, and the three that moved are the entire decision.
+    """
+    summary = data["summary"]
+    typer.echo(
+        f"Enrichment model comparison - org={data['org_id']}\n"
+        f"  baseline : {data['baseline_model']} via {data['baseline_provider']} "
+        "(the stored output the wiki shows today)\n"
+        f"  candidate: {data['candidate_model']} via {data['candidate_provider']}\n"
+        "  DRY RUN - nothing was written."
+    )
+    total = len(data["items"])
+    for n, item in enumerate(data["items"], start=1):
+        head = (
+            f"\n[{n}/{total}] {item['compaction_id']}  project={item['project'] or '-'}  "
+            f"actor={item['actor'] or '-'}"
+        )
+        if item["skipped"]:
+            typer.echo(f"{head}\n  SKIPPED - {item['skipped']}")
+            continue
+        cost = f"${item['cost_usd']:.6f}"
+        meta = (
+            f"  {item['latency_s']:.2f}s  {item['input_tokens']:,} in / "
+            f"{item['output_tokens']:,} out  {cost}"
+            + ("  [native-summary path]" if item["used_summary"] else "")
+        )
+        typer.echo(head + "\n" + meta)
+        if item["error"]:
+            typer.echo(f"  ERROR - {item['error']}")
+            continue
+        if item["parse_failure"]:
+            # The disqualifying result, called out in as many words.
+            typer.echo("  PARSE FAILURE - candidate output contained no JSON object")
+            continue
+        same = [f["name"] for f in item["fields"] if f["identical"]]
+        diff = [f for f in item["fields"] if not f["identical"]]
+        if same:
+            typer.echo(f"  identical: {', '.join(same)}")
+        if not diff:
+            typer.echo("  (every compared field is identical)")
+        for f in diff:
+            typer.echo(f"  ~ {f['name']}")
+            typer.echo("      baseline :")
+            typer.echo(_wrap(f["baseline"], " " * 8))
+            typer.echo("      candidate:")
+            typer.echo(_wrap(f["candidate"], " " * 8))
+
+    typer.echo(
+        f"\nSummary\n"
+        f"  items            : {summary['items']} "
+        f"(compared {summary['compared']}, skipped {summary['skipped']})\n"
+        f"  parse failures   : {summary['parse_failures']}\n"
+        f"  provider errors  : {summary['errors']}\n"
+        f"  fields differing : {summary['fields_differing']} "
+        f"(identical {summary['fields_identical']})\n"
+        f"  candidate cost   : ${summary['total_cost_usd']:.6f} for this run "
+        f"({summary['input_tokens']:,} in / {summary['output_tokens']:,} out tokens)\n"
+        f"  mean latency     : {summary['mean_latency_s']:.2f}s per call"
+    )
+    proj = data.get("monthly_projection")
+    if proj:
+        typer.echo(
+            f"  monthly estimate ({proj['basis']}, {proj['enrich_tokens_mtd']:,} tokens so far "
+            f"in {proj['month']}):\n"
+            f"    baseline  ~ ${proj['baseline_monthly_usd']:.2f}/month\n"
+            f"    candidate ~ ${proj['candidate_monthly_usd']:.2f}/month"
+        )
+    else:
+        typer.echo(
+            "  monthly estimate : not shown - this org has no recorded enrichment token "
+            "volume this month to extrapolate from (per-call figures above are real)"
+        )
+
+
+@app.command()
+def compare_enrichment(
+    org_id: str,
+    model: str = typer.Option(..., "--model", help="candidate model id to test"),
+    provider: str = typer.Option(
+        "", "--provider", help="provider for the candidate (e.g. openrouter); default: server's"
+    ),
+    limit: int = typer.Option(5, "--limit", help="sessions to compare (server caps this)"),
+    server_url: str = typer.Option(..., "--server-url"),
+    admin_token: str = typer.Option("", "--admin-token", envvar="MANTHANA_SERVER_ADMIN_TOKEN"),
+) -> None:
+    """DRY RUN a candidate enrichment model against production output.
+
+    Re-enriches already-enriched sessions with --model, using the SAME prompt and
+    the same coercion, and shows the stored (current) text beside the candidate's
+    for every qualitative field. Nothing is written; the calls are real and are
+    metered against the org's monthly AI budget.
+    """
+    import httpx
+
+    if not admin_token:
+        typer.echo("x no admin token (pass --admin-token or set MANTHANA_SERVER_ADMIN_TOKEN)")
+        raise typer.Exit(code=1)
+    body = {"org_id": org_id, "model": model, "limit": limit}
+    if provider:
+        body["provider"] = provider
+    # Generous timeout: this is `limit` sequential model calls on real transcripts,
+    # and a cheap model on a busy router is exactly the case worth waiting out.
+    with httpx.Client(base_url=server_url.rstrip("/"), timeout=600.0) as client:
+        resp = client.post(
+            "/v1/admin/enrichment/compare", json=body, headers={"X-Admin-Token": admin_token}
+        )
+        if resp.status_code >= 300:
+            typer.echo(f"x {resp.status_code}: {resp.text[:300]}")
+            raise typer.Exit(code=1)
+        data = resp.json()
+    _print_comparison(data)
+
+
 @app.command()
 def invites(org_id: str, data: str = "") -> None:
     """List an org's onboarding invites and their state."""

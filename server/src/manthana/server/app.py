@@ -21,6 +21,7 @@ import json
 import logging
 import secrets
 from collections.abc import Callable
+from dataclasses import replace as dc_replace
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
@@ -43,7 +44,14 @@ from .auth import (
 from .config import ServerConfig
 from .consolidate import consolidate_org, consolidate_provider_for, run_consolidation_pass
 from .digest import build_weekly_digest
-from .enrich import enrich_org, enrich_provider_for, run_enrichment_pass
+from .enrich import (
+    MAX_ITEMS,
+    compare_enrichment,
+    enrich_org,
+    enrich_provider_for,
+    run_enrichment_pass,
+    summarize,
+)
 from .founder import run_query, team_topics, thread
 from .hardening import install_hardening
 from .llm import LLMProvider, make_consolidate_provider, make_enrich_provider, make_provider
@@ -125,6 +133,18 @@ class AskBody(BaseModel):
 
 class MineSkillsBody(BaseModel):
     org_id: str
+
+
+class CompareEnrichmentBody(BaseModel):
+    org_id: str
+    model: str  # candidate model id, e.g. "google/gemini-2.5-flash-lite"
+    # None = the server's configured provider. Set it to compare a model that
+    # lives somewhere else entirely (e.g. "openrouter" while prod is anthropic).
+    provider: str | None = None
+    limit: int = 5
+    # Specific digests instead of the newest enriched ones — for re-checking the
+    # sessions a previous run disagreed on.
+    ids: list[str] | None = None
 
 
 class SetQuotaBody(BaseModel):
@@ -860,6 +880,100 @@ def create_app(
             org_id, only_with_input=not include_without_input, limit=min(max(1, limit), 500)
         )
         return {"reset": len(ids), "ids": ids}
+
+    def _monthly_projection(org_id: str, cost_per_token: float) -> dict[str, Any] | None:
+        """Extrapolate both models' monthly cost from THIS org's real enrichment
+        token volume this month — never from an invented session count.
+
+        The candidate side uses the blended $/token MEASURED on the compare run
+        just made (the price table has never heard of most OpenRouter ids, and
+        guessing would put a fabricated number in front of a spending decision).
+        The baseline side is the spend already recorded for purpose="enrich".
+        Both are scaled by the same month-fraction, so an early-in-the-month run
+        does not read as a tenfold saving.
+
+        Returns None when there is nothing real to extrapolate from.
+        """
+        import calendar
+
+        rows = [
+            r
+            for r in store.list_llm_usage_purposes(org_id, month_key())
+            if r.purpose == "enrich"
+        ]
+        if not rows or cost_per_token <= 0:
+            return None
+        tokens = sum(r.input_tokens + r.output_tokens for r in rows)
+        spent = sum(r.est_cost_usd for r in rows)
+        if tokens <= 0:
+            return None
+        now = datetime.now(UTC)
+        days_in_month = calendar.monthrange(now.year, now.month)[1]
+        scale = days_in_month / max(1, now.day)
+        return {
+            "month": month_key(),
+            "basis": "purpose=enrich tokens month-to-date, scaled to a full month",
+            "enrich_tokens_mtd": tokens,
+            "baseline_spend_mtd_usd": round(spent, 6),
+            "baseline_monthly_usd": round(spent * scale, 4),
+            "candidate_monthly_usd": round(tokens * cost_per_token * scale, 4),
+        }
+
+    @app.post("/v1/admin/enrichment/compare")
+    def enrichment_compare(
+        body: CompareEnrichmentBody, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """DRY RUN a candidate enrichment model against the stored (production)
+        output for the same real sessions. Writes NOTHING.
+
+        The candidate provider is built from a COPY of the server config —
+        mutating the live config to run an experiment would silently re-point the
+        background enrichment loop at an unvetted model, which is exactly the
+        accident this endpoint exists to prevent.
+
+        It is metered like every other pass (purpose="compare"): these are real
+        paid calls, so the org's monthly cap must be able to stop them —
+        QuotaExceededError surfaces as the usual 429.
+        """
+        candidate_provider = body.provider or config.llm_provider
+        try:
+            candidate_config = dc_replace(
+                config, llm_provider=candidate_provider, enrich_model=body.model
+            )
+        except ValueError as exc:  # unknown provider name → the caller's mistake
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        cap = store.get_org_quota(body.org_id)
+        items = compare_enrichment(
+            store,
+            object_store,
+            config,
+            body.org_id,
+            provider=MeteredProvider(
+                make_enrich_provider(candidate_config),
+                store,
+                body.org_id,
+                cap if cap is not None else config.llm_monthly_cap_usd,
+                purpose="compare",
+            ),
+            candidate_label=body.model,
+            limit=body.limit,
+            ids=body.ids,
+        )
+        summary = summarize(items)
+        return {
+            "org_id": body.org_id,
+            "baseline_model": config.enrich_model,
+            "baseline_provider": config.llm_provider,
+            "candidate_model": body.model,
+            "candidate_provider": candidate_provider,
+            "max_items": MAX_ITEMS,
+            "summary": summary,
+            "monthly_projection": _monthly_projection(
+                body.org_id, float(summary["cost_per_token"])
+            ),
+            "items": [i.as_dict() for i in items],
+        }
 
     @app.get("/v1/admin/consolidation")
     def consolidation_status(
