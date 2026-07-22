@@ -9,6 +9,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 from __future__ import annotations
 
+from .compare import (
+    COMPARED_FIELDS,
+    MAX_ITEMS,
+    FieldDiff,
+    SessionComparison,
+    compare_enrichment,
+    summarize,
+)
 from .enricher import (
     EnrichStats,
     apply_enrichment,
@@ -20,7 +28,13 @@ from .enricher import (
 from .prompt import PROMPT_VERSION, build_prompt, serialize_turns
 
 __all__ = [
+    "COMPARED_FIELDS",
+    "MAX_ITEMS",
     "EnrichStats",
+    "FieldDiff",
+    "SessionComparison",
+    "compare_enrichment",
+    "summarize",
     "apply_enrichment",
     "enrich_org",
     "enrich_provider_for",
