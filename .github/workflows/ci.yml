@@ -31,23 +31,44 @@ jobs:
       - name: Tests (personal-mode invariant + schema mirror)
         run: uv run pytest
 
-  # Proves an outside engineer can actually install the CLI from wheels (the pinned
-  # intra-package deps resolve from --find-links; a bare-name build would fail here).
+  # Proves an outside engineer can actually install the CLI.
+  #
+  # It runs scripts/install.sh — the real file, end to end. It used to reimplement
+  # the script's steps instead, which is why two installer bugs reached engineers
+  # behind a green check: the missing --force that made every upgrade a silent
+  # no-op, and the missing --python that broke any machine whose default
+  # interpreter predates 3.11.
+  #
+  # The Python version here is load-bearing. A stock macOS ships 3.9, and the
+  # wheels need >=3.11, so this job pins an OLD default on purpose: with the fix
+  # uv finds or downloads a suitable interpreter and this passes; without it the
+  # resolver fails exactly as it did on the engineer's laptop. Do not "helpfully"
+  # raise it — that is what made this job blind in the first place.
   install-proof:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.10" # deliberately below requires-python
+      - uses: astral-sh/setup-uv@v5
       - name: Build the client + server wheels
         run: |
           for pkg in manthana-schemas manthana-collectors manthana-skills manthana manthana-server; do
             uv build --package "$pkg" --wheel --out-dir dist
           done
-      - name: Install both CLIs from the wheels (isolated) and run them
+      - name: Install via the real installer, on an old default Python
+        env:
+          MANTHANA_WHEELS: dist
         run: |
-          uv tool install --find-links dist manthana
-          uv tool install --find-links dist manthana-server
+          sh scripts/install.sh all
+          export PATH="$HOME/.local/bin:$PATH"
           manthana version
           manthana-server --help >/dev/null
+      - name: Re-run the installer and prove it UPGRADES rather than no-opping
+        env:
+          MANTHANA_WHEELS: dist
+        run: |
+          sh scripts/install.sh all
+          export PATH="$HOME/.local/bin:$PATH"
+          test "$(manthana version)" = "$(uv run python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("agent/pyproject.toml").read_text())["project"]["version"])')"

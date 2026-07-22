@@ -196,6 +196,7 @@ MANTHANA_SERVER_ADMIN_TOKEN="$(openssl rand -hex 24)"
 | `MANTHANA_SERVER_JWT_SECRET` | Signs every agent, founder, and engineer token. Rotating it invalidates all of them at once. |
 | `MANTHANA_SERVER_ADMIN_TOKEN` | Gates the founder console and every admin endpoint. Safe to rotate independently. |
 | `ANTHROPIC_API_KEY` | Only needed with `MANTHANA_SERVER_LLM=anthropic` |
+| `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | The equivalents for `MANTHANA_SERVER_LLM=openai` / `openrouter`. `MANTHANA_SERVER_LLM_API_KEY` overrides either. |
 
 If you don't set the first two, `manthana-server serve` generates them once and
 persists them to `~/.manthana-server/server-secrets.toml` (mode `0600`) — stable
@@ -225,9 +226,55 @@ default** and the server writes no wiki articles until you turn them on. See
 > CLI you're already logged into instead of an API key, which is excellent for a
 > server you run as yourself on a laptop or a VM — and it **does not work in the
 > published container images**, which have neither the binary nor a logged-in
-> `$HOME`. For Docker or Kubernetes, use `anthropic`. If you misconfigure it the
-> server logs loudly and falls back to the mock rather than crashing, so the
-> symptom is an empty wiki, not an outage.
+> `$HOME`. For Docker or Kubernetes, use `anthropic`, `openai` or `openrouter`. If
+> you misconfigure it the server logs loudly and falls back to the mock rather than
+> crashing, so the symptom is an empty wiki, not an outage.
+
+## Pointing the server at a different model
+
+`anthropic` is the default recommendation, not the only one. Three others work in
+a container:
+
+```bash
+# OpenAI
+MANTHANA_SERVER_LLM=openai
+OPENAI_API_KEY=sk-…
+
+# OpenRouter — one key in front of hundreds of models, and it reports the real
+# cost of each call, so per-org spend is exact rather than estimated
+MANTHANA_SERVER_LLM=openrouter
+OPENROUTER_API_KEY=sk-or-…
+
+# Your own endpoint — anything that speaks the OpenAI chat-completions API
+MANTHANA_SERVER_LLM=openai
+MANTHANA_SERVER_LLM_BASE_URL=http://vllm.internal:8000/v1
+MANTHANA_SERVER_LLM_API_KEY=whatever-your-server-accepts
+```
+
+`openai` and `openrouter` are one provider over stdlib HTTP — no extra package,
+unlike `anthropic`'s `manthana-server[llm]`. `MANTHANA_SERVER_LLM_API_KEY` works
+for any of them if you'd rather not use the conventional env var name (handy when
+one secret store holds keys for several services).
+
+**The self-hosted case is the one worth knowing about.** vLLM, Ollama and LM Studio
+all implement the same API, so `MANTHANA_SERVER_LLM_BASE_URL` pointed at one of
+them runs every server-side pass against a model on your own hardware — enrichment,
+consolidation, project overviews. No third party ever sees a session. In Compose,
+put the endpoint on the internal network and it never touches the public internet
+at all.
+
+> **Set the model ids to match.** `MANTHANA_SERVER_LLM_MODEL`,
+> `MANTHANA_SERVER_ENRICH_MODEL` and `MANTHANA_SERVER_CONSOLIDATE_MODEL` all default
+> to Anthropic ids. Switch provider without switching these and **every call fails**
+> — silently, because a failed pass degrades to "no data" rather than erroring.
+> OpenRouter ids carry a vendor prefix (`openai/gpt-4o-mini`); OpenAI's don't;
+> a self-hosted server wants whatever name it serves under. `manthana-server doctor`
+> catches a leftover `claude-` id and tells you which variable it's in.
+
+The same degrade-don't-crash rule applies throughout: a missing key logs a warning
+and falls back to the mock, so a misconfigured provider looks like an empty wiki
+rather than a broken server. `manthana-server doctor` reports the active provider,
+its endpoint, and whether the key is present — check it after any provider change.
 
 ## Next
 

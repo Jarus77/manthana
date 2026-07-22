@@ -27,6 +27,18 @@ K_ANON_FLOOR_DEFAULT = 4
 # cap exists to stop a runaway, not to ration normal use.
 HOSTED_MONTHLY_CAP_USD = 100.0
 
+#: Every provider the server can drive, and for the OpenAI-compatible ones the
+#: default endpoint plus the env var their key conventionally lives in. Keeping
+#: this as data rather than a chain of ifs means adding the next such service is
+#: one line, and the config validator and the factory can never disagree about
+#: what is supported.
+LLM_PROVIDERS = ("mock", "anthropic", "claude_cli", "openai", "openrouter")
+
+OPENAI_COMPATIBLE: dict[str, tuple[str, str]] = {
+    "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY"),
+    "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+}
+
 # Insecure placeholders so `ServerConfig()` is constructible in a REPL/dev, but
 # rejected at startup (see __post_init__) — a real deploy must override them.
 _DEV_JWT_SECRET = "dev-insecure-jwt-secret-change-me-in-production"  # noqa: S105 - placeholder
@@ -51,8 +63,19 @@ class ServerConfig:
     # the subscription they already pay for instead of a second API key. Works on
     # a laptop; does NOT work in the container images (no binary, no logged-in
     # $HOME), which is why it is opt-in rather than an automatic fallback.
-    llm_provider: str = "mock"  # "mock" | "anthropic" | "claude_cli"
+    # "openai" and "openrouter" both speak the OpenAI chat-completions API and
+    # share one provider class; they differ only in default base URL and which
+    # env var holds the key. "openrouter" is the widest option — it fronts
+    # hundreds of models, Anthropic's included, behind a single key.
+    llm_provider: str = "mock"  # mock | anthropic | claude_cli | openai | openrouter
     claude_cli_binary: str = "claude"
+    # Override the endpoint. Setting this with llm_provider="openai" points the
+    # whole pipeline at ANY OpenAI-compatible server — vLLM, Ollama, LM Studio —
+    # which is how an org runs Manthana with no third party seeing their sessions.
+    llm_base_url: str = ""
+    # Explicit key, if you would rather not use the provider's conventional env
+    # var (ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY).
+    llm_api_key: str = ""
     llm_model: str = "claude-sonnet-4-6"
     llm_max_tokens: int = 1024
     # Default monthly server-side LLM budget per org (USD, hosted multi-tenant);
@@ -182,9 +205,9 @@ class ServerConfig:
             )
         if self.privacy_mode not in ("open", "k_anon"):
             raise ValueError(f"privacy_mode must be 'open' or 'k_anon', got {self.privacy_mode!r}")
-        if self.llm_provider not in ("mock", "anthropic", "claude_cli"):
+        if self.llm_provider not in LLM_PROVIDERS:
             raise ValueError(
-                "llm_provider must be 'mock', 'anthropic' or 'claude_cli', got "
+                f"llm_provider must be one of {', '.join(LLM_PROVIDERS)}, got "
                 f"{self.llm_provider!r}"
             )
         # A non-positive k-anon floor would silently disable the privacy floor; a
@@ -291,6 +314,8 @@ class ServerConfig:
             s3_secret_key=env("MANTHANA_SERVER_S3_SECRET_KEY", None),
             llm_provider=env("MANTHANA_SERVER_LLM", cls.llm_provider),
             claude_cli_binary=env("MANTHANA_SERVER_CLAUDE_CLI", cls.claude_cli_binary),
+            llm_base_url=env("MANTHANA_SERVER_LLM_BASE_URL", cls.llm_base_url),
+            llm_api_key=env("MANTHANA_SERVER_LLM_API_KEY", cls.llm_api_key),
             llm_model=env("MANTHANA_SERVER_LLM_MODEL", cls.llm_model),
             llm_max_tokens=int(env("MANTHANA_SERVER_LLM_MAX_TOKENS", str(cls.llm_max_tokens))),
             llm_monthly_cap_usd=float(

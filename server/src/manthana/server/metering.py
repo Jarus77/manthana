@@ -40,10 +40,22 @@ class QuotaExceededError(Exception):
 
 # API list price per MILLION tokens (input, output), matched by substring of the
 # model id. Kept deliberately small — this is a budget estimate, not billing.
+#
+# Order matters: first substring match wins, so put the more specific id first
+# ("gpt-4o-mini" before "gpt-4o"). OpenRouter ids carry a vendor prefix
+# ("openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet") which substring matching
+# handles unchanged — and OpenRouter reports its own exact cost anyway, which
+# MeteredProvider prefers over anything estimated here.
 _PRICE_PER_MTOK: list[tuple[str, float, float]] = [
     ("haiku", 1.0, 5.0),
     ("opus", 15.0, 75.0),
     ("sonnet", 3.0, 15.0),
+    ("gpt-4o-mini", 0.15, 0.6),
+    ("gpt-4o", 2.5, 10.0),
+    ("gpt-4.1-mini", 0.4, 1.6),
+    ("gpt-4.1", 2.0, 8.0),
+    ("o4-mini", 1.1, 4.4),
+    ("gpt-5", 1.25, 10.0),
 ]
 _DEFAULT_PRICE = (3.0, 15.0)  # unknown model → sonnet-class rates
 

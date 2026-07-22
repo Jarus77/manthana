@@ -11,6 +11,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 from __future__ import annotations
 
+import io
 from datetime import UTC, datetime
 from typing import Any
 
@@ -497,3 +498,196 @@ def test_resolve_actor_unique_ambiguous_none() -> None:
     assert _resolve_actor(store, "o1", "acme") == "acme"  # matches both → unchanged
     assert _resolve_actor(store, "o1", "ghost") == "ghost"  # no match → unchanged
     assert _resolve_actor(store, "o1", None) is None
+
+
+# ── OpenAI / OpenRouter ─────────────────────────────────────────────────────
+def _openai_response(text: str, **usage: Any) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "choices": [{"message": {"role": "assistant", "content": text}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 20, **usage},
+    }
+    return body
+
+
+class _FakeHTTP:
+    """Stands in for urllib.request.urlopen as a context manager."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def __enter__(self) -> _FakeHTTP:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        import json
+
+        return json.dumps(self._payload).encode()
+
+
+def _patch_urlopen(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]) -> list[Any]:
+    """Capture the outgoing Request objects and answer with `payload`."""
+    import urllib.request
+
+    seen: list[Any] = []
+
+    def _fake(req: Any, timeout: int = 0) -> _FakeHTTP:  # noqa: ARG001
+        seen.append(req)
+        return _FakeHTTP(payload)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake)
+    return seen
+
+
+def test_openai_provider_posts_and_extracts_the_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    from manthana.server.llm import OpenAICompatibleProvider
+
+    seen = _patch_urlopen(monkeypatch, _openai_response('{"ok": true}'))
+    p = OpenAICompatibleProvider(
+        model="gpt-4o-mini", api_key="sk-test", base_url="https://api.openai.com/v1"
+    )
+    assert p.complete("summarise this") == '{"ok": true}'
+
+    req = seen[0]
+    assert req.full_url == "https://api.openai.com/v1/chat/completions"
+    assert req.get_header("Authorization") == "Bearer sk-test"
+    body = json.loads(req.data)
+    assert body["model"] == "gpt-4o-mini"
+    assert body["messages"] == [{"role": "user", "content": "summarise this"}]
+    assert p.last_usage == (100, 20)
+    # Plain OpenAI does not report cost; metering falls back to the price table.
+    assert p.last_cost_usd is None
+
+
+def test_openrouter_asks_for_and_records_the_real_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenRouter fronts hundreds of models, so a price table keyed on model id is
+    guesswork. It will report the actual charge if asked — so ask, and let
+    MeteredProvider prefer the measured number."""
+    import json
+
+    from manthana.server.llm import OpenAICompatibleProvider
+
+    seen = _patch_urlopen(monkeypatch, _openai_response("hi", cost=0.00123))
+    p = OpenAICompatibleProvider(
+        model="anthropic/claude-3.5-sonnet",
+        api_key="sk-or",
+        base_url="https://openrouter.ai/api/v1",
+    )
+    assert p.complete("x") == "hi"
+    assert json.loads(seen[0].data)["usage"] == {"include": True}
+    assert seen[0].get_header("X-title") == "Manthana"
+    assert p.last_cost_usd == 0.00123
+
+
+def test_openai_retries_once_with_max_completion_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Newer OpenAI models reject `max_tokens`. Rather than track which model is
+    which, the first rejection flips the parameter and retries — otherwise every
+    call to those models fails permanently on a fixable 400."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    from manthana.server.llm import OpenAICompatibleProvider
+
+    bodies: list[dict[str, Any]] = []
+
+    def _fake(req: Any, timeout: int = 0) -> _FakeHTTP:  # noqa: ARG001
+        body = json.loads(req.data)
+        bodies.append(body)
+        if "max_tokens" in body:
+            raise urllib.error.HTTPError(
+                req.full_url, 400, "Bad Request", {},  # type: ignore[arg-type]
+                io.BytesIO(b'{"error":{"message":"Unsupported parameter: max_tokens"}}'),
+            )
+        return _FakeHTTP(_openai_response("done"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake)
+    p = OpenAICompatibleProvider(
+        model="gpt-5", api_key="sk", base_url="https://api.openai.com/v1"
+    )
+    assert p.complete("x") == "done"
+    assert "max_tokens" in bodies[0]
+    assert "max_completion_tokens" in bodies[1]
+
+
+def test_http_errors_carry_a_status_so_retry_is_classified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 401 must never be retried and a 503 always should. ResilientProvider
+    classifies on `.status_code`, so the provider has to attach one."""
+    import urllib.error
+    import urllib.request
+
+    from manthana.server.llm import OpenAICompatibleProvider, _is_retryable
+
+    for status, retryable in ((401, False), (429, True), (503, True)):
+        def _fake(req: Any, timeout: int = 0, _s: int = status) -> _FakeHTTP:  # noqa: ARG001
+            raise urllib.error.HTTPError(
+                req.full_url, _s, "err", {}, io.BytesIO(b"{}")  # type: ignore[arg-type]
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake)
+        p = OpenAICompatibleProvider(model="m", api_key="k", base_url="https://x/v1")
+        with pytest.raises(RuntimeError) as caught:
+            p.complete("x")
+        assert _is_retryable(caught.value) is retryable, status
+
+
+def test_make_provider_selects_openai_and_openrouter(monkeypatch: pytest.MonkeyPatch) -> None:
+    import manthana.server.llm as llm
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-router")
+
+    from manthana.server.llm import OpenAICompatibleProvider
+
+    for provider, expected in (
+        ("openai", "https://api.openai.com/v1"),
+        ("openrouter", "https://openrouter.ai/api/v1"),
+    ):
+        built = llm.make_provider(_cfg(llm_provider=provider))
+        assert isinstance(built, ResilientProvider)
+        inner = built.inner
+        assert isinstance(inner, OpenAICompatibleProvider)
+        assert inner.base_url == expected
+
+
+def test_base_url_override_points_at_a_self_hosted_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reason this override exists: an org that wants NO third party reading
+    their sessions can point the whole pipeline at their own vLLM/Ollama."""
+    import manthana.server.llm as llm
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = _cfg(
+        llm_provider="openai",
+        llm_base_url="http://vllm.internal:8000/v1",
+        llm_api_key="local-key",
+    )
+    from manthana.server.llm import OpenAICompatibleProvider
+
+    built = llm.make_provider(cfg)
+    assert isinstance(built, ResilientProvider)
+    inner = built.inner
+    assert isinstance(inner, OpenAICompatibleProvider)
+    assert inner.base_url == "http://vllm.internal:8000/v1"
+
+
+def test_missing_api_key_degrades_to_mock(monkeypatch: pytest.MonkeyPatch) -> None:
+    import manthana.server.llm as llm
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    for provider in ("openai", "openrouter"):
+        assert isinstance(llm.make_provider(_cfg(llm_provider=provider)), MockProvider)

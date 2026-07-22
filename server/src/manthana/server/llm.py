@@ -17,6 +17,8 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from .config import OPENAI_COMPATIBLE
+
 if TYPE_CHECKING:
     from .config import ServerConfig
 
@@ -138,6 +140,137 @@ class AnthropicProvider:
             if getattr(block, "type", None) == "text"
         ]
         return "".join(parts).strip()
+
+
+class OpenAICompatibleProvider:
+    """Any endpoint that speaks the OpenAI chat-completions API.
+
+    That is one class for three things worth having: OpenAI itself, OpenRouter
+    (which fronts hundreds of models — including Anthropic's — behind the same
+    shape), and any self-hosted server that implements it, such as vLLM, Ollama
+    or LM Studio. The last case matters more than it looks: it is how a
+    privacy-sensitive org runs Manthana with no third party seeing their
+    sessions at all, and it costs nothing extra to support because the wire
+    format is identical.
+
+    Deliberately built on ``urllib`` rather than an SDK. The ``openai`` package
+    would be a second optional extra to install, pin and keep current, and the
+    request here is one JSON POST — while ``httpx``, though used elsewhere in
+    this package, is not actually a declared dependency of it. Background batch
+    passes at this volume have no use for connection pooling.
+    """
+
+    name = "openai-compatible"
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        api_key: str,
+        base_url: str,
+        max_tokens: int = 1024,
+        timeout: int = 180,
+    ) -> None:
+        self.model = model
+        self.max_tokens = max_tokens
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self._api_key = api_key
+        #: (input_tokens, output_tokens) of the most recent call, in the shape
+        #: MeteredProvider expects.
+        self.last_usage: tuple[int, int] | None = None
+        #: OpenRouter returns the REAL cost of the call when asked; metering
+        #: prefers a measured cost over one estimated from a price table, so a
+        #: router deployment gets exact spend instead of a guess about which of
+        #: several hundred models was billed.
+        self.last_cost_usd: float | None = None
+        #: Newer OpenAI models rejected `max_tokens` in favour of
+        #: `max_completion_tokens`. Rather than maintain a list of which model is
+        #: which, the first rejection flips this and the call is retried.
+        self._use_max_completion_tokens = False
+
+    def _payload(self, prompt: str) -> dict[str, Any]:
+        limit_key = (
+            "max_completion_tokens" if self._use_max_completion_tokens else "max_tokens"
+        )
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            limit_key: self.max_tokens,
+        }
+        if "openrouter" in self.base_url:
+            # Ask OpenRouter to report what the call actually cost.
+            body["usage"] = {"include": True}
+        return body
+
+    def _post(self, body: dict[str, Any]) -> dict[str, Any]:
+        import json
+        import urllib.error
+        import urllib.request
+
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        if "openrouter" in self.base_url:
+            # OpenRouter attributes traffic by these; they are optional but it is
+            # rude not to identify yourself to a service that asks.
+            headers["HTTP-Referer"] = "https://github.com/Jarus77/manthana"
+            headers["X-Title"] = "Manthana"
+
+        request = urllib.request.Request(  # noqa: S310 - https URL from validated config
+            f"{self.base_url}/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as resp:  # noqa: S310
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:500]
+            # Carry the status so ResilientProvider's classifier can decide
+            # whether this is worth retrying: 429/5xx yes, 401/400 never.
+            error = RuntimeError(f"{self.base_url} returned {exc.code}: {detail}")
+            error.status_code = exc.code  # type: ignore[attr-defined]
+            raise error from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            error = RuntimeError(f"{self.base_url} unreachable: {exc}")
+            error.status_code = 503  # type: ignore[attr-defined] - transient → retryable
+            raise error from exc
+
+    def complete(self, prompt: str) -> str:
+        self.last_usage = None
+        self.last_cost_usd = None
+        try:
+            data = self._post(self._payload(prompt))
+        except RuntimeError as exc:
+            # The one recoverable 400: this model wants max_completion_tokens.
+            if (
+                getattr(exc, "status_code", None) == 400
+                and "max_tokens" in str(exc)
+                and not self._use_max_completion_tokens
+            ):
+                _log.info("%s rejected max_tokens; retrying with max_completion_tokens", self.model)
+                self._use_max_completion_tokens = True
+                data = self._post(self._payload(prompt))
+            else:
+                raise
+
+        usage = data.get("usage") or {}
+        if usage:
+            self.last_usage = (
+                int(usage.get("prompt_tokens", 0) or 0),
+                int(usage.get("completion_tokens", 0) or 0),
+            )
+            cost = usage.get("cost")
+            if isinstance(cost, int | float):
+                self.last_cost_usd = float(cost)
+
+        choices = data.get("choices") or []
+        if not choices:
+            raise RuntimeError(f"{self.base_url} returned no choices: {str(data)[:300]}")
+        return str((choices[0].get("message") or {}).get("content") or "").strip()
 
 
 class ClaudeCLIProvider:
@@ -285,6 +418,26 @@ def _build(config: ServerConfig, *, model: str, max_tokens: int, pass_name: str)
                 pass_name, exc,
             )
             return MockProvider("{}")
+    if config.llm_provider in OPENAI_COMPATIBLE:
+        import os
+
+        default_url, key_env = OPENAI_COMPATIBLE[config.llm_provider]
+        api_key = config.llm_api_key or os.environ.get(key_env, "")
+        if not api_key:
+            _log.warning(
+                "%s %s provider selected but no API key found; falling back to mock — "
+                "set %s (or MANTHANA_SERVER_LLM_API_KEY)",
+                config.llm_provider, pass_name, key_env,
+            )
+            return MockProvider("{}")
+        return ResilientProvider(
+            OpenAICompatibleProvider(
+                model=model,
+                api_key=api_key,
+                base_url=config.llm_base_url or default_url,
+                max_tokens=max_tokens,
+            )
+        )
     if config.llm_provider == "claude_cli":
         cli = ClaudeCLIProvider(model=model, binary=config.claude_cli_binary)
         if not cli.available():
@@ -348,6 +501,7 @@ __all__ = [
     "ScriptedProvider",
     "AnthropicProvider",
     "ClaudeCLIProvider",
+    "OpenAICompatibleProvider",
     "ResilientProvider",
     "make_provider",
     "make_enrich_provider",

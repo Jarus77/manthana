@@ -160,6 +160,55 @@ Two things to know:
 Cost is metered from what the CLI *actually reports*, not estimated from a price
 table, so the usage numbers reflect your real subscription usage.
 
+### Or a model on your own machine
+
+If you run Ollama, LM Studio or vLLM locally, the server can use it. They all
+speak the OpenAI chat-completions API, and so does the `openai` provider — the
+only difference is where you point it:
+
+```bash
+export MANTHANA_SERVER_LLM=openai
+export MANTHANA_SERVER_LLM_BASE_URL=http://127.0.0.1:11434/v1   # Ollama
+export MANTHANA_SERVER_LLM_API_KEY=ollama                       # any non-empty string
+export MANTHANA_SERVER_LLM_MODEL=qwen3:8b
+export MANTHANA_SERVER_ENRICH_MODEL=qwen3:8b
+export MANTHANA_SERVER_CONSOLIDATE_MODEL=qwen3:8b
+```
+
+LM Studio's server is `http://127.0.0.1:1234/v1`; a local vLLM is usually
+`http://127.0.0.1:8000/v1` — change the port if the Manthana server already has
+`8000`. Nothing leaves your laptop, and nothing is billed.
+
+Be honest with yourself about the model, though. Enrichment and consolidation ask
+for structured JSON back, and a small local model is worse at it than Haiku is —
+expect thinner articles. Turn on `ENABLE_ENRICHMENT` alone, read a few sessions in
+the wiki, and only then add the other two.
+
+### Or your own OpenAI / OpenRouter key
+
+```bash
+export MANTHANA_SERVER_LLM=openrouter        # or: openai
+export OPENROUTER_API_KEY=sk-or-…            # or: OPENAI_API_KEY
+export MANTHANA_SERVER_LLM_MODEL=openai/gpt-4o-mini
+export MANTHANA_SERVER_ENRICH_MODEL=openai/gpt-4o-mini
+export MANTHANA_SERVER_CONSOLIDATE_MODEL=openai/gpt-4o-mini
+```
+
+Neither needs an extra package installed — both go over stdlib HTTP.
+
+**Set all three model ids, whichever of these you choose.** They default to
+Anthropic ids, and leaving them that way on a non-Anthropic provider makes every
+call fail — quietly, because a failed pass degrades to "no data" rather than
+erroring. Note the `openai/` prefix on OpenRouter ids; direct OpenAI ids have none
+(`gpt-4o-mini`), and a local server wants whatever name *it* uses.
+
+Confirm what the server actually picked before you wonder why the wiki is empty:
+
+```bash
+manthana-server doctor
+#   ✓ LLM: openai (http://127.0.0.1:11434/v1) — key present
+```
+
 The alternatives are unchanged: `MANTHANA_SERVER_LLM=anthropic` with an
 `ANTHROPIC_API_KEY`, or the default `mock`, which honestly returns "insufficient
 data" rather than inventing something. Even on `mock` the server stores and
