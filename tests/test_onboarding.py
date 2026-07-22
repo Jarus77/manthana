@@ -235,6 +235,52 @@ def test_doctor_passes_when_healthy(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     cli.doctor()  # all critical checks pass → does not raise
 
 
+def test_doctor_passes_for_a_solo_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A solo install has no server BY DESIGN, and must not be reported as broken.
+
+    This is the same state as `test_doctor_exits_nonzero_when_unconfigured` — no
+    server, no token — and the ONLY thing distinguishing them is that the user
+    said they meant it. Without the flag there is no way to tell "hasn't finished
+    onboarding" from "is one person and always will be".
+    """
+    import manthana.agent.cli as cli
+    from manthana.agent.config import Config, save_config
+
+    monkeypatch.setenv("MANTHANA_DATA_HOME", str(tmp_path))
+    monkeypatch.delenv("MANTHANA_SERVER_URL", raising=False)
+    monkeypatch.delenv("MANTHANA_TEAM_TOKEN", raising=False)
+    save_config(Config(solo=True))
+    cli.doctor()  # does not raise
+
+
+def test_solo_refuses_to_downgrade_a_connected_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Silently flipping a team member to solo would stop their work reaching the
+    org wiki with no error and no visible symptom. Refuse and change nothing."""
+    import manthana.agent.cli as cli
+    import typer
+    from manthana.agent.config import Config, load_config, save_config
+
+    monkeypatch.setenv("MANTHANA_DATA_HOME", str(tmp_path))
+    save_config(Config(server_url="http://x:8000", team_token="tok", actor="bob@x"))
+    with pytest.raises(typer.Exit):
+        cli.solo()
+    assert load_config().solo is False
+
+
+def test_solo_flag_round_trips_through_the_config_file(tmp_path: Path) -> None:
+    from manthana.agent.config import Config, load_config, save_config
+
+    path = tmp_path / "manthana.toml"
+    save_config(Config(solo=True), path)
+    assert load_config(path).solo is True
+    save_config(Config(), path)
+    assert load_config(path).solo is False
+
+
 # ── server: unified serve (--tailscale) + init (phase P1) ────────────────────
 def test_tailscale_public_url_from_status(monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess

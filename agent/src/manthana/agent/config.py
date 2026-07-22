@@ -31,6 +31,11 @@ class Config:
     # persistent opt-out for people who never want it; MANTHANA_NO_UPDATE_NOTIFIER
     # is the per-invocation one (see updatecheck).
     update_notifier: bool = True
+    # [mode].solo — this install has no org server ON PURPOSE. Without it there is
+    # no way to distinguish "hasn't finished onboarding" from "is a solo user and
+    # never will", so `doctor` reported a perfectly healthy personal install as
+    # critically broken and exited non-zero.
+    solo: bool = False
 
 
 def config_path() -> Path:
@@ -47,6 +52,7 @@ def load_config(path: Path | None = None) -> Config:
     server = data.get("server", {})
     identity = data.get("identity", {})
     update = data.get("update", {})
+    mode = data.get("mode", {})
     return Config(
         embeddings_model=embeddings.get("model", DEFAULT_EMBEDDINGS_MODEL),
         redact_secrets=bool(redaction.get("secrets", True)),
@@ -55,6 +61,7 @@ def load_config(path: Path | None = None) -> Config:
         team_token=server.get("token"),
         actor=identity.get("actor"),
         update_notifier=bool(update.get("notifier", True)),
+        solo=bool(mode.get("solo", False)),
     )
 
 
@@ -91,6 +98,8 @@ def save_config(config: Config, path: Path | None = None) -> Path:
     # survive `manthana login` rewriting the file.
     if not config.update_notifier:
         lines += ["", "[update]", "notifier = false"]
+    if config.solo:
+        lines += ["", "[mode]", "solo = true"]
     target.write_text("\n".join(lines) + "\n")
     # Holds the team JWT — keep it owner-only (best-effort; no-op on filesystems
     # without POSIX perms, e.g. some Windows setups).
