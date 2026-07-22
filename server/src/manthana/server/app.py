@@ -753,11 +753,19 @@ def create_app(
         """Month-by-month server-side LLM usage for an org, plus its effective cap."""
         override = store.get_org_quota(org_id)
         cap = override if override is not None else config.llm_monthly_cap_usd
+        # Read spend from the same row MeteredProvider gates on, so this endpoint
+        # can never disagree with the thing actually blocking the pass.
+        spent = store.get_llm_usage(org_id, month_key()).est_cost_usd
         return {
             "org_id": org_id,
             "month": month_key(),
             "monthly_cap_usd": cap,
             "cap_is_override": override is not None,
+            "spent_usd": round(spent, 6),
+            # The whole point of this endpoint. A hit cap doesn't error anywhere a
+            # human looks — it just stops enrichment, and the wiki fills with
+            # unsummarised sessions that read as a bug. Say it plainly, here.
+            "quota_blocked": cap > 0 and spent >= cap,
             # Which pass spent it — the question a stalled org actually asks.
             "purposes": {
                 r.purpose: {
