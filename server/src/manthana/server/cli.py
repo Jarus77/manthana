@@ -517,9 +517,24 @@ def doctor(data: str = "") -> None:
             bool(_os.environ.get("ANTHROPIC_API_KEY")),
             "LLM: anthropic key present", critical=False,
         )
+    elif config.llm_provider == "claude_cli":
+        # The failure mode this catches is nasty and silent: without the binary the
+        # provider degrades to the mock, so every pass "succeeds" while writing
+        # nothing. Say so here rather than leaving it to a server log nobody reads.
+        import shutil as _shutil
+
+        found = _shutil.which(config.claude_cli_binary)
+        check(
+            bool(found),
+            f"LLM: claude_cli ({config.claude_cli_binary})",
+            found or "not on PATH — every pass would silently degrade to the mock; "
+            "this mode needs the CLI installed and logged in as the user running "
+            "the server, so it cannot work inside the container images",
+            critical=False,
+        )
     else:
-        check(True, "LLM: mock (set MANTHANA_SERVER_LLM=anthropic for real narratives)",
-              critical=False)
+        check(True, "LLM: mock (set MANTHANA_SERVER_LLM=anthropic, or claude_cli to use "
+                    "your own logged-in Claude CLI)", critical=False)
     check(config.k_anon_floor >= 4, f"k-anon floor = {config.k_anon_floor}",
           "cross-engineer features need >=4", critical=False)
     # Hosted-deploy sanity: a Postgres DB with the in-memory object store loses
