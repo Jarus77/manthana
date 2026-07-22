@@ -18,6 +18,7 @@ from .auth import issue_team_token
 from .config import (
     HOSTED_MONTHLY_CAP_USD,
     K_ANON_FLOOR_DEFAULT,
+    OPENAI_COMPATIBLE,
     ServerConfig,
     persisted_secrets,
 )
@@ -532,9 +533,49 @@ def doctor(data: str = "") -> None:
             "the server, so it cannot work inside the container images",
             critical=False,
         )
+    elif config.llm_provider in OPENAI_COMPATIBLE:
+        # Same silent failure as claude_cli, one step earlier: with no key the
+        # provider degrades to the mock, every pass "succeeds", and nothing is
+        # ever written. Report the endpoint too — with MANTHANA_SERVER_LLM_BASE_URL
+        # set, "openai" may be a vLLM/Ollama box on the LAN rather than OpenAI, and
+        # which one it is, is exactly what an operator wants confirmed here.
+        default_url, key_env = OPENAI_COMPATIBLE[config.llm_provider]
+        endpoint = config.llm_base_url or default_url
+        has_key = bool(config.llm_api_key or _os.environ.get(key_env))
+        check(
+            has_key,
+            f"LLM: {config.llm_provider} ({endpoint})",
+            "key present" if has_key
+            else f"no key — every pass would silently degrade to the mock; set {key_env} "
+                 "(or MANTHANA_SERVER_LLM_API_KEY)",
+            critical=False,
+        )
+        # The other way to get a silently-empty wiki: the model ids still hold their
+        # Anthropic defaults, which this provider cannot serve. Cheap to check, and
+        # it is the single most common mistake when switching providers.
+        stale = [
+            name
+            for name, value in (
+                ("MANTHANA_SERVER_LLM_MODEL", config.llm_model),
+                ("MANTHANA_SERVER_ENRICH_MODEL", config.enrich_model),
+                ("MANTHANA_SERVER_CONSOLIDATE_MODEL", config.consolidate_model),
+            )
+            if value.startswith("claude-")
+        ]
+        if stale:
+            check(
+                False,
+                "LLM: model ids match the provider",
+                f"{', '.join(stale)} still set to an Anthropic id — every call to "
+                f"{config.llm_provider} would fail (OpenRouter wants a vendor prefix, "
+                "e.g. anthropic/claude-3.5-sonnet)",
+                critical=False,
+            )
     else:
-        check(True, "LLM: mock (set MANTHANA_SERVER_LLM=anthropic, or claude_cli to use "
-                    "your own logged-in Claude CLI)", critical=False)
+        check(True, "LLM: mock (set MANTHANA_SERVER_LLM=anthropic, claude_cli to use your "
+                    "own logged-in Claude CLI, or openai/openrouter — the latter also "
+                    "reaches a self-hosted endpoint via MANTHANA_SERVER_LLM_BASE_URL)",
+              critical=False)
     check(config.k_anon_floor >= 4, f"k-anon floor = {config.k_anon_floor}",
           "cross-engineer features need >=4", critical=False)
     # Hosted-deploy sanity: a Postgres DB with the in-memory object store loses

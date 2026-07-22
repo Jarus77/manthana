@@ -58,18 +58,37 @@ discover it on an invoice.
 | **Consolidation** | `MANTHANA_SERVER_ENABLE_CONSOLIDATION=1` | `claude-haiku-4-5` | Turns enriched digests into typed notes: decisions, conventions, gotchas, benchmarks. **Requires enrichment** — it only reads digests enrichment has filled in. |
 | **Project overviews** | `MANTHANA_SERVER_ENABLE_PROJECT_OVERVIEW=1` | narrative model | Writes the living "what this project is" article per project. |
 
-Plus a real model. Two ways:
+Plus a real model. Four ways:
 
 ```bash
-# The API — the normal choice for a deployed server
+# 1. The Anthropic API — the normal choice for a deployed server
 MANTHANA_SERVER_LLM=anthropic
 ANTHROPIC_API_KEY=sk-ant-…
 
-# …or bring your own: a Claude CLI logged in as the user running the server,
-# so you spend the subscription you already have instead of a second key.
+# 2. Bring your own: a Claude CLI logged in as the user running the server,
+#    so you spend the subscription you already have instead of a second key.
 MANTHANA_SERVER_LLM=claude_cli
 MANTHANA_SERVER_CLAUDE_CLI=claude      # only if the binary isn't called `claude`
+
+# 3. OpenAI, or OpenRouter's one key in front of hundreds of models
+MANTHANA_SERVER_LLM=openrouter
+OPENROUTER_API_KEY=sk-or-…
+MANTHANA_SERVER_LLM_MODEL=anthropic/claude-3.5-sonnet
+MANTHANA_SERVER_ENRICH_MODEL=openai/gpt-4o-mini
+MANTHANA_SERVER_CONSOLIDATE_MODEL=openai/gpt-4o-mini
+
+# 4. Your own model, on your own hardware — see below
+MANTHANA_SERVER_LLM=openai
+MANTHANA_SERVER_LLM_BASE_URL=http://vllm.internal:8000/v1
+MANTHANA_SERVER_LLM_API_KEY=whatever-your-server-accepts
 ```
+
+**Changing provider means changing all three model ids.** They default to
+Anthropic ids (`claude-sonnet-4-6`, `claude-haiku-4-5`), so pointing the server at
+`openai` or `openrouter` and leaving them alone makes **every call fail** — and
+the failure is quiet, because a failed pass degrades rather than raising. Note the
+vendor prefix on OpenRouter ids (`openai/gpt-4o-mini`); OpenAI's own ids have none.
+`manthana-server doctor` checks this for you.
 
 **`claude_cli` works on a laptop and not in a container.** It needs the binary
 *and* a logged-in `$HOME`, so it's right for a server you run as yourself and
@@ -78,8 +97,39 @@ loudly and falls back to the mock — it doesn't crash, and the wiki stays hones
 but empty. Its cost is metered from what the CLI actually reports rather than
 estimated from a price table.
 
-Without either, narratives come from a deterministic mock that returns
+Without any of them, narratives come from a deterministic mock that returns
 "insufficient data" rather than inventing something.
+
+### Keeping session text on your own infrastructure
+
+The `openai` provider is only *conventionally* OpenAI. Point
+`MANTHANA_SERVER_LLM_BASE_URL` at any server that speaks the same chat-completions
+API — vLLM, Ollama, LM Studio — and the entire pipeline runs against a model you
+host:
+
+```bash
+MANTHANA_SERVER_LLM=openai
+MANTHANA_SERVER_LLM_BASE_URL=http://vllm.internal:8000/v1
+MANTHANA_SERVER_LLM_API_KEY=whatever-your-server-accepts   # often any non-empty string
+MANTHANA_SERVER_LLM_MODEL=Qwen/Qwen3-32B-Instruct          # your server's id, not Anthropic's
+MANTHANA_SERVER_ENRICH_MODEL=Qwen/Qwen3-32B-Instruct
+MANTHANA_SERVER_CONSOLIDATE_MODEL=Qwen/Qwen3-32B-Instruct
+```
+
+This is the configuration to reach for when the answer to "may a third party read
+our sessions?" is no. Enrichment, consolidation and project overviews send session
+text to whatever the model provider is; with a self-hosted endpoint that provider
+is **you**, and no session text leaves infrastructure you control. It costs nothing
+extra to support because the wire format is identical — the same provider class
+serves all three cases.
+
+The trade is quality: enrichment and consolidation are structured summarization
+that must return parseable JSON, and a small local model is worse at it. Turn
+enrichment on alone first and read a few articles before enabling the rest.
+
+Note also that spend figures become meaningless here — an unrecognised model id is
+costed at Sonnet-class list rates, which nobody is charging you. Leave
+`MANTHANA_SERVER_LLM_MONTHLY_CAP_USD=0` and read the token counts instead.
 
 **A working wiki configuration:**
 
@@ -105,7 +155,8 @@ hours, not minutes, and cannot starve other tenants.
 ### Cost, roughly
 
 Enrichment and consolidation run on Haiku and are bulk structured summarization,
-not reasoning — on the order of a cent or two per session. Project overviews are
+not reasoning — on the order of a cent or two per session. On `openai` the same
+work is cheaper still at `gpt-4o-mini` rates. Project overviews are
 bounded by a hash of each project's contributing sessions: they regenerate when
 the *work* changes, not on a timer, and never re-describe a project a human has
 edited. Watch real numbers rather than trusting an estimate:
@@ -136,6 +187,21 @@ $100 rather than something tighter because the failure mode of a low cap is
 invisible and awful: enrichment stops, every session stays `pending`, and the
 wiki quietly fills with unsummarised work that looks like a bug rather than a
 bill. The cap exists to stop a runaway, not to ration normal use.
+
+### How exact the numbers are
+
+Spend is **estimated** from token counts at API list price, from a deliberately
+small table (Claude tiers, `gpt-4o`, `gpt-4.1`, `o4-mini`, `gpt-5`, and the `-mini`
+variants). An id the table doesn't recognise is costed at Sonnet-class rates, which
+may be wildly wrong in either direction.
+
+Two providers do better, because they tell us what the call actually cost and a
+measured cost always beats an estimated one:
+
+- **`openrouter`** — the server asks for per-call cost on every request, so a
+  router deployment gets **exact** spend across however many models you route to.
+  That is the reason to prefer it if precise budget tracking matters.
+- **`claude_cli`** — reports what the call cost on *your own* subscription.
 
 ### Watching spend
 

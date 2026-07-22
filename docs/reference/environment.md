@@ -114,11 +114,15 @@ See [Privacy & security model](privacy.md).
 
 | Variable | Default | What it does |
 |---|---|---|
-| `MANTHANA_SERVER_LLM` | `mock` | `mock` · `anthropic` · `claude_cli` — see below |
+| `MANTHANA_SERVER_LLM` | `mock` | `mock` · `anthropic` · `claude_cli` · `openai` · `openrouter` — see below |
 | `MANTHANA_SERVER_CLAUDE_CLI` | `claude` | Which binary the `claude_cli` provider invokes |
+| `MANTHANA_SERVER_LLM_BASE_URL` | — | Overrides the provider's endpoint. With `LLM=openai` this points the whole pipeline at **any** OpenAI-compatible server — vLLM, Ollama, LM Studio — so no third party ever sees a session. |
+| `MANTHANA_SERVER_LLM_API_KEY` | — | Explicit key, when you'd rather not use the provider's conventional env var. Takes precedence over it. |
 | `MANTHANA_SERVER_LLM_MODEL` | `claude-sonnet-4-6` | Model for founder narratives and the weekly digest |
 | `MANTHANA_SERVER_LLM_MAX_TOKENS` | `1024` | Narrative output cap (1..100000) |
-| `ANTHROPIC_API_KEY` | — | Required when `MANTHANA_SERVER_LLM=anthropic` |
+| `ANTHROPIC_API_KEY` | — | Read when `MANTHANA_SERVER_LLM=anthropic` |
+| `OPENAI_API_KEY` | — | Read when `MANTHANA_SERVER_LLM=openai` |
+| `OPENROUTER_API_KEY` | — | Read when `MANTHANA_SERVER_LLM=openrouter` |
 | `MANTHANA_SERVER_LLM_MONTHLY_CAP_USD` | `0.0` | Server-wide default monthly AI budget per org. **`0` = unlimited** (usage is still recorded). Per-org overrides live in the quota table. |
 
 | Provider | What it is | Needs |
@@ -126,6 +130,25 @@ See [Privacy & security model](privacy.md).
 | `mock` (default) | Deterministic and offline. Returns `{}` / "insufficient data" — honest, and empty. | nothing |
 | `anthropic` | The API. The normal choice for a real deployment. | the `manthana-server[llm]` extra + `ANTHROPIC_API_KEY` |
 | `claude_cli` | **Bring your own model.** Shells out to a Claude CLI logged in as the user running the server, so a self-hoster spends the subscription they already have instead of buying a second key. | the binary on `PATH` **and a logged-in `$HOME`** |
+| `openai` | The OpenAI chat-completions API — or, with `LLM_BASE_URL`, **any** server that speaks it, including one of your own. | `OPENAI_API_KEY` (or `LLM_API_KEY`) |
+| `openrouter` | One key in front of hundreds of models, Anthropic's included. Reports the **real** cost of every call, so budget figures are exact rather than estimated. | `OPENROUTER_API_KEY` (or `LLM_API_KEY`) |
+
+`openai` and `openrouter` are one provider class over stdlib `urllib`: no extra to
+install, unlike `anthropic`. They differ only in default endpoint
+(`https://api.openai.com/v1`, `https://openrouter.ai/api/v1`) and which env var
+holds the key.
+
+> **Switching provider means switching model ids too.** All three model settings —
+> `MANTHANA_SERVER_LLM_MODEL`, `MANTHANA_SERVER_ENRICH_MODEL`,
+> `MANTHANA_SERVER_CONSOLIDATE_MODEL` — default to Anthropic ids. Point the server
+> at `openai` or `openrouter` without changing them and **every call fails**. This
+> is the most common mistake when switching. OpenRouter ids carry a vendor prefix
+> (`openai/gpt-4o-mini`, `anthropic/claude-3.5-sonnet`); OpenAI's do not
+> (`gpt-4o-mini`). `manthana-server doctor` flags a leftover `claude-` id.
+
+Newer OpenAI models reject `max_tokens` in favour of `max_completion_tokens`. The
+provider detects that specific `400`, flips, and retries once — old and new models
+both work with no configuration.
 
 > **`claude_cli` does not work in the container images.** It needs both the binary
 > and a logged-in home directory, so it works when the server runs as a human's own
@@ -134,12 +157,18 @@ See [Privacy & security model](privacy.md).
 > missing the server **logs loudly and falls back to the mock** — it does not crash,
 > and your wiki stays honest but empty.
 
-Cost for `claude_cli` is metered from what the CLI actually reports, not estimated
-from a price table, so the usage figures reflect real subscription usage.
+Cost for `claude_cli` and `openrouter` is metered from what each **actually
+reports**, not estimated from a price table. Everything else is priced from a small
+table of API list rates (Claude tiers, `gpt-4o`/`gpt-4.1`/`o4-mini`/`gpt-5`); an
+unrecognised model is estimated at Sonnet-class rates, so a self-hosted endpoint's
+"spend" is a fiction — set the cap to `0` there and read the token counts instead.
 
 Every provider is fail-safe: transient errors are retried with backoff, and a
 missing SDK, key, or binary falls back to the mock and logs rather than crashing
-the server or taking it down at boot.
+the server or taking it down at boot. That is a deliberate trade, and it has a
+cost worth naming: with a provider selected but **no key**, every pass succeeds
+and writes nothing. Run `manthana-server doctor` — it names the active provider,
+its endpoint, and whether the key is there.
 
 > **Hosted operators:** `manthana-server onboard-org` provisions each new customer
 > org with an explicit **$100/month** per-org override. The `ServerConfig` default

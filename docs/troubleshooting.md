@@ -180,20 +180,63 @@ The most common server misconfiguration, in likelihood order:
    `ENABLE_PROJECT_OVERVIEW`. Check what the server thinks:
    `GET /v1/admin/enrichment?org_id=…` reports `enabled`.
 2. **No real model.** `MANTHANA_SERVER_LLM=anthropic` plus `ANTHROPIC_API_KEY`,
-   or `MANTHANA_SERVER_LLM=claude_cli` to use a Claude CLI you're already logged
-   into. The default mock returns `{}` — honest, and empty.
-3. **`claude_cli` selected, but the binary isn't reachable.** Grep the server log
-   for `falling back to mock`. This mode needs the binary **and** a logged-in
-   `$HOME`, so it works when the server runs as your own user and **does not work
-   in the container images**. Either run the server directly, or switch to
-   `anthropic`.
-4. **The budget cap is hit.** `manthana-server usage <org> --server-url …`, or
+   `claude_cli` to use a Claude CLI you're already logged into, or
+   `openai`/`openrouter` with the matching key. The default mock returns `{}` —
+   honest, and empty.
+3. **A provider is selected, but its key or binary isn't there.** Grep the server
+   log for `falling back to mock`, or just run `manthana-server doctor`. Every
+   provider degrades rather than crashing, which is right for uptime and awful for
+   diagnosis: each pass "succeeds" and writes nothing. For `claude_cli` this means
+   the binary **and** a logged-in `$HOME`, so it works when the server runs as your
+   own user and **does not work in the container images**. For `openai` /
+   `openrouter` it means `OPENAI_API_KEY` / `OPENROUTER_API_KEY`, or
+   `MANTHANA_SERVER_LLM_API_KEY`.
+4. **The model ids don't match the provider.** See the entry below — this is the
+   most common mistake when moving off Anthropic.
+5. **The budget cap is hit.** `manthana-server usage <org> --server-url …`, or
    `GET /v1/admin/usage?org_id=…` and look at `quota_blocked` and `spent_usd`. An
    exhausted cap raises no error anywhere a human looks — enrichment simply stops
    and every session stays `pending`, which reads as a bug rather than a bill.
    Raise it with `manthana-server set-quota <org> <usd> --server-url …`.
-5. **Consolidation was enabled without enrichment.** It only reads digests
+6. **Consolidation was enabled without enrichment.** It only reads digests
    enrichment has already filled in, so it has nothing to do.
+
+### I switched to `openai` / `openrouter` and nothing is written
+
+Almost always the model ids. `MANTHANA_SERVER_LLM_MODEL`,
+`MANTHANA_SERVER_ENRICH_MODEL` and `MANTHANA_SERVER_CONSOLIDATE_MODEL` all default
+to **Anthropic** ids (`claude-sonnet-4-6`, `claude-haiku-4-5`), which OpenAI and a
+self-hosted endpoint cannot serve. Every call 404s, the pass degrades to "no data",
+and nothing surfaces where a human is looking.
+
+```bash
+manthana-server doctor
+#   • LLM: model ids match the provider — MANTHANA_SERVER_ENRICH_MODEL still set
+#     to an Anthropic id — every call to openrouter would fail
+```
+
+Set all three. OpenRouter ids carry a vendor prefix (`openai/gpt-4o-mini`,
+`anthropic/claude-3.5-sonnet`); OpenAI's own do not (`gpt-4o-mini`); a self-hosted
+server wants whatever name it serves the model under.
+
+You do **not** need to worry about `max_tokens` vs `max_completion_tokens` — newer
+OpenAI models reject the former, and the provider detects that one `400`, flips,
+and retries automatically.
+
+### Which provider is the server actually using?
+
+```bash
+manthana-server doctor
+#   ✓ LLM: openai (https://api.openai.com/v1) — key present
+#   • LLM: openrouter (…) — no key — every pass would silently degrade to the mock
+```
+
+That line is the fastest way to tell an empty wiki caused by configuration from one
+caused by anything else. It prints the resolved endpoint too, so a self-hosted
+`MANTHANA_SERVER_LLM_BASE_URL` that didn't take is visible immediately. Note that
+`doctor` reads the same env the server does — run it in the same environment
+(inside the container, with the same `.env` sourced), or you'll be checking a
+different configuration than the one that's running.
 
 ### Enrichment is stuck / digests are "abandoned"
 
