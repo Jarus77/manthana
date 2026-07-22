@@ -1,0 +1,84 @@
+---
+title: Manthana documentation
+description: Manthana turns the AI coding sessions your team is already having into a shared, searchable org wiki — without anyone writing documentation, and without anyone being surveilled.
+tableOfContents: false
+---
+
+<div class="docs-lead not-content">
+
+**Manthana** turns the AI coding sessions your team is already having into a
+shared, searchable org wiki — without anyone writing documentation, and without
+anyone being surveilled.
+
+Everything starts on the laptop. Sessions are captured locally, digested
+locally, and only the parts an engineer releases ever travel. Read
+[How Manthana works](/reference/architecture/) once and the rest of these pages
+will make sense.
+
+</div>
+
+## Pick your path
+
+<div class="path-grid not-content">
+
+<div class="path-card">
+  <div class="path-who">Founder or admin</div>
+  <h3><a href="/founders/">Founders &amp; admins</a></h3>
+  <p>Setting Manthana up for a team.</p>
+  <p>Provision an org, invite engineers, set the privacy posture and AI budget, read the wiki and the weekly digest.</p>
+</div>
+
+<div class="path-card">
+  <div class="path-who">Engineer</div>
+  <h3><a href="/engineers/">Engineers</a></h3>
+  <p>You were sent an invite.</p>
+  <p>Install in one command, know exactly what leaves your laptop and when, hold or hide anything you want to.</p>
+</div>
+
+<div class="path-card">
+  <div class="path-who">On your own</div>
+  <h3><a href="/solo/">Solo &amp; independent use</a></h3>
+  <p>No company, no server, no API key.</p>
+  <p>Run <code>manthana solo</code> and get the whole thing locally: your own wiki, grounded questions over your own work, mined skills.</p>
+</div>
+
+<div class="path-card">
+  <div class="path-who">Operator</div>
+  <h3><a href="/self-hosting/">Self-hosting</a></h3>
+  <p>Running the server for someone else.</p>
+  <p>Deploy the server + wiki client behind HTTPS, manage secrets, upgrade safely.</p>
+</div>
+
+</div>
+
+## Reference (all audiences)
+
+| Page | What's in it |
+|---|---|
+| [How Manthana works](/reference/architecture/) | The pipeline end to end, the two-layer model, where every piece of data lives |
+| [Privacy & security model](/reference/privacy/) | What never leaves the laptop, redaction, k-anonymity, `privacy_mode`, audit trails |
+| [CLI reference](/reference/cli/) | Every `manthana` and `manthana-server` command and flag |
+| [Environment variables](/reference/environment/) | Every `MANTHANA_*` variable, its default, and what it does |
+| [Troubleshooting](/troubleshooting/) | Symptom → cause → fix, starting with `doctor` |
+
+## The short version
+
+```
+your AI coding session
+  ↓ captured every 5s to SQLite on your laptop         (never uploaded)
+  ↓ compacted 30 min after the transcript goes quiet   (deterministic, local, free)
+  ↓ auto-released after a 10 min grace window          (personal/held sessions never are)
+  ↓ synced to your org server, redacted                (only released, non-personal work)
+  ↓ enriched + consolidated server-side into wiki articles
+```
+
+Two windows, two different jobs — the **30-minute settle window** decides when a
+session is *finished*; the **10-minute release window** is your chance to stop it
+from being shared. They are explained properly in
+[What happens to your data](/engineers/your-data/).
+
+## Licensing
+
+Everything an engineer runs is Apache-2.0. The org server is AGPL-3.0-or-later.
+See [`LICENSE`](https://github.com/Jarus77/manthana/blob/main/LICENSE) and
+[`NOTICE`](https://github.com/Jarus77/manthana/blob/main/NOTICE).

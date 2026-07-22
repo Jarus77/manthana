@@ -17,6 +17,14 @@ venv/
 # uv
 # (uv.lock IS committed)
 
+# Node (web/ wiki client, docs-site/ documentation site)
+node_modules/
+docs-site/dist/
+docs-site/.astro/
+docs-site/.link-map.json
+# Generated at build time from docs/ — edit docs/, never this copy
+docs-site/src/content/docs/
+
 # Tooling caches
 .pytest_cache/
 .ruff_cache/

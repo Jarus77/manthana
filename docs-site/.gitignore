@@ -1,0 +1,9 @@
+# Astro / Starlight build artefacts and caches
+node_modules/
+dist/
+.astro/
+.link-map.json
+
+# Generated at build time by scripts/sync-docs.mjs from ../docs (the single
+# source of truth). Never edit or commit these — edit ../docs instead.
+src/content/docs/

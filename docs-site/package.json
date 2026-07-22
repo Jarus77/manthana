@@ -1,0 +1,20 @@
+{
+  "name": "manthana-docs-site",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Static documentation site for Manthana, generated from the repo's docs/ directory.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "sync": "node scripts/sync-docs.mjs",
+    "dev": "npm run sync && astro dev",
+    "build": "npm run sync && astro build",
+    "preview": "astro preview",
+    "check": "npm run sync && astro check",
+    "check-links": "node scripts/check-links.mjs"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.3",
+    "astro": "^7.1.3"
+  }
+}

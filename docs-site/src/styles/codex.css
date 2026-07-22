@@ -1,0 +1,526 @@
+/*
+ * Manthana docs — Wikimedia Codex skin for Starlight.
+ *
+ * These are the exact tokens the org wiki uses (see ../../../web/app/globals.css,
+ * which documents why): real Wikimedia Codex values, serif headings with a
+ * hairline rule beneath, 14px sans body, 960px content column. The docs site is
+ * meant to read as a sibling of the wiki, not as a different product — so the
+ * palette, the type and the rules are shared, and only the docs furniture
+ * (sidebar, on-this-page, search, prev/next) is new.
+ *
+ * LIGHT ONLY, deliberately, and belt-and-braces about it. Starlight ships dark
+ * on plain `:root` and only switches to light under `[data-theme='light']`, so
+ * a page rendered before its inline script ran — or with JS off — would flash or
+ * stay dark. Every token below is therefore declared on `:root` itself AND on
+ * both `[data-theme]` values, so there is no combination of state in which this
+ * site is dark. There is no `prefers-color-scheme` block here, on purpose: an
+ * earlier build of the wiki had one and auto-darkened on dark-mode machines.
+ */
+
+:root,
+:root[data-theme='light'],
+:root[data-theme='dark'],
+::backdrop {
+  /* ── Wikimedia Codex tokens ─────────────────────────────────────────── */
+  --base: #202122;
+  --subtle: #54595d;
+  --faint: #72777d;
+  --link: #36c;
+  --link-visited: #6a60b0;
+  --link-hover: #447ff5;
+  --border: #a2a9b1;
+  --border-subtle: #c8ccd1;
+  --surface: #fff;
+  --neutral: #f8f9fa;
+  --header-bg: #eaecf0;
+
+  --warning: #886425;
+  --error: #bf3c2c;
+  --success: #177860;
+
+  --serif: 'Linux Libertine', 'Georgia', 'Times New Roman', Times, serif;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* ── Starlight's palette, remapped onto the above ───────────────────── */
+  --sl-color-white: var(--base);
+  --sl-color-gray-1: var(--base);
+  --sl-color-gray-2: var(--subtle);
+  --sl-color-gray-3: var(--faint);
+  --sl-color-gray-4: var(--border);
+  --sl-color-gray-5: var(--border-subtle);
+  --sl-color-gray-6: var(--header-bg);
+  --sl-color-gray-7: var(--neutral);
+  --sl-color-black: var(--surface);
+
+  --sl-color-accent-low: #eaf3ff;
+  --sl-color-accent: var(--link);
+  --sl-color-accent-high: #2a4b8d;
+
+  --sl-color-text: var(--base);
+  --sl-color-text-accent: var(--link);
+  --sl-color-text-invert: #fff;
+  --sl-color-bg: var(--surface);
+  --sl-color-bg-nav: var(--neutral);
+  --sl-color-bg-sidebar: var(--neutral);
+  --sl-color-bg-inline-code: var(--neutral);
+  --sl-color-bg-accent: var(--link);
+  --sl-color-hairline: var(--border-subtle);
+  --sl-color-hairline-light: var(--border-subtle);
+  --sl-color-hairline-shade: var(--border-subtle);
+  --sl-color-backdrop-overlay: rgba(32, 33, 34, 0.5);
+
+  /* Aside / callout colours, pulled back to the wiki's muted set. */
+  --sl-color-blue: var(--link);
+  --sl-color-blue-high: #2a4b8d;
+  --sl-color-blue-low: #eaf3ff;
+  --sl-color-green: var(--success);
+  --sl-color-green-high: #14866d;
+  --sl-color-green-low: #f1fbf7;
+  --sl-color-orange: var(--warning);
+  --sl-color-orange-high: #886425;
+  --sl-color-orange-low: #fef6e7;
+  --sl-color-red: var(--error);
+  --sl-color-red-high: #b32424;
+  --sl-color-red-low: #fee7e6;
+  --sl-color-purple: var(--link-visited);
+  --sl-color-purple-high: #4b4090;
+  --sl-color-purple-low: #f1f0fa;
+
+  /* Codex shadows are hairlines, not drop shadows. */
+  --sl-shadow-sm: 0 1px 1px rgba(0, 0, 0, 0.05);
+  --sl-shadow-md: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --sl-shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.12);
+
+  /* ── type + layout ──────────────────────────────────────────────────── */
+  --sl-font: var(--sans);
+  --sl-font-mono: var(--mono);
+
+  --sl-text-body: 0.875rem; /* 14px — Vector's base, same as the wiki */
+  --sl-text-body-sm: 0.8125rem;
+  --sl-text-code: 0.8125rem;
+  --sl-text-code-sm: 0.75rem;
+  --sl-text-h1: 1.9rem;
+  --sl-text-h2: 1.5rem;
+  --sl-text-h3: 1.1rem;
+  --sl-text-h4: 1rem;
+  --sl-text-h5: 0.9375rem;
+  --sl-line-height: 1.6;
+  --sl-line-height-headings: 1.25;
+
+  --sl-content-width: 60rem; /* 960px */
+  --sl-sidebar-width: 16rem;
+  --sl-nav-height: 3.25rem;
+}
+
+@media (min-width: 50em) {
+  :root {
+    --sl-nav-height: 3.25rem;
+    --sl-text-h1: 1.9rem;
+    --sl-text-h2: 1.5rem;
+    --sl-text-h3: 1.1rem;
+    --sl-text-h4: 1rem;
+  }
+}
+
+html,
+body {
+  background: var(--surface);
+  color: var(--base);
+}
+
+/* ── links: the most Wikipedia thing on the page ──────────────────────── */
+.sl-markdown-content a:not(:where(.not-content *)) {
+  color: var(--link);
+  text-decoration: none;
+}
+
+.sl-markdown-content a:not(:where(.not-content *)):visited {
+  color: var(--link-visited);
+}
+
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+  color: var(--link-hover);
+  text-decoration: underline;
+}
+
+/* ── headings: serif, with the hairline rule beneath ──────────────────── */
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6):not(:where(.not-content *)) {
+  font-weight: normal;
+  line-height: 1.25;
+}
+
+.sl-markdown-content h1:not(:where(.not-content *)),
+.sl-markdown-content h2:not(:where(.not-content *)) {
+  font-family: var(--serif);
+  font-weight: normal;
+}
+
+/* Starlight makes the heading itself `display: inline` inside a wrapper so the
+   anchor link can sit on the same line — so the hairline rule has to go on the
+   wrapper, or it only runs as far as the words. */
+.sl-markdown-content .sl-heading-wrapper:is(.level-h1, .level-h2) {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.2em;
+}
+
+.sl-markdown-content h3:not(:where(.not-content *)),
+.sl-markdown-content h4:not(:where(.not-content *)),
+.sl-markdown-content h5:not(:where(.not-content *)),
+.sl-markdown-content h6:not(:where(.not-content *)) {
+  font-family: var(--sans);
+  font-weight: 700;
+}
+
+/* The title already carries the hairline rule; Starlight's panel divider
+   immediately below it would read as a double rule. */
+.content-panel + .content-panel {
+  border-top: 0;
+}
+
+/* Starlight's own page title block. */
+.page-title,
+h1#_top {
+  font-family: var(--serif);
+  font-weight: normal;
+  font-size: 1.9rem;
+  line-height: 1.25;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Tighter vertical rhythm than Starlight's default 1.5rem-plus. */
+.sl-markdown-content
+  :not(a, strong, em, del, span, input, code, br, li)
+  + :not(a, strong, em, del, span, input, code, br, li, .sl-heading-wrapper, :where(.not-content *)) {
+  margin-top: 0.85rem;
+}
+
+.sl-markdown-content :not(.sl-heading-wrapper) + .sl-heading-wrapper {
+  margin-top: 1.5em;
+}
+
+.sl-markdown-content .sl-heading-wrapper:is(.level-h3, .level-h4, .level-h5, .level-h6) {
+  margin-top: 1.2em;
+}
+
+/* ── code ─────────────────────────────────────────────────────────────── */
+.sl-markdown-content code:not(:where(.not-content *)) {
+  font-family: var(--mono);
+  background: var(--neutral);
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+  padding: 1px 4px;
+}
+
+.sl-markdown-content pre:not(:where(.not-content *)) {
+  background: var(--neutral) !important;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0;
+  padding: 0.9em 1em;
+  line-height: 1.45;
+  color: var(--base);
+}
+
+/* Inline code inside a serif heading, set at full size, dwarfs the words around
+   it. */
+.sl-markdown-content :is(h1, h2, h3, h4) code:not(:where(.not-content *)) {
+  font-size: 0.8em;
+}
+
+.sl-markdown-content pre code:not(:where(.not-content *)) {
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+/* Expressive Code renders the fenced blocks (one light theme only — see the
+   `expressiveCode` block in astro.config.mjs). Pull its frame onto the wiki's
+   neutral surface and square corners. The doubled `:root:root` beats Expressive
+   Code's own `:root` block, which is injected after this file. */
+:root:root {
+  --ec-codeBg: var(--neutral);
+  --ec-brdCol: var(--border-subtle);
+  --ec-brdRad: 0;
+  --ec-frm-edBtnBrdCol: var(--border-subtle);
+  --ec-frm-edActTabBg: var(--surface);
+  --ec-frm-edTabBarBg: var(--header-bg);
+  --ec-frm-frameBoxShdCssVal: none;
+}
+
+.expressive-code .frame pre,
+.expressive-code figure {
+  border-radius: 0;
+}
+
+/* Shell blocks get a fake macOS terminal titlebar (three traffic-light dots) by
+   default. These docs are full of shell one-liners and ASCII pipeline diagrams;
+   a window chrome around each one is noise the wiki does not have. */
+.expressive-code .frame.is-terminal > figcaption.header {
+  display: none;
+}
+
+.expressive-code .frame.is-terminal pre {
+  border-radius: 0;
+  border: var(--ec-brdWd) solid var(--border-subtle);
+  background: var(--neutral);
+}
+
+/* ── tables: MediaWiki's `wikitable` ──────────────────────────────────── */
+/* Starlight sets `display: block; overflow: auto` on tables so wide ones scroll.
+   Keep the scroll, but let the border hug the content instead of running to the
+   full column width with the cells stopping short of it. */
+.sl-markdown-content table:not(:where(.not-content *)) {
+  display: block;
+  overflow-x: auto;
+  width: fit-content;
+  max-width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 0.95em;
+}
+
+.sl-markdown-content :is(th, td):not(:where(.not-content *)) {
+  border: 1px solid var(--border);
+  padding: 0.3em 0.6em;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.sl-markdown-content th:not(:where(.not-content *)) {
+  background: var(--header-bg);
+  font-weight: 700;
+}
+
+.sl-markdown-content blockquote:not(:where(.not-content *)) {
+  border-inline-start: 3px solid var(--border-subtle);
+  color: var(--subtle);
+  padding-inline-start: 1em;
+  font-style: normal;
+}
+
+.sl-markdown-content :is(ul, ol):not(:where(.not-content *)) {
+  padding-inline-start: 1.8em;
+}
+
+.sl-markdown-content li:not(:where(.not-content *)) + li {
+  margin-top: 0.15em;
+}
+
+.sl-markdown-content hr:not(:where(.not-content *)) {
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* ── chrome: header, sidebar, TOC ─────────────────────────────────────── */
+.header {
+  background: var(--neutral);
+  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: none;
+}
+
+.site-title {
+  font-family: var(--serif);
+  font-size: 1.35rem;
+  color: var(--base);
+  font-weight: normal;
+}
+
+#starlight__sidebar,
+.sidebar-pane {
+  background: var(--neutral);
+  border-inline-end: 1px solid var(--border-subtle);
+}
+
+.sidebar-content .top-level > li > details > summary > .group-label > .large,
+.sidebar-content summary .large {
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--subtle);
+  text-transform: none;
+}
+
+.sidebar-content a {
+  color: var(--link);
+  border-radius: 0;
+  padding-block: 0.2em;
+}
+
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover {
+  background: transparent;
+  color: var(--base);
+  font-weight: 700;
+}
+
+.sidebar-content a:hover {
+  background: var(--header-bg);
+  color: var(--link-hover);
+}
+
+/* On this page */
+starlight-toc nav {
+  font-size: 0.8125rem;
+}
+
+starlight-toc a {
+  color: var(--link);
+  border-radius: 0;
+  padding-block: 0.2em;
+}
+
+starlight-toc a[aria-current='true'],
+starlight-toc a[aria-current='true']:hover {
+  color: var(--base);
+  font-weight: 700;
+  background: transparent;
+  border-inline-start: 2px solid var(--border);
+}
+
+.right-sidebar {
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+/* ── search ───────────────────────────────────────────────────────────── */
+site-search button[data-open-modal] {
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--surface);
+  color: var(--subtle);
+}
+
+site-search dialog {
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--surface);
+}
+
+:root {
+  --pagefind-ui-primary: var(--base);
+  --pagefind-ui-text: var(--base);
+  --pagefind-ui-background: var(--surface);
+  --pagefind-ui-border: var(--border-subtle);
+  --pagefind-ui-tag: var(--neutral);
+  --pagefind-ui-border-width: 1px;
+  --pagefind-ui-border-radius: 2px;
+  --pagefind-ui-font: var(--sans);
+}
+
+/* ── prev/next ────────────────────────────────────────────────────────── */
+.pagination-links a {
+  border: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: var(--neutral);
+  box-shadow: none;
+  color: var(--link);
+}
+
+.pagination-links a:hover {
+  border-color: var(--border);
+  background: var(--header-bg);
+}
+
+.pagination-links a > span:first-of-type {
+  color: var(--faint);
+  font-size: 0.8125rem;
+}
+
+.pagination-links a .link-title {
+  color: var(--link);
+  font-size: 1rem;
+}
+
+/* ── asides ───────────────────────────────────────────────────────────── */
+.starlight-aside {
+  border-inline-start-width: 10px;
+  border-radius: 0;
+  background: var(--neutral);
+  padding: 0.6em 1em;
+}
+
+.starlight-aside__title {
+  font-size: 0.875rem;
+}
+
+/* ── landing page ─────────────────────────────────────────────────────── */
+.docs-lead {
+  border: 1px solid var(--border-subtle);
+  background: var(--neutral);
+  padding: 1em 1.2em;
+  margin-bottom: 1.4em;
+}
+
+.docs-lead p {
+  margin: 0 0 0.8em;
+}
+
+.docs-lead p:last-child {
+  margin-bottom: 0;
+}
+
+.docs-lead a {
+  color: var(--link);
+}
+
+.docs-lead a:hover {
+  text-decoration: underline;
+}
+
+.path-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1em;
+  margin: 1.2em 0 1.6em;
+}
+
+.path-card {
+  border: 1px solid var(--border-subtle);
+  background: var(--surface);
+  padding: 0.9em 1.1em 1em;
+}
+
+.path-card h3 {
+  font-family: var(--sans);
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0 0 0.3em;
+}
+
+.path-card h3 a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+.path-card h3 a:hover {
+  text-decoration: underline;
+}
+
+.path-card p {
+  margin: 0 0 0.5em;
+  color: var(--base);
+}
+
+.path-card p:last-child {
+  margin-bottom: 0;
+  color: var(--subtle);
+}
+
+.path-card .path-who {
+  font-size: 0.8125rem;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.2em;
+}
+
+/* ── print ────────────────────────────────────────────────────────────── */
+@media print {
+  .sidebar-pane,
+  .right-sidebar,
+  .header {
+    display: none;
+  }
+}
