@@ -133,13 +133,12 @@ MANTHANA_VERSION=0.6.3 docker compose \
 The overlay swaps the server's source build for the published image and inherits
 Postgres and MinIO from the base file. Requires Docker Compose v2.24+.
 
-> **Check the image path before you rely on it.** The Compose files and the k8s
-> manifest hardcode `ghcr.io/suraj-gameramp/manthana-server`, while the publishing
-> workflow tags `ghcr.io/<repository-owner>/manthana-server:<version>` for whatever
-> owner the repo lives under. If a pull 404s, the owner segment is why — check the
-> repository's Packages page for the real path. `MANTHANA_VERSION` defaults to
-> `0.4.0` in the Compose files, so always set it explicitly to the release you
-> want.
+> **Running a fork or a mirror?** Override `MANTHANA_IMAGE` rather than editing
+> the Compose file: `MANTHANA_IMAGE=ghcr.io/your-org/manthana-server`. The default
+> is `ghcr.io/jarus77/manthana-server`, which is what
+> `.github/workflows/publish-image.yml` actually pushes. Always set
+> `MANTHANA_VERSION` explicitly for anything real — the default tracks the current
+> release and will move under you.
 
 ### Add HTTPS
 

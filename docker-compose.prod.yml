@@ -5,10 +5,16 @@
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
-# Deploy a different release: MANTHANA_VERSION=0.3.0 docker compose ... up -d
+# Deploy a different release: MANTHANA_VERSION=0.6.2 docker compose ... up -d
+# Deploy from a fork/mirror:   MANTHANA_IMAGE=ghcr.io/you/manthana-server docker compose ...
 # Requires Docker Compose v2.24+ (for the !reset below).
+#
+# The image name must match what .github/workflows/publish-image.yml actually
+# pushes — it tags ghcr.io/<repository-owner>/manthana-server, so the owner is
+# derived from wherever the repo lives and is NOT free to hardcode differently
+# here. It was, for a while, and pointed at an owner that never published.
 services:
   server:
     build: !reset null  # drop the source build — use the registry image
-    image: ghcr.io/suraj-gameramp/manthana-server:${MANTHANA_VERSION:-0.4.0}
+    image: ${MANTHANA_IMAGE:-ghcr.io/jarus77/manthana-server}:${MANTHANA_VERSION:-0.6.3}
     pull_policy: always

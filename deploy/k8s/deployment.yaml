@@ -17,8 +17,11 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: server
-          # Pinned to a published release tag (see .github/workflows/publish-image.yml).
-          image: ghcr.io/suraj-gameramp/manthana-server:0.2.0
+          # Pinned to a published release tag. Both halves of this string are
+          # load-bearing and both were wrong: the owner must match what
+          # .github/workflows/publish-image.yml pushes (ghcr.io/<repository-owner>/…),
+          # and the tag had been left at 0.2.0 through four releases.
+          image: ghcr.io/jarus77/manthana-server:0.6.3
           ports:
             - containerPort: 8000
           envFrom:

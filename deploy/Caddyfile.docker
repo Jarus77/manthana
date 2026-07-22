@@ -1,0 +1,26 @@
+# Automatic-HTTPS reverse proxy for the DOCKER COMPOSE stack.
+#
+# The sibling deploy/Caddyfile is for a standalone (non-Docker) host and proxies
+# to 127.0.0.1; this one proxies to the compose service names. Same routing, two
+# different network namespaces — keep the path list below in sync with it.
+#
+# Used by docker-compose.tls.yml, which mounts it and sets MANTHANA_DOMAIN.
+#
+# Two upstreams, one origin. The wiki client (Next.js, :3000) and the API/console
+# (FastAPI, :8000) MUST be served from the same hostname: the session cookie is
+# scoped path=/ui and httponly, so a separate hostname for the client would mean
+# cross-origin requests that never carry it (and no CORS config can send an
+# httponly cookie the browser refuses to attach).
+#
+# Path routing is therefore the load-bearing part: everything the server owns
+# goes to :8000, everything else is the wiki client. A one-line
+# `caddy reverse-proxy --to server:8000` — which is what this replaces — sends
+# the whole site to the API and leaves the wiki unreachable.
+
+{$MANTHANA_DOMAIN} {
+	@server path /ui* /v1* /mcp* /docs* /openapi.json /healthz /readyz
+	reverse_proxy @server server:8000
+
+	# Everything else: the Next.js wiki client.
+	reverse_proxy web:3000
+}
