@@ -48,6 +48,11 @@ PROJECT_WINDOW_DAYS = 14
 #: Sessions shown per project block on a person page — a glance, not a log.
 PERSON_SESSIONS_PER_PROJECT = 3
 
+#: How far back a person page looks when working out WHICH projects they work on.
+#: Generous on purpose — this is a per-actor, indexed query, and the cost of
+#: scanning too few is a project silently missing from someone's page.
+PERSON_SCAN_LIMIT = 500
+
 
 def _article_lead(body: str) -> str:
     """The article's "What this is" line: first non-heading, non-empty line."""
@@ -375,7 +380,17 @@ def person_page(
     """
     now_dt, since = _window(now, days)
     windowed = _readable(store.query_compactions(org_id=org_id, actor=actor, since=since))
-    recent = _readable(store.query_compactions(org_id=org_id, actor=actor, limit=session_limit))
+    # Which projects someone works on and how many sessions to LIST under each are
+    # different questions, and one number used to answer both: rollups were built
+    # from the newest `session_limit` (50) rows, so an engineer with 120 sessions
+    # got a project list derived from 50 of them. Any project whose work fell
+    # outside that slice vanished from the page entirely — released, attributed,
+    # and invisible — while the same page's infobox announced all 120 sessions.
+    #
+    # The roster is therefore scanned wide and the LISTS are what stay short.
+    roster = _readable(
+        store.query_compactions(org_id=org_id, actor=actor, limit=PERSON_SCAN_LIMIT)
+    )
     acts = activity_rollup(windowed)
 
     # One query for every article lead, matched by scope — not per-project.
@@ -388,8 +403,8 @@ def person_page(
     # Grouped over ``recent`` — the same rows that get listed — so every block's
     # header describes exactly the sessions beneath it. project_rollups already
     # orders most-recently-active first and already drops junk slugs.
-    cards = session_cards(recent)
-    rollups = project_rollups(recent)
+    cards = session_cards(roster)
+    rollups = project_rollups(roster)
     by_project: dict[str, list[SessionCard]] = {}
     for card in cards:
         by_project.setdefault(card.project, []).append(card)
@@ -407,15 +422,17 @@ def person_page(
         )
     named = {r.project for r in rollups}
 
-    unfiled_summarised, unfiled_pending = split_summarised(
+    unfiled_summarised, _unfiled_pending = split_summarised(
         [c for c in cards if c.project not in named]
     )
     return PersonPage(
         actor=actor,
         activity=acts[0] if acts else None,
         projects=projects,
-        unfiled=unfiled_summarised,
-        sessions=cards,
+        unfiled=unfiled_summarised[:session_limit],
+        # The flat list stays capped: it is a legacy convenience for older
+        # consumers, not the page's structure, and the roster behind it is wide.
+        sessions=cards[:session_limit],
     )
 
 
@@ -444,6 +461,7 @@ __all__ = [
     "ProjectPage",
     "HOME_WINDOW_DAYS",
     "PROJECT_WINDOW_DAYS",
+    "PERSON_SCAN_LIMIT",
     "SECTION_ORDER",
     "discovery_feed",
     "note_page",
