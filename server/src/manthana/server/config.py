@@ -46,7 +46,13 @@ class ServerConfig:
     s3_secret_key: str | None = None
     # Founder-narrative provider (arch §9): dev/tests use the deterministic mock;
     # the org sets llm_provider="anthropic" + ANTHROPIC_API_KEY for a real model.
-    llm_provider: str = "mock"  # "mock" | "anthropic"
+    # "claude_cli" is the bring-your-own-model path: the server shells out to a
+    # Claude CLI logged in as the user running it, so a solo self-hoster spends
+    # the subscription they already pay for instead of a second API key. Works on
+    # a laptop; does NOT work in the container images (no binary, no logged-in
+    # $HOME), which is why it is opt-in rather than an automatic fallback.
+    llm_provider: str = "mock"  # "mock" | "anthropic" | "claude_cli"
+    claude_cli_binary: str = "claude"
     llm_model: str = "claude-sonnet-4-6"
     llm_max_tokens: int = 1024
     # Default monthly server-side LLM budget per org (USD, hosted multi-tenant);
@@ -176,9 +182,10 @@ class ServerConfig:
             )
         if self.privacy_mode not in ("open", "k_anon"):
             raise ValueError(f"privacy_mode must be 'open' or 'k_anon', got {self.privacy_mode!r}")
-        if self.llm_provider not in ("mock", "anthropic"):
+        if self.llm_provider not in ("mock", "anthropic", "claude_cli"):
             raise ValueError(
-                f"llm_provider must be 'mock' or 'anthropic', got {self.llm_provider!r}"
+                "llm_provider must be 'mock', 'anthropic' or 'claude_cli', got "
+                f"{self.llm_provider!r}"
             )
         # A non-positive k-anon floor would silently disable the privacy floor; a
         # non-positive/absurd max_tokens is a config typo (0 → empty narrative,
@@ -283,6 +290,7 @@ class ServerConfig:
             s3_access_key=env("MANTHANA_SERVER_S3_ACCESS_KEY", None),
             s3_secret_key=env("MANTHANA_SERVER_S3_SECRET_KEY", None),
             llm_provider=env("MANTHANA_SERVER_LLM", cls.llm_provider),
+            claude_cli_binary=env("MANTHANA_SERVER_CLAUDE_CLI", cls.claude_cli_binary),
             llm_model=env("MANTHANA_SERVER_LLM_MODEL", cls.llm_model),
             llm_max_tokens=int(env("MANTHANA_SERVER_LLM_MAX_TOKENS", str(cls.llm_max_tokens))),
             llm_monthly_cap_usd=float(

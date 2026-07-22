@@ -125,6 +125,99 @@ def test_make_provider_falls_back_to_mock_when_anthropic_unavailable(
     assert isinstance(provider, MockProvider)  # degraded, did NOT crash
 
 
+# ── claude_cli: bring your own model ────────────────────────────────────────
+def _cli_envelope(result: str, *, cost: float = 0.02) -> str:
+    import json
+
+    return json.dumps(
+        {
+            "result": result,
+            "total_cost_usd": cost,
+            "usage": {"input_tokens": 120, "output_tokens": 34},
+        }
+    )
+
+
+class _Run:
+    """Stands in for subprocess.run's CompletedProcess."""
+
+    def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0) -> None:
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+
+
+def test_claude_cli_provider_parses_the_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI answers in a JSON envelope, not bare text — unwrap it, and keep the
+    cost/usage it reports so the wiki can still say what a session cost."""
+    import subprocess
+
+    from manthana.server.llm import ClaudeCLIProvider
+
+    seen: dict[str, Any] = {}
+
+    def _fake_run(argv: list[str], **kwargs: Any) -> _Run:
+        seen["argv"] = argv
+        return _Run(stdout=_cli_envelope('{"summary": "ok"}'))
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    p = ClaudeCLIProvider(model="claude-x")
+    assert p.complete("describe this") == '{"summary": "ok"}'
+    # Headless, non-interactive, no shell — the prompt is an argv element, never
+    # a fragment of a command line.
+    assert seen["argv"] == ["claude", "-p", "describe this", "--output-format", "json"]
+    assert p.last_usage == (120, 34)
+    assert p.last_cost_usd == 0.02
+
+
+def test_claude_cli_provider_raises_on_a_failed_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-zero exit must raise, not return the empty stdout as if it were an
+    answer — a silent "" would be written into the wiki as a real summary."""
+    import subprocess
+
+    from manthana.server.llm import ClaudeCLIProvider
+
+    monkeypatch.setattr(
+        subprocess, "run", lambda *_a, **_k: _Run(stderr="not logged in", returncode=1)
+    )
+    with pytest.raises(RuntimeError, match="exited 1"):
+        ClaudeCLIProvider().complete("x")
+
+
+def test_make_provider_selects_claude_cli_when_the_binary_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import shutil
+
+    import manthana.server.llm as llm
+
+    monkeypatch.setattr(shutil, "which", lambda _b: "/usr/local/bin/claude")
+    provider = llm.make_provider(_cfg(llm_provider="claude_cli"))
+    assert isinstance(provider, ResilientProvider)
+    assert provider.inner.name == "claude-cli"
+
+
+def test_claude_cli_degrades_to_mock_when_the_binary_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The container images have no `claude` binary and no logged-in $HOME. Booting
+    into a mock with a loud log beats crashing, and beats hanging on every call."""
+    import shutil
+
+    import manthana.server.llm as llm
+
+    monkeypatch.setattr(shutil, "which", lambda _b: None)
+    for make in (llm.make_provider, llm.make_enrich_provider, llm.make_consolidate_provider):
+        assert isinstance(make(_cfg(llm_provider="claude_cli")), MockProvider)
+
+
+def test_unknown_provider_is_rejected_at_config_time() -> None:
+    with pytest.raises(ValueError, match="claude_cli"):
+        _cfg(llm_provider="ollama")
+
+
 # ── ResilientProvider: retry on transient, never on auth ─────────────────────
 class _Flaky:
     name = "flaky"

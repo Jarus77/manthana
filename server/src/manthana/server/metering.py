@@ -105,8 +105,16 @@ class MeteredProvider:
             input_tokens, output_tokens = usage
         else:  # mock/scripted providers → chars/4 heuristic
             input_tokens, output_tokens = len(prompt) // 4, len(text) // 4
-        model = getattr(base, "model", "") or ""
-        cost = estimate_cost_usd(model, input_tokens, output_tokens)
+        # Prefer a cost the provider MEASURED over one we estimate from a price
+        # table. The CLI provider reports what the call actually cost on the
+        # engineer's own subscription; estimating it from our list price would put
+        # a number in the usage table that nobody was ever charged.
+        measured = getattr(base, "last_cost_usd", None)
+        if isinstance(measured, int | float):
+            cost = float(measured)
+        else:
+            model = getattr(base, "model", "") or ""
+            cost = estimate_cost_usd(model, input_tokens, output_tokens)
         self._store.add_llm_usage(
             self._org_id,
             month,
