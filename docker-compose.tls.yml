@@ -17,13 +17,21 @@ services:
     ports:
       - "80:80"
       - "443:443"
-    # One-line reverse proxy with automatic HTTPS for $MANTHANA_DOMAIN → the server container.
-    command: caddy reverse-proxy --from ${MANTHANA_DOMAIN:?set MANTHANA_DOMAIN to your domain} --to server:8000
+    # Path-routed, NOT a one-liner. `caddy reverse-proxy --to server:8000` sends the
+    # whole site to the API and leaves the Next.js wiki client (started by the base
+    # compose file on :3000) unreachable — the wiki is what people actually visit.
+    # Both upstreams must share one hostname: the console session cookie is
+    # path=/ui and httponly, so a second hostname could never carry it.
+    environment:
+      MANTHANA_DOMAIN: ${MANTHANA_DOMAIN:?set MANTHANA_DOMAIN to your domain}
+    command: caddy run --config /etc/caddy/Caddyfile
     volumes:
+      - ./deploy/Caddyfile.docker:/etc/caddy/Caddyfile:ro
       - caddy_data:/data # persists the TLS certificate across restarts
       - caddy_config:/config
     depends_on:
       - server
+      - web
 
 volumes:
   caddy_data:

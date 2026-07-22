@@ -229,12 +229,22 @@ Postgres deployments.
 
 ### `docker compose pull` 404s on the image
 
-The Compose files and the k8s manifest hardcode
-`ghcr.io/suraj-gameramp/manthana-server`, but the publishing workflow tags
-`ghcr.io/<repository-owner>/manthana-server:<version>`. If the repository lives
-under a different owner, the hardcoded path is wrong — check the repository's
-Packages page for the real one. Also set `MANTHANA_VERSION` explicitly; it
-defaults to `0.4.0`.
+The image is `ghcr.io/jarus77/manthana-server`, matching what
+`.github/workflows/publish-image.yml` pushes — it tags
+`ghcr.io/<repository-owner>/manthana-server:<version>`, so the owner segment
+follows wherever the repository lives.
+
+If you run a fork or a mirror, override the whole path rather than editing the
+Compose file:
+
+```bash
+MANTHANA_IMAGE=ghcr.io/your-org/manthana-server \
+MANTHANA_VERSION=0.6.3 \
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+```
+
+Set `MANTHANA_VERSION` explicitly for anything real — the default tracks the
+current release and will move under you otherwise.
 
 ### A CLI command says the config is invalid, but `serve` works fine
 

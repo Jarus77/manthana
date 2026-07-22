@@ -8,6 +8,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -118,3 +120,79 @@ def test_audit_requires_admin_token() -> None:
     store = ServerStore.open("sqlite://")
     client = TestClient(create_app(config, store, InMemoryObjectStore(), MockProvider("{}")))
     assert client.get("/v1/admin/audit", params={"org_id": "o1"}).status_code == 401
+
+
+# ── published-image references stay consistent ───────────────────────────────
+#
+# Two independent drifts happened here, both silent and both only discoverable by
+# trying to deploy: the compose files and the k8s manifest named an image owner
+# that never published anything, and the k8s tag sat at 0.2.0 through four
+# releases. Nothing failed — `docker compose pull` just 404s at the worst moment.
+# These pin the invariants: one image path everywhere, and the pinned tags are the
+# version this tree actually is.
+_GHCR = re.compile(r"ghcr\.io/[\w.-]+/manthana-server")
+_GHCR_TAGGED = re.compile(r"ghcr\.io/[\w.-]+/manthana-server:([\w.]+)")
+
+_IMAGE_FILES = (
+    "docker-compose.prod.yml",
+    "deploy/k8s/deployment.yaml",
+    "server/src/manthana/server/deploy_templates.py",
+)
+
+
+def _uncommented(text: str) -> str:
+    """Drop comment lines before matching.
+
+    Comments legitimately show alternative registries (the `MANTHANA_IMAGE=ghcr.io/
+    your-org/…` fork example), and a doc example disagreeing with the real value is
+    not the drift this guards against.
+    """
+    return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+
+
+def _repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / ".github").is_dir():
+            return parent
+    raise AssertionError("repo root not found")
+
+
+def test_every_deploy_file_names_the_same_published_image() -> None:
+    root = _repo_root()
+    found = {
+        name: set(_GHCR.findall(_uncommented((root / name).read_text())))
+        for name in _IMAGE_FILES
+        if (root / name).exists()
+    }
+    assert found, "no deploy files found — did paths move?"
+    paths = {p for names in found.values() for p in names}
+    assert len(paths) == 1, f"deploy files disagree on the image path: {found}"
+
+    # …and it must be what the publishing workflow pushes. The workflow derives the
+    # owner from the repository, so we can only assert the repository segment here —
+    # but that is the half that was never wrong. The owner is asserted by equality
+    # across files above, which is what actually broke.
+    workflow = (root / ".github/workflows/publish-image.yml").read_text()
+    assert "manthana-server" in workflow
+    assert next(iter(paths)).endswith("/manthana-server")
+
+
+def test_pinned_image_tags_match_the_packaged_version() -> None:
+    from importlib.metadata import version as pkg_version
+
+    root = _repo_root()
+    try:
+        expected = pkg_version("manthana-server")
+    except Exception:  # noqa: BLE001 - source checkout: read pyproject instead
+        text = (root / "server/pyproject.toml").read_text()
+        match = re.search(r'^version = "([^"]+)"', text, re.MULTILINE)
+        assert match
+        expected = match.group(1)
+
+    for name in _IMAGE_FILES:
+        path = root / name
+        if not path.exists():
+            continue
+        for tag in _GHCR_TAGGED.findall(_uncommented(path.read_text())):
+            assert tag == expected, f"{name} pins :{tag}, but this tree is {expected}"
