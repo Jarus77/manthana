@@ -1251,7 +1251,7 @@ wheels = [
 
 [[package]]
 name = "manthana"
-version = "0.6.3"
+version = "0.6.4"
 source = { editable = "agent" }
 dependencies = [
     { name = "fastapi" },
@@ -1299,7 +1299,7 @@ provides-extras = ["vec", "embeddings", "optimize", "mcp"]
 
 [[package]]
 name = "manthana-collectors"
-version = "0.6.3"
+version = "0.6.4"
 source = { editable = "collectors" }
 dependencies = [
     { name = "manthana-schemas" },
@@ -1310,7 +1310,7 @@ requires-dist = [{ name = "manthana-schemas", editable = "schemas" }]
 
 [[package]]
 name = "manthana-schemas"
-version = "0.6.3"
+version = "0.6.4"
 source = { editable = "schemas" }
 dependencies = [
     { name = "pydantic" },
@@ -1321,7 +1321,7 @@ requires-dist = [{ name = "pydantic", specifier = ">=2.7" }]
 
 [[package]]
 name = "manthana-server"
-version = "0.6.3"
+version = "0.6.4"
 source = { editable = "server" }
 dependencies = [
     { name = "fastapi" },
@@ -1369,7 +1369,7 @@ provides-extras = ["postgres", "s3", "llm", "mcp"]
 
 [[package]]
 name = "manthana-skills"
-version = "0.6.3"
+version = "0.6.4"
 source = { editable = "skills" }
 dependencies = [
     { name = "manthana-schemas" },

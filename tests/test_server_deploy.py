@@ -179,16 +179,18 @@ def test_every_deploy_file_names_the_same_published_image() -> None:
 
 
 def test_pinned_image_tags_match_the_packaged_version() -> None:
-    from importlib.metadata import version as pkg_version
+    """The version is read from pyproject, NOT importlib.metadata.
 
+    The installed distribution's metadata is a snapshot of the last `uv sync`, so
+    during a version bump it still reports the OLD number and this test fails on
+    correctly-bumped files — which is precisely when you least want a spurious
+    failure. The file on disk is what "this tree is".
+    """
     root = _repo_root()
-    try:
-        expected = pkg_version("manthana-server")
-    except Exception:  # noqa: BLE001 - source checkout: read pyproject instead
-        text = (root / "server/pyproject.toml").read_text()
-        match = re.search(r'^version = "([^"]+)"', text, re.MULTILINE)
-        assert match
-        expected = match.group(1)
+    text = (root / "server/pyproject.toml").read_text()
+    match = re.search(r'^version = "([^"]+)"', text, re.MULTILINE)
+    assert match, "server/pyproject.toml has no version"
+    expected = match.group(1)
 
     for name in _IMAGE_FILES:
         path = root / name

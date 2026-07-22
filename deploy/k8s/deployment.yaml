@@ -21,7 +21,7 @@ spec:
           # load-bearing and both were wrong: the owner must match what
           # .github/workflows/publish-image.yml pushes (ghcr.io/<repository-owner>/…),
           # and the tag had been left at 0.2.0 through four releases.
-          image: ghcr.io/jarus77/manthana-server:0.6.3
+          image: ghcr.io/jarus77/manthana-server:0.6.4
           ports:
             - containerPort: 8000
           envFrom:
