@@ -1,0 +1,18 @@
+---
+/*
+ * Replaces Starlight's ThemeProvider. Starlight's version reads localStorage and
+ * `prefers-color-scheme` and can land on dark; this one pins `light` and never
+ * consults either. The org wiki is light-only for the same reason (see the
+ * comment at the top of ../../../web/app/globals.css): a page that silently went
+ * dark on a dark-mode machine is a bug we already shipped once.
+ *
+ * `updatePickers` is kept as a no-op so anything in Starlight that calls the
+ * global still works, even though the theme picker is not rendered.
+ */
+---
+
+{/* Inlined so the attribute is set before first paint. */}
+<script is:inline>
+	document.documentElement.dataset.theme = 'light';
+	window.StarlightThemeProvider = { updatePickers() {} };
+</script>
