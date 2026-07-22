@@ -15,7 +15,12 @@ import typer
 from manthana.schemas import encode_invite
 
 from .auth import issue_team_token
-from .config import K_ANON_FLOOR_DEFAULT, ServerConfig, persisted_secrets
+from .config import (
+    HOSTED_MONTHLY_CAP_USD,
+    K_ANON_FLOOR_DEFAULT,
+    ServerConfig,
+    persisted_secrets,
+)
 from .store import ServerStore
 
 app = typer.Typer(help="Manthana org server.", no_args_is_help=True, add_completion=False)
@@ -357,7 +362,9 @@ def onboard_org(
     emails: str = typer.Option("", help="file of engineer emails (one per line) → bound invites"),
     open_invite: bool = typer.Option(False, "--open", help="one shared invite per team"),
     quota_usd: float = typer.Option(
-        -1.0, "--quota-usd", help="monthly AI budget for this org (USD); -1 = server default"
+        HOSTED_MONTHLY_CAP_USD,
+        "--quota-usd",
+        help="monthly AI budget for this org (USD); 0 = unlimited, -1 = server default",
     ),
     expires_days: int = 14,
 ) -> None:

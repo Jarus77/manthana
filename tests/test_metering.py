@@ -148,6 +148,33 @@ def test_usage_endpoint_reports_spend_and_cap() -> None:
     assert data["cap_is_override"] is False
     assert data["months"][0]["calls"] == 1
     assert data["months"][0]["est_cost_usd"] == 0.5
+    assert data["spent_usd"] == 0.5
+    assert data["quota_blocked"] is False
+
+
+def test_usage_endpoint_reports_a_blocked_org() -> None:
+    """An exhausted cap has no other visible symptom.
+
+    Nothing errors where a human looks: enrichment simply stops, every session
+    stays `pending`, and the wiki fills with unsummarised work that reads as a
+    bug. This flag is the only place the real cause is stated, so it must agree
+    with the gate exactly — hence the boundary (spent == cap) rather than over.
+    """
+    client, _config, store, _obj = _make(cap=25.0)
+    store.create_org("o1", "Org")
+    store.add_llm_usage("o1", month_key(), input_tokens=0, output_tokens=0, est_cost_usd=25.0)
+    data = client.get("/v1/admin/usage", params={"org_id": "o1"}, headers=ADMIN).json()
+    assert data["spent_usd"] == 25.0
+    assert data["quota_blocked"] is True
+
+
+def test_unlimited_org_is_never_reported_blocked() -> None:
+    """cap 0 means unlimited — the self-hosted default. Spend must never flip it."""
+    client, _config, store, _obj = _make(cap=0.0)
+    store.create_org("o1", "Org")
+    store.add_llm_usage("o1", month_key(), input_tokens=0, output_tokens=0, est_cost_usd=999.0)
+    data = client.get("/v1/admin/usage", params={"org_id": "o1"}, headers=ADMIN).json()
+    assert data["quota_blocked"] is False
 
 
 def test_usage_and_quota_endpoints_require_admin() -> None:

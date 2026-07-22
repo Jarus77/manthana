@@ -16,6 +16,17 @@ from pathlib import Path
 
 K_ANON_FLOOR_DEFAULT = 4
 
+# What a customer org gets provisioned with on the HOSTED server (`onboard-org`).
+# Deliberately not the ServerConfig default: a self-hoster paying their own model
+# bill should never be capped by us (llm_monthly_cap_usd stays 0 = unlimited), but
+# a hosted tenant spends OUR money, so it gets an explicit per-org override.
+#
+# It is $100 rather than something tighter because the failure mode of a low cap is
+# invisible and awful: enrichment stops, every session stays `pending`, and the wiki
+# quietly fills with unsummarised work that looks like a bug rather than a bill. The
+# cap exists to stop a runaway, not to ration normal use.
+HOSTED_MONTHLY_CAP_USD = 100.0
+
 # Insecure placeholders so `ServerConfig()` is constructible in a REPL/dev, but
 # rejected at startup (see __post_init__) — a real deploy must override them.
 _DEV_JWT_SECRET = "dev-insecure-jwt-secret-change-me-in-production"  # noqa: S105 - placeholder
@@ -118,7 +129,10 @@ class ServerConfig:
     overview_interval_seconds: int = 3600  # a description changes over weeks
     overview_max_per_pass: int = 10        # whole-pass bound across all orgs
     overview_session_limit: int = 40       # sessions fed to one call
-    overview_min_sessions: int = 3         # below this there is nothing to describe
+    # A one-session project still deserves "what this is" — it is exactly the case
+    # where a reader has least context. This was 3, which meant most projects showed
+    # a bare "no article has been written yet" forever and looked broken.
+    overview_min_sessions: int = 1
     overview_max_attempts: int = 3
 
     enable_consolidation: bool = False

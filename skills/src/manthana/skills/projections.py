@@ -138,6 +138,10 @@ class SessionCard:
     prs_opened: list[str]
     tests_added: list[str]
     languages: list[str]
+    #: What was tried and abandoned. The digest has carried this since day one and
+    #: the wiki never showed it, which is backwards: a colleague about to walk down
+    #: the same dead end is the single reader this wiki can help most.
+    dead_end_branches: list[str]
     tier_used: str | None
     est_cost_usd: float | None
     total_tokens: int | None
@@ -164,6 +168,7 @@ def session_card(c: Any) -> SessionCard:
         prs_opened=list(getattr(c, "prs_opened", [])),
         tests_added=list(getattr(c, "tests_added", [])),
         languages=list(getattr(c, "languages", [])),
+        dead_end_branches=list(getattr(c, "dead_end_branches", [])),
         tier_used=c.tier_used,
         est_cost_usd=c.est_cost_usd,
         total_tokens=c.total_tokens,

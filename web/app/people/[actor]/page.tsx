@@ -116,7 +116,9 @@ export default function PersonArticle({ params }: { params: Promise<{ actor: str
                       <p className="subtle">{what_this_is}</p>
                     ) : (
                       <p className="faint">
-                        No article yet — one is written once enough work lands.
+                        {pending_count > 0
+                          ? `No article yet — ${pending_count} session${pending_count === 1 ? '' : 's'} here still awaiting a summary.`
+                          : 'No article yet — one is written on the next pass.'}
                       </p>
                     )}
                     {sessions.length > 0 && (
