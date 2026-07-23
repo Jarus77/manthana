@@ -30,7 +30,7 @@ _DOCKER_COMPOSE = """\
 #   docker compose up -d
 services:
   server:
-    image: ghcr.io/jarus77/manthana-server:0.6.5
+    image: ghcr.io/jarus77/manthana-server:0.6.6
     restart: unless-stopped
     ports:
       - "8000:8000"
