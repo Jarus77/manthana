@@ -329,3 +329,84 @@ def test_api_engineer_token_endpoint_rejects_other_orgs() -> None:
         headers={"x-admin-token": "adm"},
     )
     assert blank.status_code == 422
+
+
+# ── console: founder self-serve invites ────────────────────────────────────
+def test_founder_creates_an_invite_from_the_console() -> None:
+    client, store, config = _make()
+    _seed(store)
+    _login(client, issue_founder_token(config.jwt_secret, org_id="o1"))
+
+    page = client.get("/ui")
+    assert "Invite engineers" in page.text  # the section is on the console
+
+    resp = client.post("/ui/invite", data={"org_id": "o1", "actor": ENG})
+    assert resp.status_code == 200
+    assert "manthana setup " in resp.text  # the one line to send
+    assert "Single-use." in resp.text
+
+    # The printed invite actually redeems for a correctly-scoped team token.
+    line = resp.text.split("<pre>")[1].split("</pre>")[0].strip()
+    blob = line.removeprefix("manthana setup ").strip()
+    from manthana.schemas import decode_invite
+
+    _url, code = decode_invite(blob)
+    redeemed = client.post("/v1/enroll", json={"code": code, "actor": ENG})
+    assert redeemed.status_code == 200
+
+
+def test_console_open_invite_is_multi_use() -> None:
+    client, store, config = _make()
+    _seed(store)
+    _login(client, issue_founder_token(config.jwt_secret, org_id="o1"))
+    resp = client.post("/ui/invite", data={"org_id": "o1", "actor": ""})  # blank = open
+    assert resp.status_code == 200
+    assert "Reusable by the whole team." in resp.text
+
+
+def test_console_invite_is_scoped_to_the_founders_org() -> None:
+    client, store, config = _make()
+    _seed(store)
+    store.create_org("o2", "Other")
+    _login(client, issue_founder_token(config.jwt_secret, org_id="o1"))
+
+    # Ask for o2; the invite must land on o1 regardless of the forged org_id.
+    client.post("/ui/invite", data={"org_id": "o2", "actor": "spy@acme.test"})
+    assert store.list_invites("o2") == []
+    assert len(store.list_invites("o1")) == 1
+
+
+def test_console_founder_sees_and_revokes_only_their_own_invites() -> None:
+    client, store, config = _make()
+    _seed(store)
+    store.create_org("o2", "Other")
+    # An invite exists in the OTHER org.
+    from datetime import UTC, datetime, timedelta
+
+    store.create_invite(
+        "foreign", org_id="o2", team_id="core", actor=None, uses=5,
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+    )
+    _login(client, issue_founder_token(config.jwt_secret, org_id="o1"))
+
+    # The console home lists o1's invites, never o2's foreign code.
+    client.post("/ui/invite", data={"org_id": "o1", "actor": ""})
+    home = client.get("/ui").text
+    assert "foreign" not in home
+
+    # Revoking the foreign code from o1's session does nothing to o2.
+    client.post("/ui/invite/revoke", data={"org_id": "o1", "code": "foreign"})
+    assert store.get_invite("foreign") is not None  # still there
+    # …but revoking o1's own invite works.
+    own = store.list_invites("o1")[0].code
+    client.post("/ui/invite/revoke", data={"org_id": "o1", "code": own})
+    assert store.get_invite(own) is None
+
+
+def test_console_invite_requires_a_management_login() -> None:
+    client, store, config = _make()
+    _seed(store)
+    # An ENGINEER (wiki-only) login is redirected away, not allowed to invite.
+    _login(client, _engineer(config))
+    resp = client.post("/ui/invite", data={"org_id": "o1", "actor": ENG})
+    assert resp.status_code == 303 and "/ui/home" in resp.headers["location"]
