@@ -249,7 +249,7 @@ def mount_wiki_ui(
     provider_for: Callable[[str], LLMProvider] | None = None,
 ) -> None:
     def _sess(cookie: str) -> ConsoleSession | None:
-        return session_for(config, cookie)
+        return session_for(config, cookie, store)
 
     def _provider(org_id: str) -> LLMProvider | None:
         # Per-org metered provider when the app supplies one (hosted quotas);

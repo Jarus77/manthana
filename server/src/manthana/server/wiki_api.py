@@ -162,7 +162,7 @@ def mount_wiki_api(
     def _session(cookie: str) -> ConsoleSession:
         """Any signed-in role may read the wiki. Unlike the founder console
         there is no engineer bounce here — the wiki IS the engineer's product."""
-        sess = session_for(config, cookie)
+        sess = session_for(config, cookie, store)
         if sess is None:
             raise ApiError(401, "not signed in")
         return sess
@@ -194,7 +194,7 @@ def mount_wiki_api(
 
     @app.post(f"{API}/login")
     def wiki_login(body: LoginBody) -> Response:
-        sess = session_for(config, body.token)
+        sess = session_for(config, body.token, store)
         if sess is None:
             return JSONResponse({"detail": "invalid token"}, status_code=401)
         resp = JSONResponse(

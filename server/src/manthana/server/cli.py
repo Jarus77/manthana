@@ -448,6 +448,40 @@ def set_quota(
     typer.echo(f"org={org_id} monthly cap → ${monthly_cap_usd:.2f}")
 
 
+@app.command()
+def revoke_token(
+    token: str = typer.Argument(..., help="the exact leaked JWT to kill"),
+    reason: str = typer.Option("", "--reason", help="audit note"),
+    server_url: str = typer.Option(..., "--server-url"),
+    admin_token: str = typer.Option("", "--admin-token", envvar="MANTHANA_SERVER_ADMIN_TOKEN"),
+) -> None:
+    """Kill ONE leaked JWT without rotating the shared secret.
+
+    The whole token model is stateless, so the alternative — rotating
+    MANTHANA_SERVER_JWT_SECRET — would log out every engineer, agent, and founder
+    at once. This blocklists just this one token. The token is sent once over TLS
+    and stored only as a hash; it is never persisted in the clear. Run it on your
+    own machine so the leaked token never travels anywhere else.
+    """
+    import httpx
+
+    with httpx.Client(base_url=server_url.rstrip("/"), timeout=30.0) as client:
+        resp = client.post(
+            "/v1/admin/revoke-token",
+            json={"token": token.strip(), "reason": reason},
+            headers={"X-Admin-Token": admin_token},
+        )
+        if resp.status_code >= 300:
+            typer.echo(f"✗ {resp.status_code}: {resp.text[:300]}")
+            raise typer.Exit(code=1)
+    body = resp.json()
+    scope = body.get("scope") or "unknown-scope"
+    org = body.get("org_id") or "—"
+    typer.echo(f"✓ revoked ({scope}, org={org}) · fingerprint {body['fingerprint'][:16]}…")
+    typer.echo("  It is dead on every path immediately. Re-issue a fresh one if the")
+    typer.echo("  person still needs access (setup invite, or console 'Create wiki login').")
+
+
 def _wrap(text: str, indent: str, width: int = 96) -> str:
     """Field text, wrapped for a terminal. Empty renders as an explicit marker —
     a blank line would read as "same as above" when it actually means the model
