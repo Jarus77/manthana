@@ -20,12 +20,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 import hmac
 import html
 import logging
+import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import BackgroundTasks, Cookie, FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from manthana.schemas import encode_invite
 
 from .analyzer import analyze_counterfactual_costs
 from .auth import (
@@ -61,7 +64,9 @@ _STYLE = (
     "text-align:left}th{background:#f5f5f5}button{cursor:pointer;padding:4px 10px}"
     "textarea,select,input{font:inherit;padding:4px}form{display:inline}"
     ".bar{margin:0 0 1rem;padding:.6rem;background:#f7f7f7;border:1px solid #eee;border-radius:6px}"
-    ".warn{color:#a60}.muted{color:#666}pre{white-space:pre-wrap;background:#fafafa;"
+    ".warn{color:#a60}.muted{color:#666}"
+    "button.link{background:none;border:0;color:#a60;padding:0;text-decoration:underline}"
+    "pre{white-space:pre-wrap;background:#fafafa;"
     "border:1px solid #eee;padding:8px}nav a{margin-right:1rem}</style>"
 )
 
@@ -356,7 +361,103 @@ def mount_ui(
             "<p class='muted'>Gives this person a link to read and correct the team "
             "wiki. They do not see cost, mining, or audit pages.</p></div>"
         )
-        return HTMLResponse(_page("Console", query_form + table + team_access + audit))
+        # Invites are the PRIMARY onboarding: a wiki login only lets someone read,
+        # while an invite is what an engineer redeems with `manthana setup` so their
+        # coding sessions start flowing INTO the wiki. Self-serve, scoped to this
+        # founder's own org — the whole point is a startup grows its team without
+        # asking the operator for anything.
+        pending = [inv for inv in _invites_for(orgs) if inv.uses_left > 0]
+        pending_rows = "".join(
+            f"<tr><td class='muted'>{_e(inv.org_id)}</td><td>{_e(inv.team_id)}</td>"
+            f"<td>{_e(inv.actor or '(open)')}</td><td>{inv.uses_left}</td>"
+            f"<td class='muted'>{_e(inv.expires_at[:10])}</td>"
+            f"<td><form method='post' action='/ui/invite/revoke'>"
+            f"<input type='hidden' name='org_id' value='{_e(inv.org_id)}'>"
+            f"<input type='hidden' name='code' value='{_e(inv.code)}'>"
+            "<button class='link'>revoke</button></form></td></tr>"
+            for inv in pending
+        )
+        invites = (
+            "<h3>Invite engineers</h3>"
+            "<div class='bar'><form method='post' action='/ui/invite'>"
+            f"<select name='org_id'>{options or '<option>—</option>'}</select> "
+            "<input name='actor' size='28' "
+            "placeholder='engineer@yourcompany.com (optional)'> "
+            "<button>Create invite</button></form>"
+            "<p class='muted'>Prints a one-line <code>manthana setup …</code> to send "
+            "them — that is their whole onboarding, and it captures their sessions "
+            "into the wiki. Leave the email blank for one shared invite the whole "
+            "team can use; fill it in for a single-use, per-person invite.</p>"
+            "<table><tr><th>org</th><th>team</th><th>for</th><th>uses left</th>"
+            "<th>expires</th><th></th></tr>"
+            f"{pending_rows or '<tr><td colspan=6 class=muted>no open invites</td></tr>'}"
+            "</table></div>"
+        )
+        return HTMLResponse(
+            _page("Console", query_form + table + invites + team_access + audit)
+        )
+
+    def _invites_for(orgs: list) -> list:  # noqa: ANN001 - list[OrgRow]
+        out = []
+        for o in orgs:
+            out.extend(store.list_invites(o.id))
+        return out
+
+    @app.post("/ui/invite", response_class=HTMLResponse)
+    def ui_invite(
+        org_id: Annotated[str, Form()],
+        actor: Annotated[str, Form()] = "",
+        manthana_admin: Annotated[str, Cookie()] = "",
+    ) -> Response:
+        """Mint an onboarding invite and show the exact `manthana setup` line.
+
+        The engineer redeems the code for a team token at setup, so the token
+        itself never travels — only the invite. Bound to one email = single use;
+        blank = an open, multi-use team invite.
+        """
+        sess = _founder_session(manthana_admin)
+        if isinstance(sess, Response):
+            return sess
+        org_id = _scope_org(sess, org_id)  # a founder is forced to their own org
+        bound_actor = actor.strip() or None
+        code = secrets.token_urlsafe(8)
+        expires = datetime.now(UTC) + timedelta(days=14)
+        store.create_invite(
+            code, org_id=org_id, team_id="core", actor=bound_actor,
+            uses=1 if bound_actor else 10_000, expires_at=expires,
+        )
+        line = f"manthana setup {encode_invite(config.public_url, code)}"
+        bound = (
+            f" for <b>{_e(bound_actor)}</b>" if bound_actor
+            else " (shared — anyone on the team)"
+        )
+        body = (
+            f"<h3>Invite created{bound}</h3>"
+            "<p>Send them this one line. That is their entire onboarding — it "
+            "installs nothing you have to explain, and their sessions start flowing "
+            "into the wiki once they run it.</p>"
+            f"<pre>{_e(line)}</pre>"
+            "<p class='muted'>Expires in 14 days. "
+            + ("Single-use." if bound_actor else "Reusable by the whole team.")
+            + " Manage or revoke it from the console.</p>"
+            "<p><a href='/ui'>← console</a></p>"
+        )
+        return HTMLResponse(_page("Invite", body))
+
+    @app.post("/ui/invite/revoke", response_class=HTMLResponse)
+    def ui_invite_revoke(
+        org_id: Annotated[str, Form()],
+        code: Annotated[str, Form()],
+        manthana_admin: Annotated[str, Cookie()] = "",
+    ) -> Response:
+        sess = _founder_session(manthana_admin)
+        if isinstance(sess, Response):
+            return sess
+        # Scope BOTH the claimed org and the store call: a founder can only revoke
+        # within their own org, and revoke_invite re-checks the code belongs to it.
+        org_id = _scope_org(sess, org_id)
+        store.revoke_invite(code, org_id=org_id)
+        return RedirectResponse(url="/ui", status_code=303)
 
     @app.post("/ui/engineer-token", response_class=HTMLResponse)
     def ui_engineer_token(
