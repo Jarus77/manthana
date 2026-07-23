@@ -164,18 +164,29 @@ class ConsoleSession:
         return self.actor or self.role
 
 
-def session_for(config: ServerConfig, cookie: str) -> ConsoleSession | None:
+def session_for(
+    config: ServerConfig, cookie: str, store: ServerStore | None = None
+) -> ConsoleSession | None:
     """Resolve the console cookie to a session, or None when not signed in.
 
     The cookie holds the credential itself (admin token or a scoped JWT), so
     sessions survive restarts without server-side state. Tried in order of
     privilege; each verifier rejects the other scopes, so a token can only ever
     authenticate as what it was issued for.
+
+    ``store`` is how a leaked JWT is killed without rotating the shared secret:
+    when supplied, a revoked token resolves to None (signed out) before any
+    scope is granted. It is optional only so pure-unit callers can skip the DB;
+    every real request path passes it.
     """
     if not cookie:
         return None
     if _ct_eq(cookie, config.admin_token):
         return ConsoleSession(role="admin", org_id=None)
+    # A revoked JWT is dead on every path; the admin token above is a raw secret,
+    # not a JWT, and is rotated differently, so it is not blocklist-checked.
+    if store is not None and store.is_token_revoked(cookie):
+        return None
     try:
         founder = verify_founder_token(config.jwt_secret, cookie)
     except AuthError:
@@ -241,7 +252,7 @@ def mount_ui(
         return provider_for(org_id) if provider_for is not None else provider
 
     def _session(cookie: str) -> ConsoleSession | None:
-        return session_for(config, cookie)
+        return session_for(config, cookie, store)
 
     _scope_org = scope_org
 

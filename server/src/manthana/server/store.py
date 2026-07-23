@@ -15,6 +15,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -47,6 +48,7 @@ from .tables import (
     RawTranscriptRow,
     ReleasedCompactionRow,
     ReleasedCompactionVectorRow,
+    RevokedTokenRow,
     TeamRow,
 )
 
@@ -237,6 +239,61 @@ class ServerStore:
     def list_invites(self, org_id: str) -> list[InviteRow]:
         with DBSession(self._engine) as db:
             return list(db.exec(select(InviteRow).where(InviteRow.org_id == org_id)))
+
+    # ── token revocation (stateless-JWT kill switch) ──────────────────────
+    @staticmethod
+    def token_fingerprint(token: str) -> str:
+        """sha256 of the raw token. The stored identity of a revoked token — the
+        token itself is never persisted, and the hash cannot be turned back into
+        a working credential."""
+        return hashlib.sha256(token.strip().encode("utf-8")).hexdigest()
+
+    def revoke_token(
+        self,
+        token: str,
+        *,
+        reason: str = "",
+        revoked_by: str = "",
+        actor: str | None = None,
+        org_id: str | None = None,
+        scope: str | None = None,
+        expires_at: str | None = None,
+    ) -> str:
+        """Blocklist one token by its hash. Idempotent (merge on the hash). Returns
+        the fingerprint. Provenance fields are audit-only best-effort — the caller
+        decodes them when the token still parses, but revocation works regardless."""
+        fp = self.token_fingerprint(token)
+        with DBSession(self._engine) as db:
+            db.merge(
+                RevokedTokenRow(
+                    token_hash=fp,
+                    revoked_at=_now_iso(),
+                    reason=reason,
+                    revoked_by=revoked_by,
+                    actor=actor,
+                    org_id=org_id,
+                    scope=scope,
+                    expires_at=expires_at,
+                )
+            )
+            db.commit()
+        return fp
+
+    def is_token_revoked(self, token: str) -> bool:
+        """True if this exact token has been revoked. Checked on every auth path,
+        so it must stay a single indexed primary-key lookup."""
+        with DBSession(self._engine) as db:
+            return db.get(RevokedTokenRow, self.token_fingerprint(token)) is not None
+
+    def list_revoked_tokens(self, *, limit: int = 200) -> list[RevokedTokenRow]:
+        with DBSession(self._engine) as db:
+            return list(
+                db.exec(
+                    select(RevokedTokenRow)
+                    .order_by(col(RevokedTokenRow.revoked_at).desc())
+                    .limit(limit)
+                )
+            )
 
     def revoke_invite(self, code: str, *, org_id: str) -> bool:
         """Delete an invite, but ONLY if it belongs to ``org_id``. Returns whether

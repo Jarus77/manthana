@@ -320,12 +320,12 @@ def build_founder_mcp(
 
 
 def founder_mcp_asgi(
-    server: Any, config: ServerConfig
+    server: Any, config: ServerConfig, store: ServerStore | None = None
 ) -> Any:  # pragma: no cover - ASGI transport wiring
     """Wrap the FastMCP streamable-HTTP app with founder-token auth at the transport
     edge: reject anything without a valid founder bearer token (401), and pin the
     request's org into the context the tools read. This is THE tenant boundary for the
-    gateway."""
+    gateway. ``store``, when supplied, also rejects a revoked token."""
     from starlette.responses import JSONResponse
 
     from .auth import AuthError, verify_founder_token
@@ -339,6 +339,11 @@ def founder_mcp_asgi(
         headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
         auth = headers.get("authorization", "")
         token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+        if store is not None and token and store.is_token_revoked(token):
+            await JSONResponse({"detail": "token revoked"}, status_code=401)(
+                scope, receive, send
+            )
+            return
         try:
             claims = verify_founder_token(config.jwt_secret, token)
         except AuthError:

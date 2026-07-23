@@ -362,6 +362,31 @@ class ConsolidationStateRow(SQLModel, table=True):
     updated_at: str
 
 
+class RevokedTokenRow(SQLModel, table=True):
+    """A single revoked JWT, keyed by a hash of the token — never the token itself.
+
+    The whole token model is stateless (signature + expiry, no jti), so the only
+    way to kill ONE token without rotating the shared secret and logging out every
+    engineer, agent, and founder is to remember it. We store sha256(token): enough
+    to recognise the exact token on presentation, useless to anyone who reads the
+    table. The decoded actor/org/scope are kept only for the operator's audit view
+    and are best-effort (an already-expired token may not decode).
+
+    New TABLE so ``create_all`` upgrades existing DBs without a migration.
+    """
+
+    __tablename__ = "revoked_token"  # type: ignore[assignment]
+    token_hash: str = Field(primary_key=True)  # sha256 hex of the raw token
+    revoked_at: str
+    reason: str = Field(default="")
+    revoked_by: str = Field(default="")  # who ran the revoke (admin/founder id)
+    # Best-effort provenance, decoded when the token still parses — audit only.
+    actor: str | None = Field(default=None)
+    org_id: str | None = Field(default=None, index=True)
+    scope: str | None = Field(default=None)
+    expires_at: str | None = Field(default=None)
+
+
 SERVER_TABLES = [
     OrgRow,
     TeamRow,
@@ -384,6 +409,7 @@ SERVER_TABLES = [
     KnowledgeEdgeRow,
     ConsolidationStateRow,
     ProjectOverviewStateRow,
+    RevokedTokenRow,
 ]
 
 __all__ = [
@@ -408,5 +434,6 @@ __all__ = [
     "ConsolidationStateRow",
     "KnowledgeEdgeRow",
     "ProjectOverviewStateRow",
+    "RevokedTokenRow",
     "SERVER_TABLES",
 ]

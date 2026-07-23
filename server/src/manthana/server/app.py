@@ -38,6 +38,7 @@ from .auth import (
     issue_engineer_token,
     issue_founder_token,
     issue_team_token,
+    verify_engineer_token,
     verify_founder_token,
     verify_team_token,
 )
@@ -147,6 +148,11 @@ class CompareEnrichmentBody(BaseModel):
     ids: list[str] | None = None
 
 
+class RevokeTokenBody(BaseModel):
+    token: str  # the exact JWT to kill; stored only as a hash, never in the clear
+    reason: str = ""
+
+
 class SetQuotaBody(BaseModel):
     monthly_cap_usd: float | None = None  # None clears the override → server default
 
@@ -239,7 +245,7 @@ def create_app(
                 "— install: uv sync --extra mcp"
             )
         _mcp_server = build_founder_mcp(store, object_store, config)
-        mcp_asgi = founder_mcp_asgi(_mcp_server, config)
+        mcp_asgi = founder_mcp_asgi(_mcp_server, config, store)
 
     # Server-side enrichment: a batched BACKGROUND pass, never inline on ingest
     # (ingest must stay fast). Runs on its own cheap-model provider, metered per
@@ -390,10 +396,11 @@ def create_app(
 
             return allow_any
         if authorization.startswith("Bearer "):
+            bearer = authorization.removeprefix("Bearer ")
+            if store.is_token_revoked(bearer):
+                raise HTTPException(status_code=401, detail="token revoked")
             try:
-                claims = verify_founder_token(
-                    config.jwt_secret, authorization.removeprefix("Bearer ")
-                )
+                claims = verify_founder_token(config.jwt_secret, bearer)
             except AuthError as exc:
                 raise HTTPException(status_code=401, detail=str(exc)) from exc
 
@@ -411,8 +418,11 @@ def create_app(
     def require_team(authorization: Annotated[str, Header()] = "") -> TeamClaims:
         if not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="missing bearer token")
+        bearer = authorization.removeprefix("Bearer ")
+        if store.is_token_revoked(bearer):
+            raise HTTPException(status_code=401, detail="token revoked")
         try:
-            return verify_team_token(config.jwt_secret, authorization.removeprefix("Bearer "))
+            return verify_team_token(config.jwt_secret, bearer)
         except AuthError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
 
@@ -1195,6 +1205,68 @@ def create_app(
             raise HTTPException(status_code=422, detail="monthly_cap_usd must be >= 0")
         store.set_org_quota(org_id, body.monthly_cap_usd)
         return {"org_id": org_id, "monthly_cap_usd": body.monthly_cap_usd}
+
+    @app.post("/v1/admin/revoke-token")
+    def revoke_token(
+        body: RevokeTokenBody, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """Kill one JWT without rotating the shared secret (which would log out
+        every engineer, agent, and founder at once). The token is stored ONLY as a
+        hash; its claims are decoded for the audit record when it still parses, but
+        revocation works even for a garbled or expired token. Idempotent.
+        """
+        token = body.token.strip()
+        if not token:
+            raise HTTPException(status_code=422, detail="token is required")
+        # Best-effort provenance for the audit view — try each scope, ignore
+        # failures. A token that no longer verifies is still revoked by its hash.
+        actor = org = scope = expires = None
+        for verify, sc in (
+            (verify_team_token, "agent"),
+            (verify_founder_token, "founder"),
+            (verify_engineer_token, "engineer"),
+        ):
+            try:
+                claims = verify(config.jwt_secret, token)
+            except AuthError:
+                continue
+            scope = sc
+            org = getattr(claims, "org_id", None)
+            actor = getattr(claims, "actor", None)
+            break
+        # exp is informational; pull it without failing on a bad token.
+        try:
+            import jwt as _jwt
+
+            payload = _jwt.decode(token, options={"verify_signature": False})
+            expires = payload.get("exp")
+            if isinstance(expires, int | float):
+                expires = datetime.fromtimestamp(expires, tz=UTC).isoformat()
+        except Exception:  # noqa: BLE001 - provenance only, never blocks revocation
+            expires = None
+        fp = store.revoke_token(
+            token, reason=body.reason, revoked_by="admin",
+            actor=actor, org_id=org, scope=scope, expires_at=expires,
+        )
+        return {"revoked": True, "fingerprint": fp, "scope": scope, "org_id": org}
+
+    @app.get("/v1/admin/revoked-tokens")
+    def revoked_tokens(_: Annotated[None, Depends(require_admin)]) -> dict[str, Any]:
+        """The revocation audit log — hashes and best-effort provenance, never tokens."""
+        return {
+            "revoked": [
+                {
+                    "fingerprint": r.token_hash,
+                    "revoked_at": r.revoked_at,
+                    "reason": r.reason,
+                    "scope": r.scope,
+                    "org_id": r.org_id,
+                    "actor": r.actor,
+                    "expires_at": r.expires_at,
+                }
+                for r in store.list_revoked_tokens()
+            ]
+        }
 
     @app.get("/v1/admin/router-analysis")
     def router_analysis(
