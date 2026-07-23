@@ -220,3 +220,123 @@ def test_console_rejects_garbage_token() -> None:
     assert client.post("/ui/login", data={"token": "not-a-token"}).status_code == 401
     # unauthenticated console → login redirect
     assert client.get("/ui", follow_redirects=False).status_code == 303
+
+
+# ── founder self-serve invites (the two-startups case) ─────────────────────
+#
+# The capability a hosted startup's founder most needs: onboard their own
+# engineers without the operator admin token, which is server-wide and would
+# expose every other tenant. Every test here doubles as an isolation test —
+# org-a's founder must never touch org-b.
+def _two_orgs_with_teams() -> tuple[TestClient, ServerStore]:
+    # Invites carry team_id as a scoped string; nothing joins it to TeamRow, so
+    # the orgs alone are enough. (TeamRow.id is a GLOBAL primary key, so creating
+    # a same-named team in both orgs would collide — a separate, cosmetic issue.)
+    client, _config, store, _obj = _make()
+    store.create_org("org-a", "Org A")
+    store.create_org("org-b", "Org B")
+    return client, store
+
+
+def test_founder_mints_an_invite_for_their_own_org() -> None:
+    client, _ = _two_orgs_with_teams()
+    resp = client.post(
+        "/v1/founder/invites", json={"org_id": "org-a"}, headers=_founder_auth("org-a")
+    )
+    assert resp.status_code == 200
+    code = resp.json()["code"]
+    assert resp.json()["team_id"] == "core"  # the onboard-org default
+
+    # …and it actually works: an engineer redeems it for a team token.
+    redeemed = client.post("/v1/enroll", json={"code": code, "actor": "eng@a.com"})
+    assert redeemed.status_code == 200
+    assert verify_team_token(_SECRET, redeemed.json()["token"]).org_id == "org-a"
+
+
+def test_founder_cannot_mint_into_another_org() -> None:
+    client, _ = _two_orgs_with_teams()
+    # org-a's founder naming org-b in the body is refused by check_org.
+    resp = client.post(
+        "/v1/founder/invites", json={"org_id": "org-b"}, headers=_founder_auth("org-a")
+    )
+    assert resp.status_code == 403
+
+
+def test_founder_invite_needs_a_founder_or_admin_token() -> None:
+    client, _ = _two_orgs_with_teams()
+    assert client.post("/v1/founder/invites", json={"org_id": "org-a"}).status_code == 401
+    # An engineer/team token is scope 'agent', not 'founder' → rejected.
+    team = issue_team_token(_SECRET, org_id="org-a", team_id="core", actor="e@a.com")
+    resp = client.post(
+        "/v1/founder/invites", json={"org_id": "org-a"},
+        headers={"Authorization": f"Bearer {team}"},
+    )
+    assert resp.status_code == 401
+
+
+def test_founder_lists_only_their_own_orgs_invites() -> None:
+    client, _ = _two_orgs_with_teams()
+    client.post("/v1/founder/invites", json={"org_id": "org-a"}, headers=_founder_auth("org-a"))
+    client.post("/v1/founder/invites", json={"org_id": "org-b"}, headers=_founder_auth("org-b"))
+
+    a_list = client.get(
+        "/v1/founder/invites", params={"org_id": "org-a"}, headers=_founder_auth("org-a")
+    ).json()["invites"]
+    assert len(a_list) == 1
+
+    # org-a's founder cannot list org-b's invites.
+    assert client.get(
+        "/v1/founder/invites", params={"org_id": "org-b"}, headers=_founder_auth("org-a")
+    ).status_code == 403
+
+
+def test_founder_revokes_own_invite_but_not_another_orgs() -> None:
+    client, _ = _two_orgs_with_teams()
+    b_code = client.post(
+        "/v1/founder/invites", json={"org_id": "org-b"}, headers=_founder_auth("org-b")
+    ).json()["code"]
+
+    # org-a's founder cannot revoke org-b's invite — and the 404 doesn't confirm
+    # the code exists elsewhere. (check_org fires first: naming org-b is a 403.)
+    assert client.post(
+        "/v1/founder/invites/revoke", json={"org_id": "org-b", "code": b_code},
+        headers=_founder_auth("org-a"),
+    ).status_code == 403
+    # Even claiming it's their own org, a foreign code is a 404, not a revoke.
+    assert client.post(
+        "/v1/founder/invites/revoke", json={"org_id": "org-a", "code": b_code},
+        headers=_founder_auth("org-a"),
+    ).status_code == 404
+    # org-b's own code is still live.
+    assert client.post("/v1/enroll", json={"code": b_code, "actor": "e@b.com"}).status_code == 200
+
+    # org-b's founder revokes their own → the code stops working.
+    assert client.post(
+        "/v1/founder/invites/revoke", json={"org_id": "org-b", "code": b_code},
+        headers=_founder_auth("org-b"),
+    ).status_code == 200
+
+
+def test_founder_invite_team_defaults_to_core_and_accepts_an_explicit_one() -> None:
+    client, _config, store, _obj = _make()
+    store.create_org("org-a", "Org A")
+
+    default = client.post(
+        "/v1/founder/invites", json={"org_id": "org-a"}, headers=_founder_auth("org-a")
+    )
+    assert default.status_code == 200 and default.json()["team_id"] == "core"
+
+    # An explicit team is taken as-is — a team token is just a scoped string, and
+    # the org boundary (not the team) is what check_org enforces.
+    chosen = client.post(
+        "/v1/founder/invites", json={"org_id": "org-a", "team_id": "platform"},
+        headers=_founder_auth("org-a"),
+    )
+    assert chosen.status_code == 200 and chosen.json()["team_id"] == "platform"
+
+
+def test_admin_token_can_still_drive_the_founder_invite_endpoints() -> None:
+    # The operator (admin token) retains full access — check_org allows any org.
+    client, _ = _two_orgs_with_teams()
+    resp = client.post("/v1/founder/invites", json={"org_id": "org-a"}, headers=ADMIN)
+    assert resp.status_code == 200

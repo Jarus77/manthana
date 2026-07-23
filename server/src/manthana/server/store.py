@@ -238,6 +238,24 @@ class ServerStore:
         with DBSession(self._engine) as db:
             return list(db.exec(select(InviteRow).where(InviteRow.org_id == org_id)))
 
+    def revoke_invite(self, code: str, *, org_id: str) -> bool:
+        """Delete an invite, but ONLY if it belongs to ``org_id``. Returns whether
+        it did.
+
+        The org guard is load-bearing, not defensive dressing: this is reachable
+        by a startup's own founder token, so a match on code alone would let one
+        tenant revoke another's pending invites (or probe which codes exist).
+        Requiring org membership means a founder can only ever act on their own,
+        and an unknown-or-other-org code is indistinguishable from a miss.
+        """
+        with DBSession(self._engine) as db:
+            row = db.get(InviteRow, code)
+            if row is None or row.org_id != org_id:
+                return False
+            db.delete(row)
+            db.commit()
+            return True
+
     def list_projects(self, org_id: str) -> list[str]:
         """Distinct project slugs that have at least one released compaction in this org.
         Used by the founder pipeline to resolve a free-text project name to a real slug."""
