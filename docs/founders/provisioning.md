@@ -104,6 +104,45 @@ An individual is just an org of one:
 manthana-server onboard-org jane "Jane" --server-url https://api.example.com --emails jane.txt
 ```
 
+## Self-serve invites (founder token — no admin token)
+
+Once your org exists, you don't need the operator every time you hire someone.
+The **founder token** from your welcome block can mint invites for **your own
+org**, and only your own — so on a shared server, one startup can never create
+invites for, or even see, another's.
+
+This uses the founder bearer token, not the server-wide admin token (which the
+operator keeps, because it spans every tenant). Point it at your org:
+
+```bash
+FDR="…"          # your founder token from the welcome block
+API="https://api.example.com"
+
+# Mint a shared, multi-use invite for your team (defaults to the "core" team):
+curl -sX POST "$API/v1/founder/invites" \
+  -H "Authorization: Bearer $FDR" -H "content-type: application/json" \
+  -d '{"org_id":"acme"}'
+# → {"code":"…","team_id":"core","expires_at":"…"}
+
+# A single-use invite bound to one hire:
+curl -sX POST "$API/v1/founder/invites" \
+  -H "Authorization: Bearer $FDR" -H "content-type: application/json" \
+  -d '{"org_id":"acme","actor":"bob@acme.com"}'
+
+# See your org's outstanding invites:
+curl -s "$API/v1/founder/invites?org_id=acme" -H "Authorization: Bearer $FDR"
+
+# Revoke one:
+curl -sX POST "$API/v1/founder/invites/revoke" \
+  -H "Authorization: Bearer $FDR" -H "content-type: application/json" \
+  -d '{"org_id":"acme","code":"…"}'
+```
+
+The returned `code` becomes an engineer's setup line —
+`manthana setup <encoded-invite>` — exactly like the ones in the welcome block.
+Budget and privacy stay with the operator: a founder can grow their team, but
+can't raise their own AI cap or change their org's privacy mode.
+
 ## What each engineer does
 
 One command, whichever path you took:

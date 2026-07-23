@@ -166,6 +166,21 @@ class EngineerTokenBody(BaseModel):
     expires_days: int = 365
 
 
+class FounderInviteBody(BaseModel):
+    org_id: str
+    # Omit when the org has exactly one team — the common case after onboard-org,
+    # which creates a single "core" team. Required only when there's a choice.
+    team_id: str | None = None
+    actor: str | None = None  # bound single-use invite, or None for an open one
+    expires_minutes: int = 20_160  # 14 days
+    uses: int = 1
+
+
+class FounderRevokeInviteBody(BaseModel):
+    org_id: str
+    code: str
+
+
 class FounderThreadBody(BaseModel):
     org_id: str
     session_id: str
@@ -722,6 +737,78 @@ def create_app(
             expires_days=max(1, body.expires_days),
         )
         return {"token": token, "org_id": body.org_id, "actor": actor}
+
+    def _resolve_team(team_id: str | None) -> str:
+        """The team an invite lands on; defaults to "core", the team onboard-org
+        creates. An explicit value is taken as-is and deliberately NOT validated
+        against the team registry: a team token is just an (org, team, actor)
+        string, nothing joins team_id back to a TeamRow at auth time, and the
+        registry's id is globally unique rather than org-scoped — so it cannot
+        reliably enumerate one org's teams anyway (tracked separately). Inventing
+        a 404 from an unreliable registry would only reject legitimate teams. The
+        org boundary — the part that matters — is enforced by check_org."""
+        return (team_id or "core").strip() or "core"
+
+    @app.post("/v1/founder/invites")
+    def founder_create_invite(
+        body: FounderInviteBody,
+        check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
+    ) -> dict[str, Any]:
+        """Mint an onboarding invite for the founder's OWN org.
+
+        The same capability the operator has via /v1/admin/invites, scoped to the
+        caller's org — so a hosted startup onboards its own engineers without the
+        operator admin token (which is server-wide and would expose every other
+        tenant). Same output an engineer redeems at /v1/enroll; the token never
+        travels, only the code.
+        """
+        check_org(body.org_id)
+        team_id = _resolve_team(body.team_id)
+        code = secrets.token_urlsafe(8)
+        expires = datetime.now(UTC) + timedelta(minutes=max(1, body.expires_minutes))
+        store.create_invite(
+            code, org_id=body.org_id, team_id=team_id, actor=body.actor,
+            uses=max(1, body.uses), expires_at=expires,
+        )
+        return {
+            "code": code,
+            "team_id": team_id,
+            "actor": body.actor,
+            "expires_at": expires.isoformat(),
+        }
+
+    @app.get("/v1/founder/invites")
+    def founder_list_invites(
+        org_id: str,
+        check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
+    ) -> dict[str, Any]:
+        """List the founder's own org's invites and their remaining uses/expiry."""
+        check_org(org_id)
+        return {
+            "invites": [
+                {
+                    "code": inv.code,
+                    "team_id": inv.team_id,
+                    "actor": inv.actor,
+                    "uses_left": inv.uses_left,
+                    "expires_at": inv.expires_at,
+                    "redeemed_at": inv.redeemed_at,
+                }
+                for inv in store.list_invites(org_id)
+            ]
+        }
+
+    @app.post("/v1/founder/invites/revoke")
+    def founder_revoke_invite(
+        body: FounderRevokeInviteBody,
+        check_org: Annotated[Callable[[str], None], Depends(require_founder_access)],
+    ) -> dict[str, Any]:
+        """Revoke one of the founder's own org's invites. A code from another org
+        (or an unknown one) is a 404 — never a signal that it exists elsewhere."""
+        check_org(body.org_id)
+        if not store.revoke_invite(body.code, org_id=body.org_id):
+            raise HTTPException(status_code=404, detail="no such invite in this org")
+        return {"revoked": body.code}
 
     @app.get("/v1/founder/digest")
     def founder_digest(
