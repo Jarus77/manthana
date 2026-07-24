@@ -367,6 +367,34 @@ check when the wiki stops filling in.
 
 Sets an org's monthly AI budget. `0` means unlimited.
 
+### `manthana-server delete-org <ORG_ID> --server-url <url> [--confirm]`
+
+Deletes an **entire tenant**: the org, its teams, people, identities, sessions,
+raw transcripts, knowledge notes, invites, quota, and privacy setting. For trial
+and abandoned orgs, and for offboarding a customer who asks to be erased.
+
+**Dry run unless you pass `--confirm`**, and the dry run is the point — it prints
+the row count per table so you can see the size of what you are about to destroy.
+It always previews first, even with `--confirm`, so the audit trail shows a
+preview before every delete. There is no undo.
+
+```
+$ manthana-server delete-org trial-workspace --server-url https://…
+org 'trial-workspace' — 41 row(s) across 8 table(s):
+        35  released_compaction
+         1  org
+         1  team
+         …
+dry run — nothing deleted. Re-run with --confirm to delete it.
+```
+
+Two things it does not do. Raw blobs are removed from the object store *before*
+any row, and if a blob deletion fails nothing is deleted at all — so a failure is
+safe to retry. And outstanding JWTs for the org still verify, because tokens are
+stateless: their holders see an empty console until the session expires, and a
+fresh sign-in creates a new org because their identity row is gone. To kill a
+live session immediately, `revoke-token` it.
+
 ## Reading the org
 
 ### `manthana-server digest <ORG_ID> [--since <date>] [--until <date>]`
@@ -405,7 +433,8 @@ All require the `X-Admin-Token` header unless noted.
 | `POST /v1/engineer-tokens` | Mint a wiki login for one named engineer. Founder-callable, not admin-only, and grants the **wiki only** — read and teach, never the oversight surfaces. |
 | `GET /v1/admin/audit?org_id=` | Every founder query and drill-down |
 | `POST /v1/admin/purge` | Purge an org's compactions. Dry run unless `confirm: true`, refuses an unfiltered request, always audited. |
-| `GET /v1/admin/purge-audit?org_id=` | Purge history, dry runs included |
+| `POST /v1/admin/delete-org` | Delete an entire tenant. Dry run unless `confirm: true`, returns per-table counts, `404`s an unknown org, always audited. |
+| `GET /v1/admin/purge-audit?org_id=` | Purge history, dry runs included — and tenant deletions, which survive the delete that wrote them |
 
 Founder-token endpoints (`/v1/founder/query`, `/ask`, `/topics`, `/thread`,
 `/drill`, `/digest`, `/audit`) are scoped to the caller's own org.
