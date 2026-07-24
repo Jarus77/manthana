@@ -323,9 +323,109 @@ def purge(
     return report
 
 
+@dataclass
+class DeleteOrgReport:
+    """What deleting a tenant found, and what it removed."""
+
+    org_id: str
+    dry_run: bool
+    found: bool = False
+    counts: dict[str, int] = field(default_factory=dict)
+    blobs_deleted: int = 0
+    audit_id: str | None = None
+    error: str | None = None
+
+    def total(self) -> int:
+        return sum(self.counts.values())
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "org_id": self.org_id,
+            "dry_run": self.dry_run,
+            "found": self.found,
+            "counts": self.counts,
+            "total": self.total(),
+            "blobs_deleted": self.blobs_deleted,
+            "audit_id": self.audit_id,
+            "error": self.error,
+        }
+
+
+def delete_org(
+    store: ServerStore,
+    object_store: ObjectStore,
+    *,
+    org_id: str,
+    confirm: bool = False,
+    actor: str = "admin",
+) -> DeleteOrgReport:
+    """Delete an entire tenant — org, teams, people, sessions, notes, everything.
+
+    DRY RUN BY DEFAULT, like ``purge``: without ``confirm=True`` this only counts
+    what WOULD go and writes nothing but an audit row. Both outcomes are audited,
+    because knowing that someone previewed deleting a customer is itself of
+    governance interest.
+
+    Ordering matches ``purge`` and for the same reason: object-store blobs are
+    deleted FIRST, and if any deletion fails the DB is left completely untouched
+    so the whole operation can simply be re-run. Committing the DB first would
+    destroy the only pointers to those blobs and orphan them in S3 forever.
+
+    What this is for: removing a trial or abandoned org, and offboarding a
+    customer who asks to be erased. It is not reversible — the caller is expected
+    to have looked at a dry run first.
+    """
+    counts = store.org_footprint(org_id)
+    report = DeleteOrgReport(
+        org_id=org_id, dry_run=not confirm, found=bool(counts), counts=counts
+    )
+
+    if not report.found:
+        report.error = f"no such org: {org_id!r}"
+        return report
+
+    if not confirm:
+        report.audit_id = store.record_purge_audit(
+            org_id=org_id, dry_run=True, matched=report.total(), deleted=0,
+            selector={"delete_org": True}, sample_ids=[], actor=actor,
+        )
+        return report
+
+    keys = store.raw_object_keys(org_id)
+    failed = [key for key in keys if not object_store.delete(key)]
+    if failed:
+        # Abort before touching the DB — every row survives, so a retry finishes it.
+        report.error = (
+            f"object-store delete failed for {len(failed)} blob(s); nothing deleted"
+        )
+        report.audit_id = store.record_purge_audit(
+            org_id=org_id, dry_run=False, matched=report.total(), deleted=0,
+            selector={"delete_org": True}, sample_ids=[], actor=actor,
+            error=report.error,
+        )
+        return report
+
+    deleted = store.delete_org(org_id)
+    report.counts = deleted
+    report.blobs_deleted = len(keys)
+    report.dry_run = False
+    # Audited AFTER the delete, deliberately: delete_org sweeps purge_audit too
+    # (it carries org_id), so a row written before would be erased by the very
+    # operation it records. Written after, it survives as the trail of a tenant
+    # that no longer exists.
+    report.audit_id = store.record_purge_audit(
+        org_id=org_id, dry_run=False, matched=sum(deleted.values()),
+        deleted=sum(deleted.values()), selector={"delete_org": True},
+        sample_ids=[], actor=actor,
+    )
+    return report
+
+
 __all__ = [
     "PurgeSelector",
     "PurgeReport",
+    "DeleteOrgReport",
+    "delete_org",
     "SELF_GENERATED_MARKERS",
     "COMPACTION_SUBJECT_TOKENS",
     "COMPACTION_ACTION_TOKENS",

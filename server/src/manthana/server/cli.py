@@ -482,6 +482,65 @@ def revoke_token(
     typer.echo("  person still needs access (setup invite, or console 'Create wiki login').")
 
 
+@app.command()
+def delete_org(
+    org_id: str = typer.Argument(..., help="the org to delete, e.g. trial-workspace"),
+    server_url: str = typer.Option(..., "--server-url"),
+    admin_token: str = typer.Option("", "--admin-token", envvar="MANTHANA_SERVER_ADMIN_TOKEN"),
+    confirm: bool = typer.Option(
+        False, "--confirm", help="actually delete (without this you get a dry run)"
+    ),
+) -> None:
+    """Delete an ENTIRE tenant: org, teams, people, sessions, notes, invites,
+    identities, and raw transcripts.
+
+    Dry run unless you pass --confirm, and the dry run is the point — it prints
+    the row count per table so you can see the size of what you are about to
+    destroy before you destroy it. There is no undo.
+
+    Use it for trial and abandoned orgs, and to offboard a customer who asks to
+    be erased.
+    """
+    import httpx
+
+    if not admin_token:
+        typer.echo("✗ no admin token (pass --admin-token or set MANTHANA_SERVER_ADMIN_TOKEN)")
+        raise typer.Exit(code=1)
+
+    def call(do_it: bool) -> dict:
+        with httpx.Client(base_url=server_url.rstrip("/"), timeout=60.0) as client:
+            resp = client.post(
+                "/v1/admin/delete-org",
+                json={"org_id": org_id, "confirm": do_it},
+                headers={"X-Admin-Token": admin_token},
+            )
+        if resp.status_code >= 300:
+            detail = resp.json().get("detail", resp.text) if resp.content else resp.text
+            typer.echo(f"✗ {resp.status_code}: {detail}")
+            raise typer.Exit(code=1)
+        return resp.json()
+
+    # Always preview first, even when --confirm was passed: the operator should see
+    # what went, and it makes the audit trail show a preview before every delete.
+    preview = call(False)
+    counts: dict[str, int] = preview["counts"]
+    typer.echo(f"org {org_id!r} — {preview['total']} row(s) across {len(counts)} table(s):")
+    for table, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+        typer.echo(f"  {n:>8}  {table}")
+
+    if not confirm:
+        typer.echo("\ndry run — nothing deleted. Re-run with --confirm to delete it.")
+        return
+
+    report = call(True)
+    typer.echo(
+        f"\n✓ deleted {report['total']} row(s), {report['blobs_deleted']} raw blob(s) "
+        f"· audit {report['audit_id']}"
+    )
+    typer.echo("  Outstanding JWTs for this org still verify (tokens are stateless) — their")
+    typer.echo("  holders see an empty console until expiry, and a fresh sign-in makes a new org.")
+
+
 def _wrap(text: str, indent: str, width: int = 96) -> str:
     """Field text, wrapped for a terminal. Empty renders as an explicit marker —
     a blank line would read as "same as above" when it actually means the model

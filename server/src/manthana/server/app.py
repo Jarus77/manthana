@@ -60,6 +60,7 @@ from .metering import MeteredProvider, QuotaExceededError, month_key
 from .mining import FAILED, QUOTA, run_mining
 from .overview import overview_provider_for, run_overview_pass
 from .purge import PurgeSelector, purge
+from .purge import delete_org as delete_org_tenant
 from .signup import mount_signup
 from .storage import ObjectStore, make_object_store
 from .store import ServerStore
@@ -208,6 +209,15 @@ class PurgeBody(BaseModel):
     # touched, no real project, abandoned, and compaction-shaped text.
     structural_junk: bool = False
     # Dry run by DEFAULT. Deleting requires saying so explicitly.
+    confirm: bool = False
+
+
+class DeleteOrgBody(BaseModel):
+    """Delete an ENTIRE tenant. No selector, because the org id IS the selector —
+    which is exactly why ``confirm`` defaults to false and the operator is meant
+    to read a dry run first."""
+
+    org_id: str
     confirm: bool = False
 
 
@@ -1163,6 +1173,32 @@ def create_app(
             # Only reachable on an object-store failure, in which case NOTHING was
             # deleted — surface it rather than reporting a success the operator
             # cannot verify.
+            raise HTTPException(status_code=502, detail=report.error)
+        return report.as_dict()
+
+    @app.post("/v1/admin/delete-org")
+    def delete_org_endpoint(
+        body: DeleteOrgBody, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """Delete an entire tenant — DRY RUN unless ``confirm`` is true.
+
+        Admin-only and always audited. The dry run returns per-table row counts so
+        the operator can see the size of what they are about to destroy; a repeat
+        with ``confirm=true`` then removes the org, its people, sessions, notes,
+        invites, identities, and raw blobs together.
+
+        Deliberately not a DELETE verb on a resource path: this removes far more
+        than the org row, and a POST that must carry ``confirm`` in a body is much
+        harder to fire by accident than a URL someone can curl from history.
+        """
+        report = delete_org_tenant(
+            store, object_store, org_id=body.org_id, confirm=body.confirm, actor="admin"
+        )
+        if not report.found:
+            raise HTTPException(status_code=404, detail=report.error)
+        if report.error:
+            # Only reachable on an object-store failure, in which case NOTHING was
+            # deleted — surface it rather than reporting a success that isn't one.
             raise HTTPException(status_code=502, detail=report.error)
         return report.as_dict()
 

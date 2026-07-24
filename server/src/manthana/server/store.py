@@ -21,14 +21,16 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from manthana.schemas import BaseCompaction, CompactionAdapter, KnowledgeNote, NoteStatus
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session as DBSession
-from sqlmodel import col, select
+from sqlmodel import SQLModel, col, select
 
 from .db import create_db_engine, init_db
 from .tables import (
+    SERVER_TABLES,
     ActionQueueRow,
     ActorRow,
     ConsolidationStateRow,
@@ -54,6 +56,20 @@ from .tables import (
     RevokedTokenRow,
     TeamRow,
 )
+
+#: Tables carrying ``org_id`` that ``delete_org`` deliberately does NOT sweep.
+#:
+#: ``revoked_token`` holds the kill-switch blocklist. Deleting an entry can only
+#: ever RE-ENABLE a credential, which is the wrong direction for a security
+#: control, and the rows hold sha256 hashes rather than anything belonging to the
+#: tenant. They cost nothing to keep and are dangerous to drop.
+#:
+#: Note what deleting an org does NOT do: tokens are stateless (signature + exp,
+#: no jti), so an outstanding JWT for a deleted org still verifies. Its holder
+#: sees an empty console until the session expires, and a fresh sign-in creates a
+#: new org because their identity row is gone. Killing a specific live session
+#: means revoking that token — see ``revoke_token``.
+_DELETE_ORG_KEEP = frozenset({"revoked_token"})
 
 
 class NotReleasedError(ValueError):
@@ -212,6 +228,93 @@ class ServerStore:
     def list_actors(self, org_id: str) -> list[ActorRow]:
         with DBSession(self._engine) as db:
             return list(db.exec(select(ActorRow).where(ActorRow.org_id == org_id)))
+
+    # ── tenant deletion ──────────────────────────────────────────────────
+    def org_scoped_tables(self) -> list[type[SQLModel]]:
+        """Every table ``delete_org`` sweeps, discovered from the schema.
+
+        Discovered rather than listed, and that is the whole point: a hand-written
+        list silently goes stale the moment someone adds a table, and the failure
+        mode is a tenant's data surviving its own deletion. Anything carrying
+        ``org_id`` is swept unless it is explicitly excused in ``_DELETE_ORG_KEEP``.
+        """
+        return [
+            t
+            for t in SERVER_TABLES
+            if t.__tablename__ not in _DELETE_ORG_KEEP
+            and "org_id" in t.__table__.columns  # type: ignore[attr-defined]
+        ]
+
+    def org_footprint(self, org_id: str) -> dict[str, int]:
+        """Row counts per table for one org — what ``delete_org`` would remove.
+
+        This is the dry run. Tables with nothing in them are omitted so the report
+        reads as "here is what exists" rather than a wall of zeroes.
+        """
+        counts: dict[str, int] = {}
+        with DBSession(self._engine) as db:
+            if db.get(OrgRow, org_id) is not None:
+                counts["org"] = 1
+            for table in self.org_scoped_tables():
+                # Reach for the mapped Column rather than the model attribute: the
+                # table is only known at runtime, so `table.org_id` is an untyped
+                # attribute lookup, while `__table__.c.org_id` is the real column.
+                n = db.execute(
+                    select(func.count())
+                    .select_from(table)
+                    .where(table.__table__.c.org_id == org_id)  # type: ignore[attr-defined]
+                ).scalar_one()
+                if n:
+                    counts[str(table.__tablename__)] = int(n)
+        return counts
+
+    def raw_object_keys(self, org_id: str) -> list[str]:
+        """Every object-store key belonging to an org, so the caller can delete the
+        blobs BEFORE the rows that point at them (see ``purge.delete_org``)."""
+        with DBSession(self._engine) as db:
+            rows = db.exec(
+                select(RawTranscriptRow).where(RawTranscriptRow.org_id == org_id)
+            )
+            return [r.object_key for r in rows if r.object_key]
+
+    def delete_org(self, org_id: str) -> dict[str, int]:
+        """Delete every row belonging to an org, in ONE transaction.
+
+        Unlike ``delete_compactions`` — which removes SOME compactions and so has to
+        carefully strip citations from the knowledge notes that survive — nothing
+        here survives, so there is nothing left to orphan and no repair to do.
+
+        Bulk DELETE per table rather than a row-by-row loop: a real tenant can hold
+        tens of thousands of rows across compactions, vectors, and notes, and this
+        runs inside one request.
+
+        Returns per-table deleted counts. Object-store blobs are NOT removed here;
+        the caller deletes those first and abandons this call if any fail, exactly
+        as ``purge.purge`` does — committing first would strip the only pointers to
+        those blobs and orphan them in S3 forever.
+        """
+        def rows_affected(result: object) -> int:
+            """A DML execute returns a CursorResult carrying ``rowcount``; the
+            declared return type is the general Result, which does not. Read it
+            defensively rather than asserting a cast that would be a lie on a
+            backend that did not report one."""
+            return int(getattr(result, "rowcount", 0) or 0)
+
+        deleted: dict[str, int] = {}
+        with DBSession(self._engine) as db:
+            for table in self.org_scoped_tables():
+                n = rows_affected(
+                    db.execute(
+                        sa_delete(table).where(table.__table__.c.org_id == org_id)  # type: ignore[attr-defined]
+                    )
+                )
+                if n:
+                    deleted[str(table.__tablename__)] = n
+            n = rows_affected(db.execute(sa_delete(OrgRow).where(col(OrgRow.id) == org_id)))
+            if n:
+                deleted["org"] = n
+            db.commit()
+        return deleted
 
     # ── identities (browser sign-in) ─────────────────────────────────────
     def get_identity(self, identity_id: str) -> IdentityRow | None:
