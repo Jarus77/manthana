@@ -387,10 +387,61 @@ class RevokedTokenRow(SQLModel, table=True):
     expires_at: str | None = Field(default=None)
 
 
+class IdentityRow(SQLModel, table=True):
+    """A human who signs in through an identity provider (today: Google).
+
+    This is the HUMAN half of the credential model, and it is deliberately not
+    the same thing as an ``ActorRow``. An actor is a sync identity that the
+    laptop daemon attributes captures to; an identity is a browser login with a
+    role attached. One person usually has both, keyed by the same email, but a
+    founder who never installs the CLI has only this row.
+
+    ``id`` is provider-namespaced (``google:<sub>``) rather than the email,
+    because Google's ``sub`` is the stable identifier — an email can be renamed
+    or reassigned inside a Workspace, and we must not hand a new employee the
+    previous holder's org on a rename.
+
+    ``role`` is ``founder`` (full console for the org) or ``engineer`` (wiki
+    only). Somebody joining an existing org always lands as ``engineer``:
+    controlling a domain is not the same as being authorised to read everyone's
+    costs and audit trail. A founder promotes them from the console.
+
+    New TABLE so ``create_all`` upgrades existing DBs without a migration.
+    """
+
+    __tablename__ = "identity"  # type: ignore[assignment]
+    id: str = Field(primary_key=True)  # "google:<sub>"
+    email: str = Field(index=True)
+    org_id: str = Field(index=True)
+    role: str = Field(default="engineer", index=True)  # founder | engineer
+    display_name: str | None = Field(default=None)
+    created_at: str
+
+
+class OrgDomainRow(SQLModel, table=True):
+    """Maps a verified WORK email domain to the org that claimed it first, so the
+    second person from ``@acme.com`` is offered "join Acme" instead of silently
+    creating a second, parallel org for the same company.
+
+    Only non-public domains are ever written here — a row for ``gmail.com`` would
+    mean every personal signup joins one enormous shared org. Personal-email users
+    always create their own org and join others through an invite link instead.
+
+    New TABLE so ``create_all`` upgrades existing DBs without a migration.
+    """
+
+    __tablename__ = "org_domain"  # type: ignore[assignment]
+    domain: str = Field(primary_key=True)  # lowercased, no "@"
+    org_id: str = Field(index=True)
+    created_at: str
+
+
 SERVER_TABLES = [
     OrgRow,
     TeamRow,
     ActorRow,
+    IdentityRow,
+    OrgDomainRow,
     ReleasedCompactionRow,
     RawTranscriptRow,
     ActionQueueRow,
@@ -416,6 +467,8 @@ __all__ = [
     "OrgRow",
     "TeamRow",
     "ActorRow",
+    "IdentityRow",
+    "OrgDomainRow",
     "ReleasedCompactionRow",
     "RawTranscriptRow",
     "ActionQueueRow",

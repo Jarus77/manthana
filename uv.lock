@@ -1325,6 +1325,7 @@ version = "0.6.6"
 source = { editable = "server" }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "manthana-schemas" },
     { name = "manthana-skills" },
     { name = "pyjwt" },
@@ -1354,6 +1355,7 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'llm'", specifier = ">=0.40" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.35" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "manthana-schemas", editable = "schemas" },
     { name = "manthana-skills", editable = "skills" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0" },

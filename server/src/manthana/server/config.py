@@ -112,6 +112,21 @@ class ServerConfig:
     # mount has lifespan/session-manager wiring that must be verified with a live MCP
     # client before enabling, so it never risks the main app until proven.
     enable_founder_mcp: bool = False
+    # ── self-serve signup (Google sign-in) ────────────────────────────────
+    # OFF by default because it is only meaningful on the hosted deployment: a
+    # self-hosted server has no Google OAuth client and does not want strangers
+    # provisioning orgs in it. With it off, `/ui/signup` and the OAuth routes are
+    # not mounted at all and onboarding stays exactly as it was (onboard-org +
+    # a pasted token).
+    enable_self_serve_signup: bool = False
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    # Lifetime of a BROWSER session minted by signing in with Google. Short on
+    # purpose: re-authenticating is one click, so a stolen cookie should not be
+    # usable for a year the way the long-lived founder token is. Founders who
+    # need a durable credential (MCP, curl) generate one explicitly from the
+    # console, and that one is revocable through the blocklist.
+    session_days: int = 30
     # Default privacy posture for orgs with no explicit override (org_privacy table).
     # "open" = consenting org: the founder sees named, per-individual results.
     # "k_anon" = de-identified, floor-gated aggregates.
@@ -224,6 +239,18 @@ class ServerConfig:
             )
         if self.max_raw_bytes < 1:
             raise ValueError(f"max_raw_bytes must be >= 1, got {self.max_raw_bytes}")
+        # Signup enabled without an OAuth client is a dead sign-in button: the
+        # redirect would reach Google and bounce back with invalid_client, which
+        # reads like our bug. Fail at boot instead, where the message is useful.
+        if self.enable_self_serve_signup and not (
+            self.google_client_id and self.google_client_secret
+        ):
+            raise ValueError(
+                "enable_self_serve_signup needs MANTHANA_SERVER_GOOGLE_CLIENT_ID and "
+                "MANTHANA_SERVER_GOOGLE_CLIENT_SECRET"
+            )
+        if self.session_days < 1:
+            raise ValueError(f"session_days must be >= 1, got {self.session_days}")
         # An interval of 0 busy-loops the background task; the rest are counts
         # whose only sane floor is 1 (0 would silently disable the pass while
         # still reporting it enabled).
@@ -333,6 +360,14 @@ class ServerConfig:
             enable_founder_mcp=(
                 env("MANTHANA_SERVER_ENABLE_FOUNDER_MCP", "") in ("1", "true", "yes")
             ),
+            enable_self_serve_signup=(
+                env("MANTHANA_SERVER_ENABLE_SIGNUP", "") in ("1", "true", "yes")
+            ),
+            google_client_id=env("MANTHANA_SERVER_GOOGLE_CLIENT_ID", cls.google_client_id),
+            google_client_secret=env(
+                "MANTHANA_SERVER_GOOGLE_CLIENT_SECRET", cls.google_client_secret
+            ),
+            session_days=int(env("MANTHANA_SERVER_SESSION_DAYS", str(cls.session_days))),
             enable_enrichment=(
                 env("MANTHANA_SERVER_ENABLE_ENRICHMENT", "") in ("1", "true", "yes")
             ),

@@ -139,10 +139,114 @@ def verify_engineer_token(secret: str, token: str) -> EngineerClaims:
     return EngineerClaims(org_id=payload["org"], actor=payload["sub"])
 
 
+@dataclass(frozen=True)
+class OAuthState:
+    """The CSRF token for one in-flight Google sign-in.
+
+    Carries the ``nonce`` (echoed in a cookie, so a callback forged by another
+    site cannot match) and, when the user arrived through a join link, the
+    ``invite`` code they should be enrolled against — the invite must survive the
+    round trip to Google, and putting it in a signed state is what stops a
+    stranger from swapping in someone else's code on the way back.
+
+    Deliberately short-lived (minutes): it is a hop, not a session.
+    """
+
+    nonce: str
+    invite: str = ""
+
+
+def issue_oauth_state(
+    secret: str, *, nonce: str, invite: str = "", expires_minutes: int = 10
+) -> str:
+    payload = {
+        "nonce": nonce,
+        "invite": invite,
+        "scope": "oauth_state",
+        "exp": datetime.now(UTC) + timedelta(minutes=expires_minutes),
+    }
+    return jwt.encode(payload, secret, algorithm=ALGORITHM)
+
+
+def verify_oauth_state(secret: str, token: str) -> OAuthState:
+    try:
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=[ALGORITHM],
+            options={"require": ["exp", "nonce"], "verify_exp": True},
+        )
+    except jwt.PyJWTError as exc:
+        raise AuthError(str(exc)) from exc
+    # The scope check is what keeps this out of session_for's reach: a state
+    # token is signed with the same secret, so without it a forged state could
+    # be presented as a login cookie.
+    if payload.get("scope") != "oauth_state":
+        raise AuthError("not an oauth state token")
+    return OAuthState(nonce=payload["nonce"], invite=payload.get("invite", ""))
+
+
+@dataclass(frozen=True)
+class PendingSignup:
+    """A Google profile we have VERIFIED but not yet placed in an org — held for the
+    few seconds between the callback and the human choosing create-or-join.
+
+    It gets its own scope rather than reusing ``oauth_state``, and that separation
+    is a security boundary, not tidiness: both are signed with the same secret, so
+    if they shared a scope an attacker could start their own sign-in, take the
+    resulting valid state token, and POST it as a pending cookie — handing
+    themselves an arbitrary attacker-chosen email, and with it the power to claim
+    another company's domain.
+    """
+
+    identity_id: str
+    email: str
+    display_name: str = ""
+
+
+def issue_pending_signup(
+    secret: str,
+    *,
+    identity_id: str,
+    email: str,
+    display_name: str = "",
+    expires_minutes: int = 30,
+) -> str:
+    payload = {
+        "sub": identity_id,
+        "email": email,
+        "name": display_name,
+        "scope": "signup_pending",
+        "exp": datetime.now(UTC) + timedelta(minutes=expires_minutes),
+    }
+    return jwt.encode(payload, secret, algorithm=ALGORITHM)
+
+
+def verify_pending_signup(secret: str, token: str) -> PendingSignup:
+    try:
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=[ALGORITHM],
+            options={"require": ["exp", "sub", "email"], "verify_exp": True},
+        )
+    except jwt.PyJWTError as exc:
+        raise AuthError(str(exc)) from exc
+    if payload.get("scope") != "signup_pending":
+        raise AuthError("not a pending-signup token")
+    return PendingSignup(
+        identity_id=payload["sub"],
+        email=payload["email"],
+        display_name=payload.get("name", "") or "",
+    )
+
+
 __all__ = [
     "TeamClaims",
     "FounderClaims",
     "EngineerClaims",
+    "OAuthState",
+    "PendingSignup",
     "AuthError",
     "issue_team_token",
     "verify_team_token",
@@ -150,5 +254,9 @@ __all__ = [
     "verify_founder_token",
     "issue_engineer_token",
     "verify_engineer_token",
+    "issue_oauth_state",
+    "verify_oauth_state",
+    "issue_pending_signup",
+    "verify_pending_signup",
     "ALGORITHM",
 ]

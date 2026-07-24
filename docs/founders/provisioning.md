@@ -1,6 +1,8 @@
 # Provisioning an org, teams, and engineers
 
-The whole flow is **two commands for you, one for each engineer.**
+On the hosted service you sign yourself up and there is **nothing to run at all**. If
+you're running your own server, or onboarding a customer by hand, it's **two commands
+for you, one for each engineer.**
 
 ## The model
 
@@ -12,8 +14,38 @@ The whole flow is **two commands for you, one for each engineer.**
 | **Invite** | A short code that redeems for a team token. Safe to share; worthless afterwards. |
 | **Team token** | The engineer's bearer credential for pushing to your server. Never handed around — issued only on redemption. |
 
-Orgs and teams are created implicitly by `enroll` and `onboard-org`, so you
-rarely create them by hand.
+Orgs and teams are created implicitly by signing up, `enroll`, and `onboard-org`, so
+you rarely create them by hand.
+
+## Path 0 — sign up yourself (hosted, no operator)
+
+On a deployment with self-serve signup enabled, this replaces every other path for a
+new customer:
+
+1. Go to `https://<server>/ui/signup` and **sign in with Google**.
+2. Name your organization (or, if a colleague on your email domain got there first,
+   join theirs).
+3. You land on a welcome page holding the two lines your engineers run — copy them.
+
+That's the whole thing. No admin token, no operator, and no credential arriving by
+email. Your browser session lasts 30 days by default; if you also want to drive the
+API or the MCP gateway, generate a long-lived token from the same page.
+
+**Who gets what.** The person who creates the org is its **founder** — full console:
+cost, mining, audit, digests. Anyone who joins afterwards, whether by email-domain
+match or through an invite link, lands as an **engineer**: they read and correct the
+team wiki, but the oversight pages are not theirs. Controlling an email domain is not
+the same as being authorised to see the company's costs and every engineer's activity.
+Promote them from **Members** on the console when they should have it.
+
+**Joining an existing org.** A work-domain address (`you@acme.com`) is offered the
+existing Acme org automatically. A personal address (`gmail.com` and friends) never is
+— every gmail user would otherwise "match" the same org — so share the join link from
+your welcome page instead. It works for any address, and it's the browser twin of
+`manthana setup mia_…`.
+
+The two operator-driven paths below still work unchanged, and remain the right ones
+when you're onboarding someone yourself or running your own server.
 
 ## Path 1 — self-hosted (you run the server)
 

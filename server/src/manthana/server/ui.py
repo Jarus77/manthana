@@ -209,11 +209,23 @@ def scope_org(sess: ConsoleSession, requested: str) -> str:
     return sess.org_id if sess.org_id is not None else requested
 
 
-def _login_page(error: bool = False) -> str:
+def _login_page(error: bool = False, google: bool = False) -> str:
     msg = "<p class='warn'>Invalid token.</p>" if error else ""
+    # Google first when it is available: it is the path almost everyone should
+    # take. The token box stays regardless — the operator's admin token and every
+    # engineer wiki login minted before self-serve existed still arrive that way.
+    sso = (
+        "<p><a href='/ui/auth/google' style='display:inline-block;background:#1a73e8;"
+        "color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none'>"
+        "Sign in with Google</a></p>"
+        "<p class='muted'>New here? <a href='/ui/signup'>Create your organization</a>.</p>"
+        "<hr><p class='muted'>Or sign in with a token:</p>"
+        if google
+        else ""
+    )
     return _page(
         "Login",
-        f"{msg}<form method='post' action='/ui/login'>"
+        f"{msg}{sso}<form method='post' action='/ui/login'>"
         "<p>Your Manthana token: <input type='password' name='token' autofocus></p>"
         "<button>Sign in</button></form>"
         "<p class='muted'>Founders and engineers both sign in here. Engineers land on "
@@ -270,12 +282,15 @@ def mount_ui(
 
     @app.get("/ui/login", response_class=HTMLResponse)
     def login_form() -> str:
-        return _login_page()
+        return _login_page(google=config.enable_self_serve_signup)
 
     @app.post("/ui/login")
     def login(token: Annotated[str, Form()] = "") -> Response:
         if _session(token) is None:
-            return HTMLResponse(_login_page(error=True), status_code=401)
+            return HTMLResponse(
+                _login_page(error=True, google=config.enable_self_serve_signup),
+                status_code=401,
+            )
         resp = RedirectResponse(url="/ui", status_code=303)
         # Scope the cookie to the console routes; httponly keeps it out of JS.
         resp.set_cookie(
@@ -404,8 +419,38 @@ def mount_ui(
             f"{pending_rows or '<tr><td colspan=6 class=muted>no open invites</td></tr>'}"
             "</table></div>"
         )
+        # Members exists only where people can sign themselves in. Everyone who
+        # joins an org through a domain match or an invite link lands as an
+        # ENGINEER — domain ownership is not authorisation to read the company's
+        # costs and audit trail — so this is where a founder deliberately hands
+        # someone the full console.
+        members = ""
+        if config.enable_self_serve_signup:
+            member_rows = "".join(
+                f"<tr><td>{_e(m.display_name or m.email)}</td>"
+                f"<td class='muted'>{_e(m.email)}</td><td>{_e(m.role)}</td>"
+                f"<td class='muted'>{_e(m.org_id)}</td><td>"
+                + (
+                    "<form method='post' action='/ui/members/promote'>"
+                    f"<input type='hidden' name='identity_id' value='{_e(m.id)}'>"
+                    "<button class='link'>make founder</button></form>"
+                    if m.role != "founder"
+                    else "—"
+                )
+                + "</td></tr>"
+                for o in orgs
+                for m in store.list_identities(o.id)
+            )
+            members = (
+                "<h3>Members</h3>"
+                "<div class='bar'><table><tr><th>name</th><th>email</th><th>role</th>"
+                f"<th>org</th><th></th></tr>{member_rows or ''}"
+                "</table>"
+                "<p class='muted'>People who signed in with Google. Engineers read and "
+                "correct the wiki; founders also see cost, mining, and audit.</p></div>"
+            )
         return HTMLResponse(
-            _page("Console", query_form + table + invites + team_access + audit)
+            _page("Console", query_form + table + invites + team_access + members + audit)
         )
 
     def _invites_for(orgs: list) -> list:  # noqa: ANN001 - list[OrgRow]

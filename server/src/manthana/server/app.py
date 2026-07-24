@@ -60,6 +60,7 @@ from .metering import MeteredProvider, QuotaExceededError, month_key
 from .mining import FAILED, QUOTA, run_mining
 from .overview import overview_provider_for, run_overview_pass
 from .purge import PurgeSelector, purge
+from .signup import mount_signup
 from .storage import ObjectStore, make_object_store
 from .store import ServerStore
 from .ui import mount_ui
@@ -1325,6 +1326,10 @@ def create_app(
     # (the cookie is path-scoped there), same teach functions — a transport, not
     # a second product.
     mount_wiki_api(app, config, store, provider, provider_for=org_provider)
+    # Self-serve onboarding. Mounted last and only when enabled, so a self-hosted
+    # deploy exposes no signup surface at all and onboarding stays operator-driven.
+    if config.enable_self_serve_signup:
+        mount_signup(app, config, store)
     if mcp_asgi is not None:
         app.mount("/mcp", mcp_asgi)
     return app
