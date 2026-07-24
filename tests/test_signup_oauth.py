@@ -51,6 +51,14 @@ def _make(*, signup: bool = True):
     return client, config, store
 
 
+def _role(store: ServerStore, identity_id: str) -> str:
+    """The stored role, asserting the identity exists — a missing row is a failure
+    of the test's premise, not a role to compare against."""
+    row = store.get_identity(identity_id)
+    assert row is not None, f"no identity {identity_id}"
+    return row.role
+
+
 def _google(monkeypatch, sub: str, email: str, name: str = "", verified: bool = True) -> None:
     """Stand in for the Google token endpoint. Everything downstream of the
     exchange is the code under test; the exchange itself is Google's."""
@@ -256,12 +264,12 @@ def test_founder_promotes_an_engineer_and_cannot_reach_another_org(monkeypatch) 
     client.cookies.set(COOKIE, outsider)
     promote = {"identity_id": "google:sub-2"}
     assert client.post("/ui/members/promote", data=promote).status_code == 404
-    assert store.get_identity("google:sub-2").role == "engineer"
+    assert _role(store, "google:sub-2") == "engineer"
 
     client.cookies.clear()
     client.cookies.set(COOKIE, founder_cookie)
     assert client.post("/ui/members/promote", data=promote).status_code == 303
-    assert store.get_identity("google:sub-2").role == "founder"
+    assert _role(store, "google:sub-2") == "founder"
 
 
 def test_promotion_survives_the_promoted_person_signing_in_again(monkeypatch) -> None:
