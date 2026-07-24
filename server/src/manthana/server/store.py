@@ -23,6 +23,7 @@ from typing import Any
 from manthana.schemas import BaseCompaction, CompactionAdapter, KnowledgeNote, NoteStatus
 from sqlalchemy import func, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session as DBSession
 from sqlmodel import col, select
 
@@ -164,6 +165,24 @@ class ServerStore:
             db.merge(OrgRow(id=org_id, name=name, created_at=_now_iso()))
             db.commit()
 
+    def create_org_if_absent(self, org_id: str, name: str) -> bool:
+        """Insert an org, or return False if that id is already taken.
+
+        The difference from ``create_org`` is the whole point: that one upserts, so
+        a caller racing another with the same id silently *takes over* the existing
+        tenant. Self-serve signup picks its org id by reading first and inserting
+        after, and two simultaneous signups can read the same free id — so the
+        insert itself has to be the thing that arbitrates, not the read before it.
+        """
+        with DBSession(self._engine) as db:
+            db.add(OrgRow(id=org_id, name=name, created_at=_now_iso()))
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                return False
+            return True
+
     def create_team(self, team_id: str, org_id: str, name: str) -> None:
         with DBSession(self._engine) as db:
             db.merge(TeamRow(id=team_id, org_id=org_id, name=name))
@@ -207,9 +226,13 @@ class ServerStore:
         org_id: str,
         role: str,
         display_name: str | None = None,
-    ) -> IdentityRow:
+    ) -> None:
         """Record a signed-in human. Idempotent on ``identity_id`` so repeat
-        sign-ins refresh the profile without disturbing the role."""
+        sign-ins refresh the profile without disturbing the role.
+
+        Returns nothing on purpose: the row is expired by the commit, so handing it
+        back would give callers an object whose attributes raise on access. Read it
+        with ``get_identity`` if you need it."""
         with DBSession(self._engine) as db:
             row = db.get(IdentityRow, identity_id)
             if row is None:
@@ -223,7 +246,6 @@ class ServerStore:
                 row.email, row.display_name = email, display_name
             db.merge(row)
             db.commit()
-            return row
 
     def list_identities(self, org_id: str) -> list[IdentityRow]:
         with DBSession(self._engine) as db:

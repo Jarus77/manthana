@@ -414,7 +414,14 @@ def mount_ui(
             "them — that is their whole onboarding, and it captures their sessions "
             "into the wiki. Leave the email blank for one shared invite the whole "
             "team can use; fill it in for a single-use, per-person invite.</p>"
-            "<table><tr><th>org</th><th>team</th><th>for</th><th>uses left</th>"
+            # Signing in no longer lands a returning founder on the welcome page, so
+            # the copy-paste install lines need a door from here.
+            + (
+                "<p><a href='/ui/welcome'>→ Your team's setup lines and join link</a></p>"
+                if config.enable_self_serve_signup
+                else ""
+            )
+            + "<table><tr><th>org</th><th>team</th><th>for</th><th>uses left</th>"
             "<th>expires</th><th></th></tr>"
             f"{pending_rows or '<tr><td colspan=6 class=muted>no open invites</td></tr>'}"
             "</table></div>"

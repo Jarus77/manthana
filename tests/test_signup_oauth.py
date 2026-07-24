@@ -145,6 +145,26 @@ def test_two_orgs_get_distinct_team_rows(monkeypatch) -> None:
     assert alpha[0].org_id == "alpha" and beta[0].org_id == "beta"
 
 
+def test_org_creation_is_decided_by_the_insert_not_a_preceding_read() -> None:
+    """The race that would put two companies in one tenant: both signups read the
+    same id as free, then both write. The insert has to be what arbitrates, so the
+    second attempt on a taken id must fail rather than take the tenant over."""
+    _, _, store = _make()
+    assert store.create_org_if_absent("acme", "Acme One") is True
+    assert store.create_org_if_absent("acme", "Acme Two") is False
+    org = store.get_org("acme")
+    assert org is not None and org.name == "Acme One"  # not overwritten
+
+
+def test_claim_org_id_walks_past_taken_ids() -> None:
+    from manthana.server.signup import claim_org_id
+
+    _, _, store = _make()
+    assert claim_org_id(store, "acme", "Acme") == "acme"
+    assert claim_org_id(store, "acme", "Acme") == "acme-2"
+    assert claim_org_id(store, "acme", "Acme") == "acme-3"
+
+
 def test_same_org_name_does_not_land_in_the_first_tenant(monkeypatch) -> None:
     client, _, store = _make()
     _sign_in(client, monkeypatch, "sub-1", "a@alpha.com")
@@ -225,6 +245,46 @@ def test_invite_link_joins_any_address_as_engineer(monkeypatch) -> None:
     ]
 
 
+def test_existing_member_following_another_orgs_invite_is_told_why(monkeypatch) -> None:
+    """Silently bouncing them back to their own org looks like a broken link. One
+    account belongs to one org — say so, and leave the invite unconsumed."""
+    client, _, store = _make()
+    _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
+    client.post("/ui/signup/create", data={"org_name": "Acme Co"})
+    client.cookies.clear()
+
+    # A second, unrelated org mints an invite.
+    _sign_in(client, monkeypatch, "sub-2", "boss@betaco.com")
+    client.post("/ui/signup/create", data={"org_name": "Beta Co"})
+    beta = verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id
+    client.get("/ui/welcome")
+    code = next(i.code for i in store.list_invites(beta) if i.actor is None)
+    uses_before = next(i.uses_left for i in store.list_invites(beta) if i.code == code)
+    client.cookies.clear()
+
+    resp = _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com", invite=code)
+    assert resp.status_code == 409
+    assert "Acme Co" in resp.text and "Beta Co" in resp.text
+    # Still their own org, and Beta's invite is untouched.
+    assert verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id == "acme-co"
+    assert next(i.uses_left for i in store.list_invites(beta) if i.code == code) == uses_before
+    assert store.get_identity("google:sub-1").org_id == "acme-co"  # type: ignore[union-attr]
+
+
+def test_returning_founder_lands_on_the_console_not_onboarding(monkeypatch) -> None:
+    """The welcome page is onboarding — right exactly once. It stays reachable from
+    the console for whenever they need the install lines again."""
+    client, _, _ = _make()
+    _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
+    created = client.post("/ui/signup/create", data={"org_name": "Acme Co"})
+    assert created.headers["location"] == "/ui/welcome"  # first time: onboarding
+    assert "/ui/welcome" in client.get("/ui").text  # and a door back to it
+    client.cookies.clear()
+
+    resp = _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
+    assert resp.headers["location"] == "/ui"  # thereafter: the console
+
+
 def test_unknown_invite_link_is_rejected() -> None:
     client, _, _ = _make()
     assert client.get("/ui/join", params={"code": "nope"}).status_code == 404
@@ -238,7 +298,7 @@ def test_returning_user_goes_straight_back_in(monkeypatch) -> None:
     client.cookies.clear()
 
     resp = _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
-    assert resp.status_code == 303 and resp.headers["location"] == "/ui/welcome"
+    assert resp.status_code == 303 and resp.headers["location"] == "/ui"
     assert verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id == org_id
     assert len(store.list_identities(org_id)) == 1  # not duplicated
 
@@ -287,7 +347,7 @@ def test_promotion_survives_the_promoted_person_signing_in_again(monkeypatch) ->
     client.cookies.clear()
 
     resp = _sign_in(client, monkeypatch, "sub-2", "dev@acmeco.com")
-    assert resp.headers["location"] == "/ui/welcome"
+    assert resp.headers["location"] == "/ui"  # a founder's landing, not the wiki
     assert verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id == org_id
 
 
