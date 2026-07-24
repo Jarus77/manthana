@@ -102,16 +102,27 @@ def slugify(value: str) -> str:
     return slug[:40] or "org"
 
 
-def unique_org_id(store: ServerStore, base: str) -> str:
-    """First free ``base``, ``base-2``, ``base-3``… Self-serve means two unrelated
-    companies really can both call themselves "acme", and the second one must not
-    silently land inside the first one's tenant."""
-    candidate = base
-    n = 1
-    while store.get_org(candidate) is not None:
-        n += 1
-        candidate = f"{base}-{n}"
-    return candidate
+#: Distinct orgs we will try to name from one slug before giving up. Only a
+#: pathological number of same-named signups reaches this; the bound exists so a
+#: bug can never spin here forever.
+_MAX_ORG_ID_ATTEMPTS = 200
+
+
+def claim_org_id(store: ServerStore, base: str, name: str) -> str | None:
+    """Create the org under the first free ``base``, ``base-2``, ``base-3``… and
+    return the id that was actually taken, or None if the space is exhausted.
+
+    The CREATE is what arbitrates, not a preceding read. Two unrelated companies
+    really can both call themselves "acme", and checking `get_org` first and
+    inserting after leaves a window in which two simultaneous signups both see the
+    same id free and the second silently takes over the first's tenant. So each
+    candidate is attempted as an insert that fails if the id exists.
+    """
+    for n in range(1, _MAX_ORG_ID_ATTEMPTS + 1):
+        candidate = base if n == 1 else f"{base}-{n}"
+        if store.create_org_if_absent(candidate, name):
+            return candidate
+    return None
 
 
 def default_team_id(org_id: str) -> str:
@@ -189,7 +200,10 @@ def mount_signup(app: FastAPI, config: ServerConfig, store: ServerStore) -> None
         )
 
     def _land(role: str) -> str:
-        return "/ui/welcome" if role == "founder" else "/ui/home"
+        """Where a RETURNING member goes. Founders get the console, not the welcome
+        page: that page is onboarding, right exactly once. It stays reachable from
+        the console for whenever they need the install lines again."""
+        return "/ui" if role == "founder" else "/ui/home"
 
     def _sign_in_page(title: str, lead: str, invite: str = "") -> str:
         target = "/ui/auth/google"
@@ -318,6 +332,33 @@ def mount_signup(app: FastAPI, config: ServerConfig, store: ServerStore) -> None
                 identity_id, email=email, org_id=known.org_id, role=known.role,
                 display_name=display_name,
             )
+            # They followed an invite into a DIFFERENT org. One account belongs to
+            # one org, so we cannot honour it — but silently landing them back in
+            # their own org looks like the link was broken. Say what happened, and
+            # leave their existing session alone rather than half-signing them in.
+            if st.invite:
+                other = store.get_invite(st.invite)
+                if other is not None and other.org_id != known.org_id:
+                    mine = store.get_org(known.org_id)
+                    theirs = store.get_org(other.org_id)
+                    resp = HTMLResponse(
+                        _shell(
+                            "Already in a team",
+                            f"<p>{_e(email)} is already part of "
+                            f"<b>{_e(mine.name if mine else known.org_id)}</b>, so it "
+                            f"can't also join <b>"
+                            f"{_e(theirs.name if theirs else other.org_id)}</b> — one "
+                            "account belongs to one organization.</p>"
+                            "<p class='muted'>To join with a separate identity, sign in "
+                            "with a different Google account. The invitation is "
+                            "untouched and still works.</p>"
+                            f"<p><a class='cta' href='{_e(_land(known.role))}'>"
+                            "Continue to your team</a></p>",
+                        ),
+                        status_code=409,
+                    )
+                    resp.delete_cookie(STATE_COOKIE, path="/ui")
+                    return _set_session(resp, _session_token(known.org_id, known.role, email))
             resp = RedirectResponse(url=_land(known.role), status_code=303)
             resp.delete_cookie(STATE_COOKIE, path="/ui")
             return _set_session(resp, _session_token(known.org_id, known.role, email))
@@ -410,9 +451,10 @@ def mount_signup(app: FastAPI, config: ServerConfig, store: ServerStore) -> None
         identity_id, email = pending.identity_id, pending.email
         name = org_name.strip() or email.partition("@")[0]
 
-        org_id = unique_org_id(store, slugify(name))
+        org_id = claim_org_id(store, slugify(name), name)
+        if org_id is None:
+            return _fail("Sign-up", "Please pick a different organization name.", status=409)
         team_id = default_team_id(org_id)
-        store.create_org(org_id, name)
         store.create_team(team_id, org_id, "core")
         # NO OrgQuotaRow is written: an absent row means the org falls back to
         # config.llm_monthly_cap_usd, which defaults to 0 = unlimited. That is the
@@ -572,7 +614,7 @@ __all__ = [
     "mount_signup",
     "is_public_domain",
     "slugify",
-    "unique_org_id",
+    "claim_org_id",
     "default_team_id",
     "exchange_code_for_profile",
     "PUBLIC_EMAIL_DOMAINS",
