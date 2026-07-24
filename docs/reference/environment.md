@@ -110,6 +110,29 @@ See [Privacy & security model](privacy.md).
 | `MANTHANA_SERVER_ENABLE_FOUNDER_MCP` | `0` | Mounts the founder MCP gateway. Off by default until verified against a live MCP client. |
 | `MANTHANA_SERVER_MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,testserver` | Comma-separated `Host` allowlist for the MCP endpoint's DNS-rebinding check. Must include your public domain. `*` disables the check. |
 
+### Self-serve signup (Google sign-in)
+
+Only meaningful on a hosted deployment. With `MANTHANA_SERVER_ENABLE_SIGNUP` off (the
+default) none of these routes are mounted at all, the login page shows no Google button,
+and onboarding stays operator-driven via `onboard-org`.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `MANTHANA_SERVER_ENABLE_SIGNUP` | `0` | Mounts `/ui/signup`, `/ui/join`, and the Google OAuth routes, so founders can create their own org without the operator. Requires the two below, or the server refuses to boot. |
+| `MANTHANA_SERVER_GOOGLE_CLIENT_ID` | — | OAuth client id from the Google Cloud console. |
+| `MANTHANA_SERVER_GOOGLE_CLIENT_SECRET` | — | OAuth client secret. Keep it in a secret store, not in `.env` on a shared host. |
+| `MANTHANA_SERVER_SESSION_DAYS` | `30` | Lifetime of a browser session minted by signing in with Google. Short on purpose — re-authenticating is one click, so a stolen cookie should not last a year. Long-lived API tokens are generated separately from the console. |
+
+The OAuth client's **Authorized redirect URI** must be exactly
+`<MANTHANA_SERVER_PUBLIC_URL>/ui/auth/google/callback`. This is the one place
+`PUBLIC_URL` stops being cosmetic: Google compares it character for character, so a
+trailing slash or an `http://` where you deploy `https://` makes every sign-in fail.
+
+Self-serve orgs are created with **no per-org quota row**, so they inherit
+`MANTHANA_SERVER_LLM_MONTHLY_CAP_USD` (default `0` = unlimited). If you open signup to
+the public, decide deliberately whether that is what you want — see
+[privacy-and-budgets](../founders/privacy-and-budgets.md).
+
 ### The model provider
 
 | Variable | Default | What it does |

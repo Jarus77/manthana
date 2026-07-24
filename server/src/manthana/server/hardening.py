@@ -37,6 +37,13 @@ _WINDOW_SECONDS = 60.0
 RATE_LIMITS: dict[tuple[str, str], int] = {
     ("POST", "/v1/enroll"): 10,
     ("POST", "/ui/login"): 10,
+    # Self-serve signup. There is deliberately no per-org budget cap right now, so
+    # these limits are the only thing standing between a scripted signup loop and
+    # the operator's LLM bill — keep them tight.
+    ("GET", "/ui/auth/google"): 20,
+    ("GET", "/ui/auth/google/callback"): 20,
+    ("POST", "/ui/signup/create"): 5,
+    ("POST", "/ui/signup/join"): 5,
     ("POST", "/v1/founder/query"): 30,
     ("POST", "/v1/founder/thread"): 30,
     ("POST", "/v1/founder/drill"): 30,

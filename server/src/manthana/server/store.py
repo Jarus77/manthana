@@ -33,6 +33,7 @@ from .tables import (
     ConsolidationStateRow,
     EnrichmentStateRow,
     FounderQueryAuditRow,
+    IdentityRow,
     InviteRow,
     KnowledgeEdgeRow,
     KnowledgeNoteRow,
@@ -40,6 +41,7 @@ from .tables import (
     LlmUsagePurposeRow,
     LlmUsageRow,
     OrgConsentRow,
+    OrgDomainRow,
     OrgPrivacyRow,
     OrgQuotaRow,
     OrgRow,
@@ -191,6 +193,71 @@ class ServerStore:
     def list_actors(self, org_id: str) -> list[ActorRow]:
         with DBSession(self._engine) as db:
             return list(db.exec(select(ActorRow).where(ActorRow.org_id == org_id)))
+
+    # ── identities (browser sign-in) ─────────────────────────────────────
+    def get_identity(self, identity_id: str) -> IdentityRow | None:
+        with DBSession(self._engine) as db:
+            return db.get(IdentityRow, identity_id)
+
+    def upsert_identity(
+        self,
+        identity_id: str,
+        *,
+        email: str,
+        org_id: str,
+        role: str,
+        display_name: str | None = None,
+    ) -> IdentityRow:
+        """Record a signed-in human. Idempotent on ``identity_id`` so repeat
+        sign-ins refresh the profile without disturbing the role."""
+        with DBSession(self._engine) as db:
+            row = db.get(IdentityRow, identity_id)
+            if row is None:
+                row = IdentityRow(
+                    id=identity_id, email=email, org_id=org_id, role=role,
+                    display_name=display_name, created_at=_now_iso(),
+                )
+            else:
+                # Profile fields refresh; role does NOT — a promotion must not be
+                # undone by the promoted person simply signing in again.
+                row.email, row.display_name = email, display_name
+            db.merge(row)
+            db.commit()
+            return row
+
+    def list_identities(self, org_id: str) -> list[IdentityRow]:
+        with DBSession(self._engine) as db:
+            return list(db.exec(select(IdentityRow).where(IdentityRow.org_id == org_id)))
+
+    def set_identity_role(self, identity_id: str, org_id: str, role: str) -> bool:
+        """Change a member's role. ``org_id`` is required and checked: it makes a
+        cross-tenant promotion impossible even if a caller forgets to scope."""
+        with DBSession(self._engine) as db:
+            row = db.get(IdentityRow, identity_id)
+            if row is None or row.org_id != org_id:
+                return False
+            row.role = role
+            db.add(row)
+            db.commit()
+            return True
+
+    # ── work-domain → org claims ─────────────────────────────────────────
+    def get_org_by_domain(self, domain: str) -> str | None:
+        with DBSession(self._engine) as db:
+            row = db.get(OrgDomainRow, domain.strip().lower())
+            return row.org_id if row is not None else None
+
+    def claim_domain(self, domain: str, org_id: str) -> str:
+        """First org to claim a work domain keeps it; later signups from that
+        domain are offered a join instead. Returns the owning org id."""
+        key = domain.strip().lower()
+        with DBSession(self._engine) as db:
+            row = db.get(OrgDomainRow, key)
+            if row is not None:
+                return row.org_id
+            db.add(OrgDomainRow(domain=key, org_id=org_id, created_at=_now_iso()))
+            db.commit()
+            return org_id
 
     # ── onboarding invites ───────────────────────────────────────────────
     def create_invite(
