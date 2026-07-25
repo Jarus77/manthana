@@ -59,7 +59,7 @@ from .founder import run_query, team_topics, thread
 from .hardening import install_hardening
 from .llm import LLMProvider, make_consolidate_provider, make_enrich_provider, make_provider
 from .metering import MeteredProvider, QuotaExceededError, month_key
-from .mining import FAILED, QUOTA, run_mining
+from .mining import FAILED, QUOTA, MineRunRegistry, run_mining
 from .overview import overview_provider_for, run_overview_pass
 from .purge import PurgeSelector, purge
 from .purge import delete_org as delete_org_tenant
@@ -1362,6 +1362,10 @@ def create_app(
             raise HTTPException(status_code=500, detail=run.detail)
         return {"proposals": run.proposals, "queued": run.queued, "coverage": run.as_dict()}
 
+    # One mining registry for BOTH consoles. Two would mean a run started in one is
+    # invisible to the other, so the don't-stack-runs guard would not span them and
+    # a founder with both open could pay twice for the same corpus.
+    mine_runs = MineRunRegistry()
     # Registered BEFORE mount_ui, deliberately: Starlette matches routes in order,
     # so these win for the paths they claim while everything else mount_ui provides
     # — the login redirect, logout, and the old write POSTs — keeps working. The
@@ -1370,7 +1374,10 @@ def create_app(
     # without splitting it.
     if config.retire_html_console:
         mount_retired_console(app)
-    mount_ui(app, config, store, provider, object_store, provider_for=org_provider)
+    mount_ui(
+        app, config, store, provider, object_store,
+        provider_for=org_provider, mine_runs=mine_runs,
+    )
     # The wiki console shares mount_ui's cookie session (path='/ui'), so it must
     # be mounted on the same app and under the same path prefix. Exactly one of
     # these is mounted: once the Next.js client is being served in front of this
@@ -1389,7 +1396,9 @@ def create_app(
     mount_console_api(app, config, store)
     # The writes and the three paths that spend money. Separate mount, same
     # module: the cost boundary is real, and it is what let the reads ship first.
-    mount_console_write_api(app, config, store, provider, provider_for=org_provider)
+    mount_console_write_api(
+        app, config, store, provider, provider_for=org_provider, mine_runs=mine_runs
+    )
     # Self-serve onboarding. Mounted last and only when enabled, so a self-hosted
     # deploy exposes no signup surface at all and onboarding stays operator-driven.
     if config.enable_self_serve_signup:

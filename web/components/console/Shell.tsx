@@ -97,7 +97,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
     return null
   }
 
-  const link = (href: string) => (href === '/console' ? href : href) + (org ? `?org=${org}` : '')
+  const link = (href: string) => href + (org ? `?org=${org}` : '')
 
   return (
     <div className="min-h-screen bg-background font-sans text-foreground">

@@ -421,15 +421,20 @@ def mount_console_write_api(
     store: ServerStore,
     provider: LLMProvider,
     provider_for: Callable[[str], LLMProvider] | None = None,
+    mine_runs: MineRunRegistry | None = None,
 ) -> None:
     """Mount the console's writes and the three paths that spend money.
 
     Separate from the reads because the cost boundary is real: everything in
     ``mount_console_api`` is free, and everything here either changes state or
     calls a model. Keeping them apart is what let the read half ship first.
+
+    ``mine_runs`` is shared with ``mount_ui`` rather than created here: while both
+    consoles are reachable, two registries would mean a run started in one is
+    invisible to the other, and the don't-stack-runs guard would not span them.
     """
 
-    mine_runs = MineRunRegistry()
+    mine_runs = mine_runs if mine_runs is not None else MineRunRegistry()
 
     def _session(cookie: str) -> ConsoleSession:
         sess = session_for(config, cookie, store)

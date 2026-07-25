@@ -226,9 +226,14 @@ def mount_ui(
     provider: LLMProvider,
     object_store: ObjectStore | None = None,
     provider_for: Callable[[str], LLMProvider] | None = None,
+    mine_runs: MineRunRegistry | None = None,
 ) -> None:
-    # Last mining run per org (in-process; see MineRunRegistry on why it isn't stored).
-    mine_runs = MineRunRegistry()
+    # Last mining run per org (in-process; see MineRunRegistry on why it isn't
+    # stored). SHARED with the client console when the caller passes one: two
+    # registries would mean the don't-stack-runs guard did not span the two
+    # consoles, so a founder with both open could start the same corpus twice and
+    # pay for it twice.
+    mine_runs = mine_runs if mine_runs is not None else MineRunRegistry()
 
     def _privacy_open(org_id: str) -> bool:
         """Org waived anonymization → named, per-individual results in the console."""

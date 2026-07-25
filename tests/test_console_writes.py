@@ -281,6 +281,24 @@ def test_a_run_in_flight_blocks_a_second_one() -> None:
     assert reg.is_running("org-b") is False  # per-org, not global
 
 
+def test_both_consoles_share_one_mining_registry() -> None:
+    """While the HTML console and the client console are both reachable, a run
+    started in one must be visible to the other.
+
+    Two registries would not merely split the display — the don't-stack-runs guard
+    would not span them, so a founder with both open could start the same corpus
+    twice and pay for it twice.
+    """
+    client, _, store = _make(retire_html_console=False)
+    _seed(store)
+    client.cookies.set(COOKIE, "adm")
+
+    client.post("/ui/mine", data={"org_id": "org-a"})  # the HTML console
+
+    seen = client.get(f"{API}/mine-status", params={"org_id": "org-a"}).json()
+    assert seen["run"] is not None
+
+
 def test_no_run_yet_is_a_state_not_an_error() -> None:
     """Run state is in-process and deliberately not persisted, so a restart means
     'no run yet' — which the client must be able to render calmly."""
