@@ -80,14 +80,14 @@ export default function NoteArticle({ params }: { params: Promise<{ id: string }
               ]}
             />
 
-            <div className="lead">
+            <div className="mb-4">
               <Markdown>{note.body}</Markdown>
             </div>
 
             <Section title="Evidence">
               {data.evidence.length ? (
                 <>
-                  <p className="subtle">
+                  <p className="text-muted-foreground">
                     The sessions this entry was drawn from. Reading them is how you check it.
                   </p>
                   <Reflist sessions={data.evidence} />
@@ -103,7 +103,7 @@ export default function NoteArticle({ params }: { params: Promise<{ id: string }
 
             {(note.entities.libraries.length > 0 || note.entities.concepts.length > 0) && (
               <Section title="Referenced">
-                <p className="subtle">
+                <p className="text-muted-foreground">
                   Libraries and concepts named by this entry. Each links to everything else the
                   wiki knows about it.
                 </p>
@@ -111,13 +111,13 @@ export default function NoteArticle({ params }: { params: Promise<{ id: string }
                   {note.entities.libraries.map((v) => (
                     <li key={`lib-${v}`}>
                       <Link href={`/entities/library/${encodeURIComponent(v)}`}>{v}</Link>{' '}
-                      <span className="faint">(library)</span>
+                      <span className="text-sm text-muted-foreground">(library)</span>
                     </li>
                   ))}
                   {note.entities.concepts.map((v) => (
                     <li key={`con-${v}`}>
                       <Link href={`/entities/concept/${encodeURIComponent(v)}`}>{v}</Link>{' '}
-                      <span className="faint">(concept)</span>
+                      <span className="text-sm text-muted-foreground">(concept)</span>
                     </li>
                   ))}
                 </ul>
@@ -126,14 +126,14 @@ export default function NoteArticle({ params }: { params: Promise<{ id: string }
 
             {data.related?.length > 0 && (
               <Section title="Related entries">
-                <p className="subtle">
+                <p className="text-muted-foreground">
                   Entries Manthana weighed against this one while reading the same session.
                 </p>
                 <ul>
                   {data.related.map((r) => (
                     <li key={r.id}>
                       <Link href={`/notes/${r.id}`}>{r.title}</Link>{' '}
-                      <span className="faint">({r.kind.replace('_', ' ')})</span>
+                      <span className="text-sm text-muted-foreground">({r.kind.replace('_', ' ')})</span>
                     </li>
                   ))}
                 </ul>
@@ -142,7 +142,7 @@ export default function NoteArticle({ params }: { params: Promise<{ id: string }
 
             {data.disputed_by.length > 0 && (
               <Section id="disputed" title="Conflicting evidence">
-                <p className="subtle">Later sessions that contradict the claim above.</p>
+                <p className="text-muted-foreground">Later sessions that contradict the claim above.</p>
                 <Reflist sessions={data.disputed_by} />
               </Section>
             )}

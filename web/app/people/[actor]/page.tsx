@@ -58,7 +58,7 @@ export default function PersonArticle({ params }: { params: Promise<{ actor: str
             <Infobox
               title={name}
               rows={[
-                ['Identifier', <span className="mono">{data.actor}</span>],
+                ['Identifier', <span className="font-mono text-[0.925em]">{data.actor}</span>],
                 ['Sessions', act ? act.sessions : '—'],
                 [
                   'Projects',
@@ -75,8 +75,8 @@ export default function PersonArticle({ params }: { params: Promise<{ actor: str
               ]}
             />
 
-            <p className="lead">
-              <b>{name}</b> ({<span className="mono">{data.actor}</span>}) is an engineer in
+            <p className="mb-4">
+              <b>{name}</b> ({<span className="font-mono text-[0.925em]">{data.actor}</span>}) is an engineer in
               the {data.org_id} organisation.{' '}
               {act ? (
                 <>
@@ -90,7 +90,7 @@ export default function PersonArticle({ params }: { params: Promise<{ actor: str
             </p>
 
             <Toc sections={sections} />
-            <div className="clear" />
+            <div className="clear-both" />
 
             {act && act.intents.length > 0 && (
               <Section id="current" title="Current work">
@@ -108,14 +108,14 @@ export default function PersonArticle({ params }: { params: Promise<{ actor: str
                   <div key={rollup.project} style={{ marginBottom: '1.4em' }}>
                     <h3 id={`project-${rollup.project}`}>
                       <ProjectLink project={rollup.project} />{' '}
-                      <span className="editsection">
+                      <span className="ml-2 text-xs font-normal">
                         <StatusWord status={status} />
                       </span>
                     </h3>
                     {what_this_is ? (
-                      <p className="subtle">{what_this_is}</p>
+                      <p className="text-muted-foreground">{what_this_is}</p>
                     ) : (
-                      <p className="faint">
+                      <p className="text-sm text-muted-foreground">
                         {pending_count > 0
                           ? `No article yet — ${pending_count} session${pending_count === 1 ? '' : 's'} here still awaiting a summary.`
                           : 'No article yet — one is written on the next pass.'}
@@ -129,7 +129,7 @@ export default function PersonArticle({ params }: { params: Promise<{ actor: str
                       </ul>
                     )}
                     {pending_count > 0 && (
-                      <p className="faint">
+                      <p className="text-sm text-muted-foreground">
                         {pending_count} session{pending_count === 1 ? '' : 's'} awaiting summary
                       </p>
                     )}
@@ -142,7 +142,7 @@ export default function PersonArticle({ params }: { params: Promise<{ actor: str
 
             {data.unfiled.length > 0 && (
               <Section id="unfiled" title="Unfiled sessions">
-                <p className="subtle">
+                <p className="text-muted-foreground">
                   Sessions that ran outside a git repository, so Manthana could not attribute
                   them to a project. Listed here so they stay reachable.
                 </p>
@@ -156,7 +156,7 @@ export default function PersonArticle({ params }: { params: Promise<{ actor: str
 
             {data.connections.length > 0 && (
               <Section id="see-also" title="See also">
-                <p className="subtle">People {name} shares work with, and what connects them.</p>
+                <p className="text-muted-foreground">People {name} shares work with, and what connects them.</p>
                 <ul>
                   {data.connections.map((edge) => (
                     <li key={edge.actor}>
@@ -176,7 +176,7 @@ export default function PersonArticle({ params }: { params: Promise<{ actor: str
                 })),
               ]}
             />
-            <p className="faint" style={{ marginTop: '0.6em' }}>
+            <p className="text-sm text-muted-foreground" style={{ marginTop: '0.6em' }}>
               Live activity is computed from released sessions, not stored — it cannot go
               stale.{act && ` Last session ${onDate(act.last_active)}.`}
             </p>

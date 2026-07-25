@@ -57,7 +57,7 @@ function Results() {
       {result && (
         <>
           <div style={{ whiteSpace: 'pre-wrap', marginBottom: '0.6em' }}>{result.narrative}</div>
-          <p className="faint">
+          <p className="text-sm text-muted-foreground">
             {result.coverage}
             {result.drilled && ' — sessions were read because the entries were thin'}
           </p>
