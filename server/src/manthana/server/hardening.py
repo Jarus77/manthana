@@ -36,7 +36,6 @@ _WINDOW_SECONDS = 60.0
 # looser ones on the authenticated LLM-backed query routes (cost control).
 RATE_LIMITS: dict[tuple[str, str], int] = {
     ("POST", "/v1/enroll"): 10,
-    ("POST", "/ui/login"): 10,
     # Self-serve signup. There is deliberately no per-org budget cap right now, so
     # these limits are the only thing standing between a scripted signup loop and
     # the operator's LLM bill — keep them tight.

@@ -58,7 +58,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
     pathname === '/' ||
     pathname === '/welcome' ||
     pathname === '/join' ||
-    pathname.startsWith('/signup')
+    pathname.startsWith('/signup') ||
+    pathname.startsWith('/console')
   const { data: me } = useSWR<Me>(bare ? null : '/me', fetcher, {
     revalidateOnFocus: false,
     shouldRetryOnError: false,

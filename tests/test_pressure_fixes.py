@@ -75,8 +75,8 @@ def test_non_ascii_login_token_returns_401_not_500() -> None:
     # Form bodies are UTF-8, so a non-ASCII token reaches compare_digest. Before the fix
     # that raised TypeError → 500; now it must be a clean failed-auth (401). (The header
     # token path can't carry non-ASCII over HTTP, so the login form is the real vector.)
-    r1 = client.post("/ui/login", data={"token": "münchen✓"})
-    r2 = client.post("/ui/login", data={"token": "tökën"})
+    r1 = client.post("/ui/api/wiki/login", json={"token": "münchen✓"})
+    r2 = client.post("/ui/api/wiki/login", json={"token": "tökën"})
     assert r1.status_code == 401 and r2.status_code == 401
 
 

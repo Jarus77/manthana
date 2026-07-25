@@ -43,6 +43,7 @@ from .auth import (
     verify_team_token,
 )
 from .config import ServerConfig
+from .console_api import mount_console_api
 from .consolidate import consolidate_org, consolidate_provider_for, run_consolidation_pass
 from .digest import build_weekly_digest
 from .enrich import (
@@ -437,6 +438,17 @@ def create_app(
             return verify_team_token(config.jwt_secret, bearer)
         except AuthError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    @app.get("/ui/api/config")
+    def public_config() -> dict[str, Any]:
+        """What the sign-in page needs to know before anyone has signed in.
+
+        Deliberately unauthenticated and deliberately tiny: it says only whether a
+        control should be drawn, never anything about a tenant. Without it the
+        client cannot tell a deployment with Google sign-in from one without, and a
+        self-hosted server would render a button that 404s.
+        """
+        return {"signup_enabled": config.enable_self_serve_signup}
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -1363,6 +1375,9 @@ def create_app(
     # (the cookie is path-scoped there), same teach functions — a transport, not
     # a second product.
     mount_wiki_api(app, config, store, provider, provider_for=org_provider)
+    # The console's read API. Free to call — every path here is a database
+    # read, an embedding lookup, or arithmetic; nothing reaches a model.
+    mount_console_api(app, config, store)
     # Self-serve onboarding. Mounted last and only when enabled, so a self-hosted
     # deploy exposes no signup surface at all and onboarding stays operator-driven.
     if config.enable_self_serve_signup:

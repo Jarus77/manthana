@@ -11,6 +11,8 @@
 export const API = '/ui/api/wiki'
 /** The signup/onboarding endpoints. Same cookie, same origin, different prefix. */
 export const SIGNUP_API = '/ui/api/signup'
+/** The founder console's endpoints. */
+export const CONSOLE_API = '/ui/api/console'
 
 export class ApiError extends Error {
   constructor(
@@ -71,9 +73,15 @@ export const signupGet = <T,>(path: string): Promise<T> => getFrom<T>(SIGNUP_API
 export const signupPost = <T,>(path: string, body: unknown = {}): Promise<T> =>
   postTo<T>(SIGNUP_API, path, body)
 
+/** The same pair against the console API. */
+export const consoleGet = <T,>(path: string): Promise<T> => getFrom<T>(CONSOLE_API, path)
+export const consolePost = <T,>(path: string, body: unknown = {}): Promise<T> =>
+  postTo<T>(CONSOLE_API, path, body)
+
 /** SWR fetchers — the same GETs, keyed by API-relative path. */
 export const fetcher = <T,>(path: string): Promise<T> => get<T>(path)
 export const signupFetcher = <T,>(path: string): Promise<T> => signupGet<T>(path)
+export const consoleFetcher = <T,>(path: string): Promise<T> => consoleGet<T>(path)
 
 /** Build a query string, dropping empty values so URLs stay readable. */
 export function qs(params: Record<string, string | number | undefined | null>): string {
