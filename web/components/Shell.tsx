@@ -48,12 +48,16 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   // Skipped on /login: no session yet, so asking only produces a guaranteed 401.
-  const { data: me } = useSWR<Me>(pathname === '/login' ? null : '/me', fetcher, {
+  const bare = pathname === '/login' || pathname === '/design'
+  const { data: me } = useSWR<Me>(bare ? null : '/me', fetcher, {
     revalidateOnFocus: false,
     shouldRetryOnError: false,
   })
 
-  if (pathname === '/login') return <>{children}</>
+  // Routes that render their own full-page chrome. /login has no session yet;
+  // /design belongs to the new design system and must not be framed by the
+  // legacy wiki rail it exists to replace.
+  if (pathname === '/login' || pathname === '/design') return <>{children}</>
 
   return (
     <div className="shell">
