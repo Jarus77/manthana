@@ -23,7 +23,7 @@ import { fetcher, post } from '@/lib/api'
 import type { Me } from '@/lib/types'
 
 const NAV = [
-  { href: '/', label: 'Main page' },
+  { href: '/home', label: 'Main page' },
   { href: '/sessions', label: 'Recent sessions' },
   { href: '/people', label: 'People' },
   { href: '/projects', label: 'Projects' },
@@ -47,22 +47,22 @@ function NavLink({ href, label, count }: { href: string; label: string; count?: 
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
-  // Skipped on /login: no session yet, so asking only produces a guaranteed 401.
-  const bare = pathname === '/login' || pathname === '/design'
+  // Routes that draw their own full-page chrome, and so must not be framed by
+  // this rail: /login has no session yet, / is the marketing page for people who
+  // have never seen the product, and /design is the system scheduled to replace
+  // this one. On all three, asking /me would only produce a guaranteed 401.
+  const bare = pathname === '/login' || pathname === '/design' || pathname === '/'
   const { data: me } = useSWR<Me>(bare ? null : '/me', fetcher, {
     revalidateOnFocus: false,
     shouldRetryOnError: false,
   })
 
-  // Routes that render their own full-page chrome. /login has no session yet;
-  // /design belongs to the new design system and must not be framed by the
-  // legacy wiki rail it exists to replace.
-  if (pathname === '/login' || pathname === '/design') return <>{children}</>
+  if (bare) return <>{children}</>
 
   return (
     <div className="shell">
       <nav className="sidebar">
-        <Link className="brand" href="/">
+        <Link className="brand" href="/home">
           Manthana
         </Link>
         <span className="brand-sub">{me?.org_id ?? 'team wiki'}</span>

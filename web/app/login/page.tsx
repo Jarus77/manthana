@@ -18,7 +18,9 @@ export default function LoginPage() {
       await post('/login', { token })
       // A full navigation, not router.push: the session cookie was just set and
       // every cached SWR key was fetched as a signed-out user.
-      window.location.href = '/'
+      // /home, not /: `/` is the marketing page, which would bounce them
+      // straight back here for looking signed-out.
+      window.location.href = '/home'
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not sign in')
       setBusy(false)

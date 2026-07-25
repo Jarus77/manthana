@@ -11,9 +11,16 @@
  *   1. Every custom property is namespaced `--wiki-*`. Both systems wanted
  *      `--border`, and shadcn's utilities read it — an unprefixed collision
  *      silently repainted every legacy border.
- *   2. These rules are UNLAYERED, and unlayered CSS beats anything in an
- *      `@layer` regardless of source order. So Tailwind's preflight cannot
- *      quietly restyle the legacy pages out from under themselves.
+ *   2. This file is imported into `@layer legacy`, declared in globals.css to sit
+ *      ABOVE `base` and BELOW `utilities`. Above base, so Tailwind's preflight
+ *      cannot restyle these pages out from under themselves. Below utilities, so
+ *      the bare element selectors here — `a`, `button`, `body`, `h2` — cannot
+ *      reach into the new pages.
+ *
+ *      It was originally imported unlayered, which sounds equivalent and is not:
+ *      unlayered CSS outranks EVERY layer, so `a { color: var(--wiki-link) }`
+ *      overrode `text-primary-foreground` on every link-shaped button in the
+ *      design system and shipped an invisible call to action.
  *
  * Do not add to this file. New work belongs in the design system.
  *
