@@ -44,7 +44,7 @@ def _make(privacy: str = "k_anon", provider: ScriptedProvider | None = None):
 
 
 def _login(client: TestClient) -> None:
-    client.post("/ui/login", data={"token": "adm"}, follow_redirects=False)
+    client.post("/ui/api/wiki/login", json={"token": "adm"}, follow_redirects=False)
 
 
 # ── privacy mode: names reach the model + the rollup ────────────────────────

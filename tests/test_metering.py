@@ -210,7 +210,7 @@ def test_ui_query_shows_quota_banner_not_insufficient_data() -> None:
     client, _config, store, _obj = _make(cap=5.0)
     _seed_contributors(store, 5)
     store.add_llm_usage("o1", month_key(), input_tokens=0, output_tokens=0, est_cost_usd=5.0)
-    client.post("/ui/login", data={"token": "adm"})
+    client.post("/ui/api/wiki/login", json={"token": "adm"})
     resp = client.post("/ui/query", data={"org_id": "o1", "query": "what happened?"})
     assert resp.status_code == 429
     assert "Monthly AI quota reached" in resp.text
@@ -221,7 +221,7 @@ def test_console_shows_monthly_budget_column() -> None:
     client, _config, store, _obj = _make(cap=25.0)
     store.create_org("o1", "Org")
     store.add_llm_usage("o1", month_key(), input_tokens=100, output_tokens=50, est_cost_usd=0.5)
-    client.post("/ui/login", data={"token": "adm"})
+    client.post("/ui/api/wiki/login", json={"token": "adm"})
     page = client.get("/ui").text
     assert "AI budget (mo)" in page
     assert "$0.50 / $25.00" in page

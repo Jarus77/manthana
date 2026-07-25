@@ -84,7 +84,7 @@ def _cost_page(store: ServerStore) -> str:
         create_app(config, store, InMemoryObjectStore(), ScriptedProvider([])),
         follow_redirects=False,
     )
-    client.post("/ui/login", data={"token": "adm"})
+    client.post("/ui/api/wiki/login", json={"token": "adm"})
     resp = client.get("/ui/router?org_id=o1")
     assert resp.status_code == 200
     return resp.text

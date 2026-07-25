@@ -60,7 +60,7 @@ def _make(*, retired: bool) -> tuple[TestClient, ServerStore, ServerConfig]:
 
 def _login(client: TestClient, config: ServerConfig) -> None:
     token = issue_engineer_token(config.jwt_secret, org_id="o1", actor=ENG)
-    client.post("/ui/login", data={"token": token})
+    client.post("/ui/api/wiki/login", json={"token": token})
 
 
 # ── the default ──────────────────────────────────────────────────────────
@@ -154,7 +154,7 @@ def test_the_json_api_is_unaffected_by_retirement() -> None:
 
 def test_founder_console_survives_retirement() -> None:
     client, _store, _config = _make(retired=True)
-    client.post("/ui/login", data={"token": "adm"})
+    client.post("/ui/api/wiki/login", json={"token": "adm"})
     console = client.get("/ui")
     assert console.status_code == 200
     assert "Manthana" in console.text

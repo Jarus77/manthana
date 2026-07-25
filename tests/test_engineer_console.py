@@ -96,7 +96,7 @@ def _seed(store: ServerStore) -> None:
 
 
 def _login(client: TestClient, token: str) -> None:
-    client.post("/ui/login", data={"token": token})
+    client.post("/ui/api/wiki/login", json={"token": token})
 
 
 def _engineer(config: ServerConfig, actor: str = ENG, org: str = "o1") -> str:
@@ -135,7 +135,7 @@ def test_agent_token_is_not_a_console_login() -> None:
     client, store, config = _make()
     _seed(store)
     agent = issue_team_token(config.jwt_secret, org_id="o1", team_id="t1", actor=ENG)
-    resp = client.post("/ui/login", data={"token": agent})
+    resp = client.post("/ui/api/wiki/login", json={"token": agent})
     assert resp.status_code == 401
     assert client.get("/ui/home").status_code == 303  # still signed out
 

@@ -200,7 +200,7 @@ def test_console_mine_redirects_to_status_rather_than_blocking() -> None:
         create_app(_config(mine_window_days=90), store, InMemoryObjectStore(), MockProvider("{}")),
         follow_redirects=False,
     )
-    client.post("/ui/login", data={"token": "adm"})
+    client.post("/ui/api/wiki/login", json={"token": "adm"})
     resp = client.post("/ui/mine", data={"org_id": "o1"})
     assert resp.status_code == 303
     assert resp.headers["location"] == "/ui/mine-status?org_id=o1"
@@ -215,7 +215,7 @@ def test_status_page_states_what_the_run_covered() -> None:
         ),
         follow_redirects=False,
     )
-    client.post("/ui/login", data={"token": "adm"})
+    client.post("/ui/api/wiki/login", json={"token": "adm"})
     client.post("/ui/mine", data={"org_id": "o1"})
     page = client.get("/ui/mine-status?org_id=o1")
     assert page.status_code == 200

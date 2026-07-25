@@ -68,7 +68,7 @@ def _seed(store: ServerStore, n: int, *, intent: str = "x", org: str = "o1") -> 
 
 
 def _login(client: TestClient, token: str = "adm") -> None:
-    client.post("/ui/login", data={"token": token})
+    client.post("/ui/api/wiki/login", json={"token": token})
 
 
 # ── auth gate: unauthenticated requests redirect to login, expose nothing ──
@@ -93,17 +93,20 @@ def test_query_and_mine_require_auth() -> None:
 
 def test_login_rejects_wrong_token() -> None:
     client, _ = _make()
-    resp = client.post("/ui/login", data={"token": "nope"})
+    resp = client.post("/ui/api/wiki/login", json={"token": "nope"})
     assert resp.status_code == 401
-    assert "Invalid token" in resp.text  # login accepts an admin OR founder token
+    assert "invalid token" in resp.text  # login accepts an admin OR founder token
 
 
 # ── happy paths after login ────────────────────────────────────────────────
 def test_login_sets_cookie_and_console_lists_orgs() -> None:
     client, store = _make()
     _seed(store, 2)
-    login = client.post("/ui/login", data={"token": "adm"})
-    assert login.status_code == 303
+    # The token login is JSON now (the two sign-in pages merged into the client's
+    # /login), so success is 200 with the role rather than a redirect.
+    login = client.post("/ui/api/wiki/login", json={"token": "adm"})
+    assert login.status_code == 200
+    assert login.json()["role"] == "admin"
     assert "manthana_admin" in login.headers.get("set-cookie", "")
     body = client.get("/ui").text  # cookie now in the client jar
     assert "Acme" in body and "o1" in body

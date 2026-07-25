@@ -75,6 +75,13 @@
      is — and so the meaning survives a future repaint. */
   --color-distilled: var(--distilled);
   --color-distilled-foreground: var(--distilled-foreground);
+  /* Charts: the "before" mark in a before/after comparison. Slate-500 in BOTH
+     themes, which is not laziness — it is the value that passes the separation
+     floors against indigo-600 on white (ΔE 19.7) and against indigo-400 on
+     slate-950 (ΔE 17.4). Dark's --muted-foreground is slate-400, which pairs with
+     indigo-400 at ΔE 13.0 — below the 15 floor, and genuinely hard to tell apart
+     with full colour vision. Measured with the dataviz validator, not judged. */
+  --color-chart-baseline: var(--chart-baseline);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
@@ -121,6 +128,7 @@
   --border: oklch(0.929 0.013 255.508); /* slate-200 */
   --input: oklch(0.929 0.013 255.508);
   --ring: oklch(0.585 0.233 277.117); /* indigo-500 */
+  --chart-baseline: oklch(0.554 0.046 257.417); /* slate-500 */
 }
 
 .dark {
@@ -156,6 +164,8 @@
   --border: oklch(0.279 0.041 260.031);
   --input: oklch(0.279 0.041 260.031);
   --ring: oklch(0.673 0.182 276.935);
+  /* Deliberately the SAME slate-500 as light — see the note in @theme inline. */
+  --chart-baseline: oklch(0.554 0.046 257.417);
 }
 
 @layer base {

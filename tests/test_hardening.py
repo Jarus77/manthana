@@ -73,9 +73,12 @@ def test_enroll_rate_limited_after_10_attempts() -> None:
 
 
 def test_login_rate_limited() -> None:
+    """POST /ui/api/wiki/login is now the only token login — /ui/login became a
+    redirect to the client's page when the two sign-in surfaces were merged."""
     client, *_ = _make()
     statuses = [
-        client.post("/ui/login", data={"token": "wrong"}).status_code for i in range(12)
+        client.post("/ui/api/wiki/login", json={"token": "wrong"}).status_code
+        for i in range(12)
     ]
     assert statuses[:10] == [401] * 10
     assert statuses[10] == 429

@@ -114,7 +114,7 @@ def _seed(store: ServerStore) -> None:
 
 
 def _login(client: TestClient, token: str = "adm") -> None:
-    client.post("/ui/login", data={"token": token})
+    client.post("/ui/api/wiki/login", json={"token": token})
 
 
 # ── auth gate ────────────────────────────────────────────────────────────

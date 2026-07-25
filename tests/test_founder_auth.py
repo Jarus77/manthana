@@ -168,11 +168,12 @@ def test_agent_ingest_rejects_founder_token() -> None:
 # ── console isolation ──────────────────────────────────────────────────────
 def _founder_login(client: TestClient, org: str) -> None:
     resp = client.post(
-        "/ui/login",
-        data={"token": issue_founder_token(_SECRET, org_id=org)},
+        "/ui/api/wiki/login",
+        json={"token": issue_founder_token(_SECRET, org_id=org)},
         follow_redirects=False,
     )
-    assert resp.status_code == 303  # redirect to /ui = login accepted
+    assert resp.status_code == 200  # JSON login; the cookie is in the response
+    assert resp.json()["org_id"] == org
 
 
 def test_console_founder_sees_only_own_org() -> None:
@@ -187,7 +188,7 @@ def test_console_founder_sees_only_own_org() -> None:
 def test_console_admin_still_sees_all_orgs() -> None:
     client, _config, store, _obj = _make()
     _seed_two_orgs(store)
-    client.post("/ui/login", data={"token": "adm"})
+    client.post("/ui/api/wiki/login", json={"token": "adm"})
     page = client.get("/ui").text
     assert "Org A" in page and "Org B" in page
 
@@ -217,7 +218,7 @@ def test_console_forged_org_in_get_routes_overridden() -> None:
 
 def test_console_rejects_garbage_token() -> None:
     client, *_ = _make()
-    assert client.post("/ui/login", data={"token": "not-a-token"}).status_code == 401
+    assert client.post("/ui/api/wiki/login", json={"token": "not-a-token"}).status_code == 401
     # unauthenticated console → login redirect
     assert client.get("/ui", follow_redirects=False).status_code == 303
 

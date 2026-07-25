@@ -209,30 +209,6 @@ def scope_org(sess: ConsoleSession, requested: str) -> str:
     return sess.org_id if sess.org_id is not None else requested
 
 
-def _login_page(error: bool = False, google: bool = False) -> str:
-    msg = "<p class='warn'>Invalid token.</p>" if error else ""
-    # Google first when it is available: it is the path almost everyone should
-    # take. The token box stays regardless — the operator's admin token and every
-    # engineer wiki login minted before self-serve existed still arrive that way.
-    sso = (
-        "<p><a href='/ui/auth/google' style='display:inline-block;background:#1a73e8;"
-        "color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none'>"
-        "Sign in with Google</a></p>"
-        "<p class='muted'>New here? <a href='/ui/signup'>Create your organization</a>.</p>"
-        "<hr><p class='muted'>Or sign in with a token:</p>"
-        if google
-        else ""
-    )
-    return _page(
-        "Login",
-        f"{msg}{sso}<form method='post' action='/ui/login'>"
-        "<p>Your Manthana token: <input type='password' name='token' autofocus></p>"
-        "<button>Sign in</button></form>"
-        "<p class='muted'>Founders and engineers both sign in here. Engineers land on "
-        "the team wiki, where they can read and correct the shared context.</p>",
-    )
-
-
 def _quota_page(exc: QuotaExceededError, back: str = "/ui") -> str:
     return _page(
         "AI quota reached",
@@ -280,24 +256,16 @@ def mount_ui(
             return RedirectResponse(url="/ui/home", status_code=303)
         return sess
 
-    @app.get("/ui/login", response_class=HTMLResponse)
-    def login_form() -> str:
-        return _login_page(google=config.enable_self_serve_signup)
+    @app.get("/ui/login")
+    def login_form() -> Response:
+        """There is one sign-in page now, and it is the client's.
 
-    @app.post("/ui/login")
-    def login(token: Annotated[str, Form()] = "") -> Response:
-        if _session(token) is None:
-            return HTMLResponse(
-                _login_page(error=True, google=config.enable_self_serve_signup),
-                status_code=401,
-            )
-        resp = RedirectResponse(url="/ui", status_code=303)
-        # Scope the cookie to the console routes; httponly keeps it out of JS.
-        resp.set_cookie(
-            COOKIE, token, httponly=True, samesite="lax", path="/ui",
-            secure=config.cookie_secure,
-        )
-        return resp
+        This path stays because it is the redirect target of every unauthenticated
+        console and wiki route, and it is printed on the link a founder sends a new
+        engineer. The token login itself lives at POST /ui/api/wiki/login, which the
+        client posts to and which carries the same cookie contract.
+        """
+        return RedirectResponse(url="/login", status_code=303)
 
     @app.post("/ui/members/promote", response_class=HTMLResponse)
     def promote(

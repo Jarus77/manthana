@@ -65,14 +65,14 @@ def test_revoked_engineer_token_cannot_sign_into_the_console() -> None:
     client, _store, config = _make()
     token = issue_engineer_token(config.jwt_secret, org_id="o1", actor="eng@o1.com")
     # It works before revocation.
-    client.post("/ui/login", data={"token": token})
+    client.post("/ui/api/wiki/login", json={"token": token})
     assert client.get("/ui/home").status_code == 200
 
     _revoke(client, token)
 
     # A NEW client (fresh cookie jar) presenting the same token is rejected.
     fresh = TestClient(client.app, follow_redirects=False)  # type: ignore[arg-type]
-    fresh.post("/ui/login", data={"token": token})
+    fresh.post("/ui/api/wiki/login", json={"token": token})
     assert fresh.get("/ui/home").status_code == 303  # bounced to login
 
 
@@ -125,7 +125,7 @@ def test_revoking_one_token_leaves_every_other_working() -> None:
 
     # The other engineer's console login still works.
     other = TestClient(client.app, follow_redirects=False)  # type: ignore[arg-type]
-    other.post("/ui/login", data={"token": other_eng})
+    other.post("/ui/api/wiki/login", json={"token": other_eng})
     assert other.get("/ui/home").status_code == 200
     # The agent token still ingests.
     assert client.post(

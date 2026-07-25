@@ -465,11 +465,17 @@ def test_signup_surface_absent_when_disabled() -> None:
     assert "Sign in with Google" not in client.get("/ui/login").text
 
 
-def test_login_page_offers_google_when_enabled() -> None:
+def test_login_hands_off_to_the_client_and_advertises_google() -> None:
+    """There is one sign-in page and it is the client's. /ui/login stays as the
+    redirect target of every unauthenticated route; whether to draw the Google
+    button is answered by the public config, since a self-hosted server has no
+    OAuth client and a button that 404s is worse than no button."""
     client, _, _ = _make()
-    body = client.get("/ui/login").text
-    assert "Sign in with Google" in body
-    assert "Your Manthana token" in body  # the operator's path still works
+    assert client.get("/ui/login").headers["location"] == "/login"
+    assert client.get("/ui/api/config").json()["signup_enabled"] is True
+
+    off, _, _ = _make(signup=False)
+    assert off.get("/ui/api/config").json()["signup_enabled"] is False
 
 
 def test_enabling_signup_without_an_oauth_client_fails_fast() -> None:
