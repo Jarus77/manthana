@@ -18,6 +18,14 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /**
+     * The raw `detail` from the response, when it is not a plain string.
+     *
+     * Some failures are STATES rather than messages — an exhausted AI budget sends
+     * back its cap and spend as numbers so the page can render them, instead of
+     * making the client dig figures back out of a sentence that may be reworded.
+     */
+    readonly detail?: unknown,
   ) {
     super(message)
   }
@@ -29,14 +37,19 @@ export class ApiError extends Error {
 
 async function parse(resp: Response): Promise<never | unknown> {
   if (resp.ok) return resp.json()
-  let detail = resp.statusText
+  let message = resp.statusText
+  let structured: unknown
   try {
     const body = await resp.json()
-    if (typeof body?.detail === 'string') detail = body.detail
+    if (typeof body?.detail === 'string') message = body.detail
+    else if (body?.detail !== undefined) {
+      structured = body.detail
+      if (typeof body.detail?.message === 'string') message = body.detail.message
+    }
   } catch {
     // A non-JSON error body (a proxy's HTML 502, say) — the status is the signal.
   }
-  throw new ApiError(resp.status, detail)
+  throw new ApiError(resp.status, message, structured)
 }
 
 /** GET `base + path`. */
