@@ -23,14 +23,22 @@
  * approximations, so they stay perceptually even across the ramp.
  */
 
+/* Cascade order, declared up front because the legacy stylesheet has to sit in a
+   very specific place: ABOVE `base`, so it still beats Tailwind's preflight and
+   the unported wiki pages render exactly as they always did — and BELOW
+   `utilities`, so its bare element selectors cannot reach into the new pages.
+
+   That second half was learned the hard way. The legacy sheet was originally
+   imported unlayered, which beats every layer: `a { color: var(--wiki-link) }`
+   then silently overrode `text-primary-foreground` on every link-shaped button in
+   the design system, and the marketing page shipped with an invisible call to
+   action. Unlayered is not "later in the cascade", it is "outranks everything". */
+@layer theme, base, legacy, components, utilities;
+
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-
-/* Imported LAST and deliberately: its rules are unlayered, so they win over
-   Tailwind's preflight and the legacy wiki pages keep rendering exactly as they
-   did until Phase 5 ports them. Deleted whole at that point. */
-@import "./legacy-wiki.css";
+@import "./legacy-wiki.css" layer(legacy);
 
 @custom-variant dark (&:is(.dark *));
 
