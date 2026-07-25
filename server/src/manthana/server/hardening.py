@@ -52,6 +52,12 @@ RATE_LIMITS: dict[tuple[str, str], int] = {
     ("POST", "/v1/founder/thread"): 30,
     ("POST", "/v1/founder/drill"): 30,
     ("POST", "/ui/query"): 30,
+    # The console's spend paths, in the client API. Same ceilings as the HTML
+    # routes they replace — and added WITH the routes, because a limit keyed on a
+    # path that does not exist protects nothing and says nothing when it stops.
+    ("POST", "/ui/api/console/query"): 30,
+    ("GET", "/ui/api/console/digest"): 30,
+    ("POST", "/ui/api/console/mine"): 10,
     ("POST", "/ui/api/wiki/login"): 10,
     ("POST", "/ui/api/wiki/ask"): 30,
 }

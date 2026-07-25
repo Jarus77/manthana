@@ -118,6 +118,12 @@ class ServerConfig:
     # provisioning orgs in it. With it off, `/ui/signup` and the OAuth routes are
     # not mounted at all and onboarding stays exactly as it was (onboard-org +
     # a pasted token).
+    # Retire the server-rendered founder console: when ON, every `/ui/...` console
+    # page 303s to the equivalent route in the client instead of rendering HTML.
+    # Same shape, and the same reasoning, as retire_html_wiki above — including the
+    # default. OFF means the old console is still there, which is what makes this
+    # revertable: flip it back and the previous surface returns intact.
+    retire_html_console: bool = False
     enable_self_serve_signup: bool = False
     google_client_id: str = ""
     google_client_secret: str = ""
@@ -359,6 +365,9 @@ class ServerConfig:
             ),
             enable_founder_mcp=(
                 env("MANTHANA_SERVER_ENABLE_FOUNDER_MCP", "") in ("1", "true", "yes")
+            ),
+            retire_html_console=(
+                env("MANTHANA_SERVER_RETIRE_HTML_CONSOLE", "") in ("1", "true", "yes")
             ),
             enable_self_serve_signup=(
                 env("MANTHANA_SERVER_ENABLE_SIGNUP", "") in ("1", "true", "yes")

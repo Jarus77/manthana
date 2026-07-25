@@ -32,9 +32,13 @@ export type Me = {
 
 const NAV = [
   { href: '/console', label: 'Overview' },
+  { href: '/console/ask', label: 'Ask' },
+  { href: '/console/digest', label: 'Digest' },
   { href: '/console/sessions', label: 'Sessions' },
   { href: '/console/topics', label: 'Topics' },
   { href: '/console/cost', label: 'Cost' },
+  { href: '/console/team', label: 'Team' },
+  { href: '/console/mining', label: 'Mining' },
 ]
 
 export function useMe() {
@@ -93,7 +97,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
     return null
   }
 
-  const link = (href: string) => (href === '/console' ? href : href) + (org ? `?org=${org}` : '')
+  const link = (href: string) => href + (org ? `?org=${org}` : '')
 
   return (
     <div className="min-h-screen bg-background font-sans text-foreground">
