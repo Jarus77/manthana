@@ -9,6 +9,8 @@
  */
 
 export const API = '/ui/api/wiki'
+/** The signup/onboarding endpoints. Same cookie, same origin, different prefix. */
+export const SIGNUP_API = '/ui/api/signup'
 
 export class ApiError extends Error {
   constructor(
@@ -35,9 +37,9 @@ async function parse(resp: Response): Promise<never | unknown> {
   throw new ApiError(resp.status, detail)
 }
 
-/** GET a wiki endpoint. `path` is relative to the API root, e.g. "/home". */
-export async function get<T>(path: string): Promise<T> {
-  const resp = await fetch(`${API}${path}`, {
+/** GET `base + path`. */
+async function getFrom<T>(base: string, path: string): Promise<T> {
+  const resp = await fetch(`${base}${path}`, {
     credentials: 'same-origin',
     headers: { accept: 'application/json' },
   })
@@ -45,12 +47,12 @@ export async function get<T>(path: string): Promise<T> {
 }
 
 /**
- * POST JSON to a wiki endpoint. The content type is not optional: the server
- * rejects non-JSON writes as CSRF-shaped, since only a JSON caller can be a
- * same-origin script.
+ * POST JSON to `base + path`. The content type is not optional: the server
+ * rejects non-JSON writes under /ui/api/ as CSRF-shaped, since only a
+ * same-origin script can set it — an HTML form cannot.
  */
-export async function post<T>(path: string, body: unknown = {}): Promise<T> {
-  const resp = await fetch(`${API}${path}`, {
+async function postTo<T>(base: string, path: string, body: unknown = {}): Promise<T> {
+  const resp = await fetch(`${base}${path}`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -59,8 +61,19 @@ export async function post<T>(path: string, body: unknown = {}): Promise<T> {
   return parse(resp) as Promise<T>
 }
 
-/** SWR fetcher — the same GET, keyed by API-relative path. */
+/** GET a wiki endpoint. `path` is relative to the API root, e.g. "/home". */
+export const get = <T,>(path: string): Promise<T> => getFrom<T>(API, path)
+export const post = <T,>(path: string, body: unknown = {}): Promise<T> =>
+  postTo<T>(API, path, body)
+
+/** The same pair against the signup API. */
+export const signupGet = <T,>(path: string): Promise<T> => getFrom<T>(SIGNUP_API, path)
+export const signupPost = <T,>(path: string, body: unknown = {}): Promise<T> =>
+  postTo<T>(SIGNUP_API, path, body)
+
+/** SWR fetchers — the same GETs, keyed by API-relative path. */
 export const fetcher = <T,>(path: string): Promise<T> => get<T>(path)
+export const signupFetcher = <T,>(path: string): Promise<T> => signupGet<T>(path)
 
 /** Build a query string, dropping empty values so URLs stay readable. */
 export function qs(params: Record<string, string | number | undefined | null>): string {

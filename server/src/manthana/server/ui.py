@@ -299,6 +299,35 @@ def mount_ui(
         )
         return resp
 
+    @app.post("/ui/members/promote", response_class=HTMLResponse)
+    def promote(
+        identity_id: Annotated[str, Form()],
+        manthana_admin: Annotated[str, Cookie()] = "",
+    ) -> Response:
+        """Raise a joiner to founder.
+
+        Lives with the console rather than with signup because it is a management
+        action on an existing org, not part of onboarding — the Members table that
+        posts here is on this page. Founder-only, and tenant-scoped:
+        ``set_identity_role`` checks the target belongs to the caller's org, so this
+        cannot reach across tenants even if a caller forges the id.
+        """
+        sess = _session(manthana_admin)
+        if sess is None or sess.is_engineer:
+            return RedirectResponse(url="/ui/login", status_code=303)
+        org_id = sess.org_id
+        if org_id is None:
+            return HTMLResponse(
+                _page("Members", "<p class='warn'>Sign in as a founder to manage members.</p>"),
+                status_code=403,
+            )
+        if not store.set_identity_role(identity_id.strip(), org_id, "founder"):
+            return HTMLResponse(
+                _page("Members", "<p class='warn'>That member is not in your organization.</p>"),
+                status_code=404,
+            )
+        return RedirectResponse(url="/ui", status_code=303)
+
     @app.post("/ui/logout")
     def logout() -> Response:
         # POST (not GET): logout mutates auth state, so it must not be triggerable
