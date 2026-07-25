@@ -5,10 +5,14 @@ every startup, without giving anything away in the process:
 
   * a stranger can create their own org and immediately get an engineer install line
   * the second person from a work domain JOINS as an engineer, never as a founder
-  * a personal-email address is never treated as a company
+  * a personal address is never treated as a company
   * an invite link is how anyone (personal address included) joins a team in a browser
   * two self-serve orgs get two distinct team rows (TeamRow.id is a global PK)
   * a forged or replayed sign-in cannot mint a session
+
+The pages moved into React, so these drive the JSON API and assert redirect
+targets rather than scraping HTML. Every behavioural assertion is the same one it
+was before the move — that is the point of porting them rather than rewriting.
 
 SPDX-License-Identifier: AGPL-3.0-or-later
 """
@@ -32,6 +36,7 @@ from manthana.server.tables import OrgQuotaRow
 from manthana.server.ui import COOKIE
 
 _SECRET = "x" * 40
+API = "/ui/api/signup"
 
 
 def _make(*, signup: bool = True):
@@ -86,63 +91,58 @@ def _sign_in(client, monkeypatch, sub: str, email: str, name: str = "", invite: 
     return client.get("/ui/auth/google/callback", params={"code": "authcode", "state": state})
 
 
+def _create(client, org_name: str):
+    return client.post(f"{API}/create", json={"org_name": org_name})
+
+
+def _join(client, org_id: str):
+    return client.post(f"{API}/join", json={"org_id": org_id})
+
+
 # ── creating an org ────────────────────────────────────────────────────────
 def test_new_founder_creates_org_and_gets_engineer_install_line(monkeypatch) -> None:
     client, config, store = _make()
 
     resp = _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com", "Priya")
-    assert resp.status_code == 200
-    assert "Create a new organization" in resp.text
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/signup/choose"
     assert PENDING_COOKIE in client.cookies
 
-    created = client.post("/ui/signup/create", data={"org_name": "Acme Co"})
-    assert created.status_code == 303
-    assert created.headers["location"] == "/ui/welcome"
+    pending = client.get(f"{API}/pending").json()
+    assert pending["email"] == "priya@acmeco.com"
+    assert pending["display_name"] == "Priya"
+    assert pending["join_org_id"] is None  # nobody has claimed acmeco.com yet
+
+    created = _create(client, "Acme Co")
+    assert created.status_code == 200
+    assert created.json()["next"] == "/welcome"
 
     # The org exists, the founder holds a founder session, and it is THEIR org.
     org_id = verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id
     assert store.get_org(org_id) is not None
     assert store.get_org_by_domain("acmeco.com") == org_id
 
-    welcome = client.get("/ui/welcome")
-    assert welcome.status_code == 200
+    welcome = client.get(f"{API}/welcome").json()
     # The whole point: the two lines an engineer runs, without an operator.
-    assert "manthana setup mia_" in welcome.text
-    assert "install.sh" in welcome.text
-    assert "/ui/join?code=" in welcome.text
+    assert welcome["setup_line"].startswith("manthana setup mia_")
+    assert "install.sh" in welcome["install_line"]
+    assert "/ui/join?code=" in welcome["join_url"]
+    assert welcome["org_name"] == "Acme Co"
 
 
 def test_self_serve_org_has_no_quota_row_so_it_is_uncapped(monkeypatch) -> None:
     """Deliberate current policy: grow first, meter later. An absent OrgQuotaRow
-    means the org falls back to the server default (0 = unlimited)."""
+    means the org falls back to the server default."""
+    from sqlmodel import Session, select
+
     client, config, store = _make()
     _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
-    client.post("/ui/signup/create", data={"org_name": "Acme Co"})
-
-    from sqlmodel import Session, select
+    _create(client, "Acme Co")
 
     org_id = verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id
     assert store.get_org_quota(org_id) is None
     with Session(store._engine) as db:  # noqa: SLF001 - asserting a row's absence
         assert db.exec(select(OrgQuotaRow)).all() == []
-
-
-def test_two_orgs_get_distinct_team_rows(monkeypatch) -> None:
-    """Regression: TeamRow.id is a GLOBAL primary key and create_team upserts on
-    it, so naming every self-serve org's team "core" would make each new signup
-    silently overwrite the previous org's team row."""
-    client, _, store = _make()
-    _sign_in(client, monkeypatch, "sub-1", "a@alpha.com")
-    client.post("/ui/signup/create", data={"org_name": "Alpha"})
-    client.cookies.clear()
-    _sign_in(client, monkeypatch, "sub-2", "b@beta.com")
-    client.post("/ui/signup/create", data={"org_name": "Beta"})
-
-    alpha = store.list_teams("alpha")
-    beta = store.list_teams("beta")
-    assert len(alpha) == 1 and len(beta) == 1
-    assert alpha[0].id != beta[0].id
-    assert alpha[0].org_id == "alpha" and beta[0].org_id == "beta"
 
 
 def test_org_creation_is_decided_by_the_insert_not_a_preceding_read() -> None:
@@ -165,14 +165,32 @@ def test_claim_org_id_walks_past_taken_ids() -> None:
     assert claim_org_id(store, "acme", "Acme") == "acme-3"
 
 
+def test_two_orgs_get_distinct_team_rows(monkeypatch) -> None:
+    """Regression: TeamRow.id is a GLOBAL primary key and create_team upserts on
+    it, so naming every self-serve org's team "core" would make each new signup
+    silently overwrite the previous org's team row."""
+    client, _, store = _make()
+    _sign_in(client, monkeypatch, "sub-1", "a@alpha.com")
+    _create(client, "Alpha")
+    client.cookies.clear()
+    _sign_in(client, monkeypatch, "sub-2", "b@beta.com")
+    _create(client, "Beta")
+
+    alpha = store.list_teams("alpha")
+    beta = store.list_teams("beta")
+    assert len(alpha) == 1 and len(beta) == 1
+    assert alpha[0].id != beta[0].id
+    assert alpha[0].org_id == "alpha" and beta[0].org_id == "beta"
+
+
 def test_same_org_name_does_not_land_in_the_first_tenant(monkeypatch) -> None:
     client, _, store = _make()
     _sign_in(client, monkeypatch, "sub-1", "a@alpha.com")
-    client.post("/ui/signup/create", data={"org_name": "Acme"})
+    _create(client, "Acme")
     first = verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id
     client.cookies.clear()
     _sign_in(client, monkeypatch, "sub-2", "b@other.com")
-    client.post("/ui/signup/create", data={"org_name": "Acme"})
+    _create(client, "Acme")
     second = verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id
     assert first != second
 
@@ -181,17 +199,19 @@ def test_same_org_name_does_not_land_in_the_first_tenant(monkeypatch) -> None:
 def test_second_person_from_work_domain_joins_as_engineer(monkeypatch) -> None:
     client, config, store = _make()
     _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
-    client.post("/ui/signup/create", data={"org_name": "Acme Co"})
+    _create(client, "Acme Co")
     org_id = verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id
     client.cookies.clear()
 
-    resp = _sign_in(client, monkeypatch, "sub-2", "dev@acmeco.com", "Dev")
-    assert "Join Acme Co" in resp.text
+    _sign_in(client, monkeypatch, "sub-2", "dev@acmeco.com", "Dev")
+    offer = client.get(f"{API}/pending").json()
+    assert offer["join_org_id"] == org_id
+    assert offer["join_org_name"] == "Acme Co"
 
-    joined = client.post("/ui/signup/join", data={"org_id": org_id})
-    assert joined.status_code == 303
+    joined = _join(client, org_id)
+    assert joined.status_code == 200
     # Engineer, not founder: they land on the wiki and the console is not theirs.
-    assert joined.headers["location"] == "/ui/home"
+    assert joined.json()["next"] == "/home"
     with pytest.raises(AuthError):
         verify_founder_token(_SECRET, client.cookies[COOKIE])
     assert client.get("/ui").headers["location"] == "/ui/home"
@@ -200,43 +220,43 @@ def test_second_person_from_work_domain_joins_as_engineer(monkeypatch) -> None:
     assert roles == {"priya@acmeco.com": "founder", "dev@acmeco.com": "engineer"}
 
 
-def test_join_form_cannot_reach_an_org_the_domain_does_not_own(monkeypatch) -> None:
+def test_join_cannot_reach_an_org_the_domain_does_not_own(monkeypatch) -> None:
     client, _, store = _make()
     _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
-    client.post("/ui/signup/create", data={"org_name": "Acme Co"})
+    _create(client, "Acme Co")
     victim = verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id
     client.cookies.clear()
 
     # An unrelated domain posts the victim's org id straight at the join route.
     _sign_in(client, monkeypatch, "sub-9", "mallory@evil.com")
-    resp = client.post("/ui/signup/join", data={"org_id": victim})
+    resp = _join(client, victim)
     assert resp.status_code == 400
-    assert store.list_identities(victim) and len(store.list_identities(victim)) == 1
+    assert len(store.list_identities(victim)) == 1
 
 
 def test_personal_email_is_never_offered_an_existing_org(monkeypatch) -> None:
     client, _, store = _make()
     _sign_in(client, monkeypatch, "sub-1", "one@gmail.com")
-    client.post("/ui/signup/create", data={"org_name": "Solo"})
+    _create(client, "Solo")
     assert store.get_org_by_domain("gmail.com") is None  # never claimed
     client.cookies.clear()
 
-    resp = _sign_in(client, monkeypatch, "sub-2", "two@gmail.com")
-    assert "Create a new organization" in resp.text
-    assert "Join" not in resp.text
+    _sign_in(client, monkeypatch, "sub-2", "two@gmail.com")
+    assert client.get(f"{API}/pending").json()["join_org_id"] is None
 
 
 def test_invite_link_joins_any_address_as_engineer(monkeypatch) -> None:
     client, _, store = _make()
     _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
-    client.post("/ui/signup/create", data={"org_name": "Acme Co"})
+    _create(client, "Acme Co")
     org_id = verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id
-    client.get("/ui/welcome")  # mints the org's shared invite
+    client.get(f"{API}/welcome")  # mints the org's shared invite
     code = next(i.code for i in store.list_invites(org_id) if i.actor is None)
     client.cookies.clear()
 
-    page = client.get("/ui/join", params={"code": code})
-    assert page.status_code == 200 and "Acme Co" in page.text
+    # The join page asks who is inviting; unauthenticated by design, like /v1/enroll.
+    named = client.get(f"{API}/invite", params={"code": code})
+    assert named.status_code == 200 and named.json()["org_name"] == "Acme Co"
 
     resp = _sign_in(client, monkeypatch, "sub-3", "contractor@gmail.com", invite=code)
     assert resp.status_code == 303 and resp.headers["location"] == "/ui/home"
@@ -245,30 +265,56 @@ def test_invite_link_joins_any_address_as_engineer(monkeypatch) -> None:
     ]
 
 
+def test_unknown_invite_link_is_rejected() -> None:
+    client, _, _ = _make()
+    assert client.get(f"{API}/invite", params={"code": "nope"}).status_code == 404
+
+
 def test_existing_member_following_another_orgs_invite_is_told_why(monkeypatch) -> None:
     """Silently bouncing them back to their own org looks like a broken link. One
     account belongs to one org — say so, and leave the invite unconsumed."""
     client, _, store = _make()
     _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
-    client.post("/ui/signup/create", data={"org_name": "Acme Co"})
+    _create(client, "Acme Co")
     client.cookies.clear()
 
     # A second, unrelated org mints an invite.
     _sign_in(client, monkeypatch, "sub-2", "boss@betaco.com")
-    client.post("/ui/signup/create", data={"org_name": "Beta Co"})
+    _create(client, "Beta Co")
     beta = verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id
-    client.get("/ui/welcome")
+    client.get(f"{API}/welcome")
     code = next(i.code for i in store.list_invites(beta) if i.actor is None)
     uses_before = next(i.uses_left for i in store.list_invites(beta) if i.code == code)
     client.cookies.clear()
 
     resp = _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com", invite=code)
-    assert resp.status_code == 409
-    assert "Acme Co" in resp.text and "Beta Co" in resp.text
+    assert resp.status_code == 303
+    assert resp.headers["location"] == f"/signup/conflict?code={code}"
+
     # Still their own org, and Beta's invite is untouched.
     assert verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id == "acme-co"
     assert next(i.uses_left for i in store.list_invites(beta) if i.code == code) == uses_before
     assert store.get_identity("google:sub-1").org_id == "acme-co"  # type: ignore[union-attr]
+
+    # And the page can name both sides — resolved server-side, not from the URL.
+    detail = client.get(f"{API}/conflict", params={"code": code}).json()
+    assert detail["your_org_name"] == "Acme Co"
+    assert detail["invited_org_name"] == "Beta Co"
+    assert detail["continue_to"] == "/ui"
+
+
+def test_conflict_detail_needs_a_session(monkeypatch) -> None:
+    """It names two orgs, so it must never answer an anonymous caller probing
+    invite codes for the org behind them."""
+    client, _, store = _make()
+    _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
+    _create(client, "Acme Co")
+    org_id = verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id
+    client.get(f"{API}/welcome")
+    code = next(i.code for i in store.list_invites(org_id) if i.actor is None)
+    client.cookies.clear()
+
+    assert client.get(f"{API}/conflict", params={"code": code}).status_code == 401
 
 
 def test_returning_founder_lands_on_the_console_not_onboarding(monkeypatch) -> None:
@@ -276,8 +322,7 @@ def test_returning_founder_lands_on_the_console_not_onboarding(monkeypatch) -> N
     the console for whenever they need the install lines again."""
     client, _, _ = _make()
     _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
-    created = client.post("/ui/signup/create", data={"org_name": "Acme Co"})
-    assert created.headers["location"] == "/ui/welcome"  # first time: onboarding
+    assert _create(client, "Acme Co").json()["next"] == "/welcome"  # first time
     assert "/ui/welcome" in client.get("/ui").text  # and a door back to it
     client.cookies.clear()
 
@@ -285,15 +330,10 @@ def test_returning_founder_lands_on_the_console_not_onboarding(monkeypatch) -> N
     assert resp.headers["location"] == "/ui"  # thereafter: the console
 
 
-def test_unknown_invite_link_is_rejected() -> None:
-    client, _, _ = _make()
-    assert client.get("/ui/join", params={"code": "nope"}).status_code == 404
-
-
 def test_returning_user_goes_straight_back_in(monkeypatch) -> None:
     client, _, store = _make()
     _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
-    client.post("/ui/signup/create", data={"org_name": "Acme Co"})
+    _create(client, "Acme Co")
     org_id = verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id
     client.cookies.clear()
 
@@ -307,17 +347,17 @@ def test_returning_user_goes_straight_back_in(monkeypatch) -> None:
 def test_founder_promotes_an_engineer_and_cannot_reach_another_org(monkeypatch) -> None:
     client, _, store = _make()
     _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
-    client.post("/ui/signup/create", data={"org_name": "Acme Co"})
+    _create(client, "Acme Co")
     founder_cookie = client.cookies[COOKIE]
     org_id = verify_founder_token(_SECRET, founder_cookie).org_id
     client.cookies.clear()
     _sign_in(client, monkeypatch, "sub-2", "dev@acmeco.com")
-    client.post("/ui/signup/join", data={"org_id": org_id})
+    _join(client, org_id)
     client.cookies.clear()
 
     # An outsider's org, to prove promotion is tenant-scoped.
     _sign_in(client, monkeypatch, "sub-9", "solo@other.com")
-    client.post("/ui/signup/create", data={"org_name": "Other"})
+    _create(client, "Other")
     outsider = client.cookies[COOKIE]
     client.cookies.clear()
 
@@ -335,12 +375,12 @@ def test_founder_promotes_an_engineer_and_cannot_reach_another_org(monkeypatch) 
 def test_promotion_survives_the_promoted_person_signing_in_again(monkeypatch) -> None:
     client, _, store = _make()
     _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
-    client.post("/ui/signup/create", data={"org_name": "Acme Co"})
+    _create(client, "Acme Co")
     founder_cookie = client.cookies[COOKIE]
     org_id = verify_founder_token(_SECRET, founder_cookie).org_id
     client.cookies.clear()
     _sign_in(client, monkeypatch, "sub-2", "dev@acmeco.com")
-    client.post("/ui/signup/join", data={"org_id": org_id})
+    _join(client, org_id)
     client.cookies.clear()
     client.cookies.set(COOKIE, founder_cookie)
     client.post("/ui/members/promote", data={"identity_id": "google:sub-2"})
@@ -360,7 +400,8 @@ def test_callback_requires_the_state_it_set(monkeypatch) -> None:
     _google(monkeypatch, "sub-1", "priya@acmeco.com")
     foreign = issue_oauth_state(_SECRET, nonce="attacker")
     resp = client.get("/ui/auth/google/callback", params={"code": "c", "state": foreign})
-    assert resp.status_code == 400
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/signup?error=state"
     assert COOKIE not in client.cookies
 
 
@@ -369,7 +410,8 @@ def test_callback_rejects_a_garbage_state(monkeypatch) -> None:
     _google(monkeypatch, "sub-1", "priya@acmeco.com")
     client.cookies.set(STATE_COOKIE, "not-a-jwt")
     resp = client.get("/ui/auth/google/callback", params={"code": "c", "state": "not-a-jwt"})
-    assert resp.status_code == 400
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/signup?error=expired"
     assert COOKIE not in client.cookies
 
 
@@ -381,7 +423,8 @@ def test_unverified_google_email_is_refused(monkeypatch) -> None:
         "/ui/auth/google/callback",
         params={"code": "c", "state": client.cookies[STATE_COOKIE]},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/signup?error=unverified"
     assert store.list_orgs() == []
 
 
@@ -398,7 +441,7 @@ def test_an_oauth_state_cannot_be_used_as_a_verified_profile() -> None:
 def test_forged_pending_cookie_cannot_create_an_org() -> None:
     client, _, store = _make()
     client.cookies.set(PENDING_COOKIE, "not-a-jwt")
-    assert client.post("/ui/signup/create", data={"org_name": "Acme"}).status_code == 400
+    assert _create(client, "Acme").status_code == 401
     assert store.list_orgs() == []
 
 
@@ -410,15 +453,15 @@ def test_a_correctly_signed_pending_cookie_is_honoured() -> None:
         PENDING_COOKIE,
         issue_pending_signup(_SECRET, identity_id="google:sub-1", email="a@acmeco.com"),
     )
-    assert client.post("/ui/signup/create", data={"org_name": "Acme"}).status_code == 303
+    assert _create(client, "Acme").status_code == 200
     assert store.get_identity("google:sub-1") is not None
 
 
 # ── the feature flag ───────────────────────────────────────────────────────
 def test_signup_surface_absent_when_disabled() -> None:
     client, _, _ = _make(signup=False)
-    for path in ("/ui/signup", "/ui/auth/google", "/ui/welcome"):
-        assert client.get(path).status_code == 404
+    for path in ("/ui/signup", "/ui/auth/google", "/ui/welcome", f"{API}/pending"):
+        assert client.get(path).status_code == 404, path
     assert "Sign in with Google" not in client.get("/ui/login").text
 
 
@@ -434,6 +477,16 @@ def test_enabling_signup_without_an_oauth_client_fails_fast() -> None:
         ServerConfig(jwt_secret=_SECRET, admin_token="adm", enable_self_serve_signup=True)
 
 
+# ── legacy URLs keep working ───────────────────────────────────────────────
+def test_old_signup_urls_hand_off_to_the_client() -> None:
+    """These are printed in welcome blocks, pasted into Slack, and linked from the
+    console. They must not 404 just because the pages moved into React."""
+    client, _, _ = _make()
+    assert client.get("/ui/signup").headers["location"] == "/signup"
+    assert client.get("/ui/welcome").headers["location"] == "/welcome"
+    assert client.get("/ui/join", params={"code": "abc"}).headers["location"] == "/join?code=abc"
+
+
 # ── the credentials handed out ─────────────────────────────────────────────
 def test_browser_session_is_short_and_api_token_is_long(monkeypatch) -> None:
     """A stolen cookie should expire in weeks; the year-long credential is created
@@ -442,12 +495,12 @@ def test_browser_session_is_short_and_api_token_is_long(monkeypatch) -> None:
 
     client, config, _ = _make()
     _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
-    client.post("/ui/signup/create", data={"org_name": "Acme Co"})
+    _create(client, "Acme Co")
     session_exp = jwt.decode(client.cookies[COOKIE], _SECRET, algorithms=["HS256"])["exp"]
 
-    resp = client.post("/ui/api-token")
+    resp = client.post(f"{API}/api-token", json={})
     assert resp.status_code == 200
-    token = resp.text.split("<pre>")[1].split("</pre>")[0]
+    token = resp.json()["token"]
     assert jwt.decode(token, _SECRET, algorithms=["HS256"])["exp"] > session_exp
     assert verify_founder_token(_SECRET, token).org_id is not None
 
@@ -455,13 +508,27 @@ def test_browser_session_is_short_and_api_token_is_long(monkeypatch) -> None:
 def test_engineer_cannot_mint_an_api_token(monkeypatch) -> None:
     client, _, store = _make()
     _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
-    client.post("/ui/signup/create", data={"org_name": "Acme Co"})
+    _create(client, "Acme Co")
     org_id = verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id
     client.cookies.clear()
     _sign_in(client, monkeypatch, "sub-2", "dev@acmeco.com")
-    client.post("/ui/signup/join", data={"org_id": org_id})
+    _join(client, org_id)
 
-    assert client.post("/ui/api-token").headers["location"] == "/ui/login"
+    assert client.post(f"{API}/api-token", json={}).status_code == 401
+
+
+def test_engineer_cannot_read_the_welcome_payload(monkeypatch) -> None:
+    """It carries the org's shared invite. An engineer has no team to set up, and
+    handing them the invite line is not theirs to hand out."""
+    client, _, store = _make()
+    _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
+    _create(client, "Acme Co")
+    org_id = verify_founder_token(_SECRET, client.cookies[COOKIE]).org_id
+    client.cookies.clear()
+    _sign_in(client, monkeypatch, "sub-2", "dev@acmeco.com")
+    _join(client, org_id)
+
+    assert client.get(f"{API}/welcome").status_code == 403
 
 
 def test_revoked_session_stops_working(monkeypatch) -> None:
@@ -469,8 +536,21 @@ def test_revoked_session_stops_working(monkeypatch) -> None:
     kills them like any other token."""
     client, _, store = _make()
     _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
-    client.post("/ui/signup/create", data={"org_name": "Acme Co"})
-    assert client.get("/ui/welcome").status_code == 200
+    _create(client, "Acme Co")
+    assert client.get(f"{API}/welcome").status_code == 200
 
     store.revoke_token(client.cookies[COOKIE], reason="test", revoked_by="admin")
-    assert client.get("/ui/welcome").headers["location"] == "/ui/login"
+    assert client.get(f"{API}/welcome").status_code == 401
+
+
+# ── CSRF ───────────────────────────────────────────────────────────────────
+def test_form_encoded_writes_are_refused(monkeypatch) -> None:
+    """The /ui/api/ writes are cookie-authenticated, so the JSON content type is
+    the CSRF control: a cross-site HTML form can only send form-urlencoded."""
+    client, _, store = _make()
+    _sign_in(client, monkeypatch, "sub-1", "priya@acmeco.com")
+
+    resp = client.post(f"{API}/create", data={"org_name": "Acme"})
+
+    assert resp.status_code == 415
+    assert store.list_orgs() == []

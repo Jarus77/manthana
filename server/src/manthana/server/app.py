@@ -62,6 +62,7 @@ from .overview import overview_provider_for, run_overview_pass
 from .purge import PurgeSelector, purge
 from .purge import delete_org as delete_org_tenant
 from .signup import mount_signup
+from .signup_api import mount_signup_api
 from .storage import ObjectStore, make_object_store
 from .store import ServerStore
 from .ui import mount_ui
@@ -1366,6 +1367,9 @@ def create_app(
     # deploy exposes no signup surface at all and onboarding stays operator-driven.
     if config.enable_self_serve_signup:
         mount_signup(app, config, store)
+        # JSON twin for the React pages. Same flag, same lifetime: the client
+        # routes are useless without it and it is meaningless without them.
+        mount_signup_api(app, config, store)
     if mcp_asgi is not None:
         app.mount("/mcp", mcp_asgi)
     return app

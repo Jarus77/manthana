@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 from manthana.server import ServerConfig, ServerStore, create_app
-from manthana.server.hardening import SlidingWindowLimiter
+from manthana.server.hardening import RATE_LIMITS, SlidingWindowLimiter
 from manthana.server.llm import ScriptedProvider
 from manthana.server.storage import InMemoryObjectStore
 
@@ -22,6 +22,35 @@ def _make(**config_kwargs):
 
 
 # ── limiter unit ───────────────────────────────────────────────────────────
+def test_every_rate_limited_path_actually_exists() -> None:
+    """A limit is keyed on the EXACT path, so a route rename silently un-protects
+    whatever it guarded — nothing fails, nothing logs, the ceiling is just gone.
+
+    This caught exactly that: moving the signup pages into React changed
+    /ui/signup/create to /ui/api/signup/create and left the limit behind on a dead
+    route, removing the only guard on org creation at a time when there is no
+    per-org budget cap either.
+    """
+    config = ServerConfig(
+        jwt_secret="x" * 40,
+        admin_token="adm",
+        # Every optional surface on, so flag-gated routes are actually mounted.
+        enable_self_serve_signup=True,
+        google_client_id="cid",
+        google_client_secret="sec",
+    )
+    app = create_app(
+        config, ServerStore.open("sqlite://"), InMemoryObjectStore(), ScriptedProvider([])
+    )
+    mounted = {
+        (method, route.path)  # type: ignore[attr-defined]
+        for route in app.routes
+        for method in getattr(route, "methods", set())
+    }
+    missing = sorted(k for k in RATE_LIMITS if k not in mounted)
+    assert not missing, f"rate limits point at routes that do not exist: {missing}"
+
+
 def test_sliding_window_allows_then_blocks_then_recovers() -> None:
     lim = SlidingWindowLimiter(window=60.0)
     key = ("/v1/enroll", "1.2.3.4")

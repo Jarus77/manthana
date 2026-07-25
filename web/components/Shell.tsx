@@ -48,10 +48,17 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   // Routes that draw their own full-page chrome, and so must not be framed by
-  // this rail: /login has no session yet, / is the marketing page for people who
-  // have never seen the product, and /design is the system scheduled to replace
-  // this one. On all three, asking /me would only produce a guaranteed 401.
-  const bare = pathname === '/login' || pathname === '/design' || pathname === '/'
+  // this rail: /login has no session yet, / is the marketing page, /design is the
+  // system scheduled to replace this one, and the onboarding routes give someone
+  // mid-signup exactly one thing to do. Asking /me on any of them would produce a
+  // 401 the page has no use for.
+  const bare =
+    pathname === '/login' ||
+    pathname === '/design' ||
+    pathname === '/' ||
+    pathname === '/welcome' ||
+    pathname === '/join' ||
+    pathname.startsWith('/signup')
   const { data: me } = useSWR<Me>(bare ? null : '/me', fetcher, {
     revalidateOnFocus: false,
     shouldRetryOnError: false,

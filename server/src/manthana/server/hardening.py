@@ -42,8 +42,13 @@ RATE_LIMITS: dict[tuple[str, str], int] = {
     # the operator's LLM bill — keep them tight.
     ("GET", "/ui/auth/google"): 20,
     ("GET", "/ui/auth/google/callback"): 20,
-    ("POST", "/ui/signup/create"): 5,
-    ("POST", "/ui/signup/join"): 5,
+    # These keys are matched against the EXACT path, so they had to follow the
+    # signup pages when they moved into React. They previously read
+    # /ui/signup/create, which no longer exists — a rename that leaves a limit
+    # pointing at a dead route removes the protection in total silence.
+    ("POST", "/ui/api/signup/create"): 5,
+    ("POST", "/ui/api/signup/join"): 5,
+    ("POST", "/ui/api/signup/api-token"): 10,
     ("POST", "/v1/founder/query"): 30,
     ("POST", "/v1/founder/thread"): 30,
     ("POST", "/v1/founder/drill"): 30,
