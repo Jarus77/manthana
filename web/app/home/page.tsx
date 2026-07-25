@@ -28,6 +28,14 @@ import {
   clip,
   when,
 } from '@/components/primitives'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import type { HomeFeed } from '@/lib/types'
 
 export default function MainPage() {
@@ -35,37 +43,39 @@ export default function MainPage() {
     <Wiki<HomeFeed> path="/home">
       {(feed) => (
         <>
-          <div className="portal-lead">
-            <h1>Welcome to the {feed.org_id} wiki</h1>
-            <p style={{ margin: '0.2em 0 0.8em' }}>
+          <div className="mb-8 rounded-xl border bg-muted/30 px-6 py-8 text-center">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              The {feed.org_id} wiki
+            </h1>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
               The shared context behind what this team builds — one living article per
               project, written from everyone&rsquo;s work sessions.
             </p>
-            <div style={{ maxWidth: 520, margin: '0 auto' }}>
+            <div className="mx-auto mt-5 max-w-lg text-left">
               <AskBar />
             </div>
           </div>
 
-          <div className="portal-grid">
-            <div className="portal-box">
-              <h2>Who&rsquo;s active</h2>
+          <div className="grid gap-6 md:grid-cols-2">
+            <div>
+              <h2 className="mb-3 text-base font-semibold">Who&rsquo;s active</h2>
               {feed.people.length ? (
-                <table className="wikitable">
-                  <thead>
-                    <tr>
-                      <th>Person</th>
-                      <th>Working on</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <div className="overflow-x-auto rounded-lg border"><Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Person</TableHead>
+                      <TableHead>Working on</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {feed.people.map((a) => (
-                      <tr key={a.actor}>
-                        <td style={{ whiteSpace: 'nowrap' }}>
+                      <TableRow key={a.actor}>
+                        <TableCell style={{ whiteSpace: 'nowrap' }}>
                           <PersonLink actor={a.actor} />
-                        </td>
-                        <td>
-                          {a.intents[0] ? clip(a.intents[0]) : <span className="faint">—</span>}
-                          <div className="faint">
+                        </TableCell>
+                        <TableCell>
+                          {a.intents[0] ? clip(a.intents[0]) : <span className="text-sm text-muted-foreground">—</span>}
+                          <div className="text-sm text-muted-foreground">
                             {a.projects.map((p, i) => (
                               <span key={p}>
                                 {i > 0 && ', '}
@@ -73,41 +83,41 @@ export default function MainPage() {
                               </span>
                             ))}
                           </div>
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table></div>
               ) : (
                 <Empty>Nobody released a session this week.</Empty>
               )}
             </div>
 
-            <div className="portal-box">
-              <h2>Projects</h2>
+            <div>
+              <h2 className="mb-3 text-base font-semibold">Projects</h2>
               {feed.projects.length ? (
-                <table className="wikitable">
-                  <thead>
-                    <tr>
-                      <th>Project</th>
-                      <th>Status</th>
-                      <th>Last active</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <div className="overflow-x-auto rounded-lg border"><Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Project</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Last active</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {feed.projects.map((p) => (
-                      <tr key={p.project}>
-                        <td>
+                      <TableRow key={p.project}>
+                        <TableCell>
                           <ProjectLink project={p.project} />
-                        </td>
-                        <td>
+                        </TableCell>
+                        <TableCell>
                           <StatusWord status={p.status} />
-                        </td>
-                        <td style={{ whiteSpace: 'nowrap' }}>{when(p.last_active)}</td>
-                      </tr>
+                        </TableCell>
+                        <TableCell style={{ whiteSpace: 'nowrap' }}>{when(p.last_active)}</TableCell>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table></div>
               ) : (
                 <Empty>Nothing this week.</Empty>
               )}
@@ -125,7 +135,7 @@ export default function MainPage() {
               <Empty>No summarised sessions this week.</Empty>
             )}
             {feed.pending_counts.length > 0 && (
-              <p className="faint">
+              <p className="text-sm text-muted-foreground">
                 Awaiting summary:{' '}
                 {feed.pending_counts.map(([project, n], i) => (
                   <span key={project || 'unfiled'}>

@@ -124,7 +124,7 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
               </Ambox>
             )}
 
-            <p className="lead">
+            <p className="mb-4">
               On {onDate(s.started_at)}, <b>{shortName(s.actor)}</b> worked on{' '}
               <ProjectLink project={s.project} />
               {!isPending(s) && (
@@ -151,11 +151,11 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
             </p>
 
             <Toc sections={sections} />
-            <div className="clear" />
+            <div className="clear-both" />
 
             {isPending(s) && s.task_intent && (
               <Section id="prompt" title="Opening prompt">
-                <p className="subtle">
+                <p className="text-muted-foreground">
                   The first thing the engineer typed, verbatim. It is not a summary of the
                   session and is shown here only because no summary exists yet.
                 </p>
@@ -169,7 +169,7 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
 
             {s.friction.length > 0 && (
               <Section id="friction" title="Friction">
-                <p className="subtle">What got in the way, as the engineer recorded it.</p>
+                <p className="text-muted-foreground">What got in the way, as the engineer recorded it.</p>
                 <ul>
                   {s.friction.map((f, i) => (
                     <li key={i}>{f}</li>
@@ -184,7 +184,7 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
                 <ItemList title="Pull requests" items={s.prs_opened} />
                 <ItemList title="Tests added" items={s.tests_added} />
                 {s.files_touched.length > 0 && (
-                  <p className="faint">
+                  <p className="text-sm text-muted-foreground">
                     Touched {s.files_touched.length} file
                     {s.files_touched.length === 1 ? '' : 's'} —{' '}
                     <Link href={`/sessions/${s.id}/verbatim`}>listed in the released digest</Link>.
@@ -195,7 +195,7 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
 
             {s.dead_end_branches.length > 0 && (
               <Section id="dead-ends" title="Dead ends">
-                <p className="subtle">
+                <p className="text-muted-foreground">
                   Approaches tried here and abandoned. Recorded so the next person does not
                   spend the same hours finding out.
                 </p>
@@ -209,7 +209,7 @@ export default function SessionArticle({ params }: { params: Promise<{ id: strin
 
             {data.notes.length > 0 && (
               <Section id="knowledge" title="Knowledge produced">
-                <p className="subtle">Entries that cite this session as evidence.</p>
+                <p className="text-muted-foreground">Entries that cite this session as evidence.</p>
                 <ul>
                   {data.notes.map((n) => (
                     <NoteRow key={n.id} note={n} />

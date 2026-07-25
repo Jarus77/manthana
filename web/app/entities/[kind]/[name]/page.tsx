@@ -48,8 +48,8 @@ export default function EntityArticle({
             {data.name}
           </Title>
 
-          <p className="lead">
-            <b className="mono">{data.name}</b> is a {LABEL[data.kind] ?? data.kind} named by{' '}
+          <p className="mb-4">
+            <b className="font-mono text-[0.925em]">{data.name}</b> is a {LABEL[data.kind] ?? data.kind} named by{' '}
             <b>{data.notes.length}</b> entr{data.notes.length === 1 ? 'y' : 'ies'} in this wiki.
             Entries are linked here when Manthana extracts the {LABEL[data.kind] ?? data.kind}{' '}
             from the session that produced them.

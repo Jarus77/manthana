@@ -12,6 +12,14 @@ import {
   Title,
   when,
 } from '@/components/primitives'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import type { ProjectRollup } from '@/lib/types'
 
 interface ProjectIndex {
@@ -26,38 +34,38 @@ export default function ProjectsIndexPage() {
       {(data) => (
         <>
           <Title>Projects</Title>
-          <p className="lead">
+          <p className="mb-4">
             Every project in <b>{data.org_id}</b> that engineers have released sessions against.
           </p>
 
           <Section title="Active">
             {data.active.length ? (
-              <table className="wikitable">
-                <thead>
-                  <tr>
-                    <th>Project</th>
-                    <th>Latest work</th>
-                    <th>Contributors</th>
-                    <th>Sessions</th>
-                    <th>Last active</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <div className="overflow-x-auto rounded-lg border"><Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Project</TableHead>
+                    <TableHead>Latest work</TableHead>
+                    <TableHead>Contributors</TableHead>
+                    <TableHead>Sessions</TableHead>
+                    <TableHead>Last active</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {data.active.map((p) => (
-                    <tr key={p.project}>
-                      <td style={{ whiteSpace: 'nowrap' }}>
+                    <TableRow key={p.project}>
+                      <TableCell style={{ whiteSpace: 'nowrap' }}>
                         <ProjectLink project={p.project} />
-                      </td>
-                      <td>{p.top_intent ? clip(p.top_intent) : <span className="faint">—</span>}</td>
-                      <td>
+                      </TableCell>
+                      <TableCell>{p.top_intent ? clip(p.top_intent) : <span className="text-sm text-muted-foreground">—</span>}</TableCell>
+                      <TableCell>
                         <PersonList actors={p.actors} />
-                      </td>
-                      <td>{p.sessions}</td>
-                      <td style={{ whiteSpace: 'nowrap' }}>{when(p.last_active)}</td>
-                    </tr>
+                      </TableCell>
+                      <TableCell>{p.sessions}</TableCell>
+                      <TableCell style={{ whiteSpace: 'nowrap' }}>{when(p.last_active)}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table></div>
             ) : (
               <Empty>No project has seen a released session recently.</Empty>
             )}
@@ -65,7 +73,7 @@ export default function ProjectsIndexPage() {
 
           {data.quiet.length > 0 && (
             <Section title="Dormant">
-              <p className="subtle">Old, but still reachable.</p>
+              <p className="text-muted-foreground">Old, but still reachable.</p>
               <ul>
                 {data.quiet.map((p) => (
                   <li key={p}>

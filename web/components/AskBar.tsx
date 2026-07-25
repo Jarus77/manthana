@@ -4,6 +4,7 @@
 
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
+import { Button } from '@/components/ui/button'
 
 export function AskBar({
   placeholder = 'Search the wiki, or ask a question',
@@ -17,7 +18,7 @@ export function AskBar({
 
   return (
     <form
-      className="searchbar"
+      className="mb-5 flex gap-2"
       onSubmit={(e) => {
         e.preventDefault()
         const q = query.trim()
@@ -31,9 +32,9 @@ export function AskBar({
         aria-label="Search the wiki"
         onChange={(e) => setQuery(e.target.value)}
       />
-      <button className="button-progressive" type="submit">
+      <Button type="submit">
         Search
-      </button>
+      </Button>
     </form>
   )
 }

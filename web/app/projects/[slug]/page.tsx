@@ -83,7 +83,7 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
               <div id="article">
                 <NoteBanners note={data.overview} />
                 <Markdown>{data.overview.body}</Markdown>
-                <p className="faint">
+                <p className="text-sm text-muted-foreground">
                   This article is written by Manthana from the sessions below and rewritten as
                   the work changes.{' '}
                   <Link href={`/notes/${data.overview.id}`}>Correct it</Link> — a human edit
@@ -91,7 +91,7 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
                 </p>
               </div>
             ) : (
-              <p className="lead">
+              <p className="mb-4">
                 <b>{data.project}</b> is a project in the {data.org_id} organisation. No
                 article has been written yet.{' '}
                 {data.sessions.length > 0 ? (
@@ -114,10 +114,10 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
             )}
 
             <Toc sections={sections} />
-            <div className="clear" />
+            <div className="clear-both" />
 
             <Section id="sessions" title="Sessions">
-              <p className="subtle">
+              <p className="text-muted-foreground">
                 The primary sources: what actually happened, session by session.
               </p>
               {data.sessions.length ? (
@@ -134,7 +134,7 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
                 </Empty>
               )}
               {data.pending_count > 0 && (
-                <p className="faint">
+                <p className="text-sm text-muted-foreground">
                   {data.pending_count} session{data.pending_count === 1 ? '' : 's'} awaiting
                   summary
                 </p>
@@ -156,7 +156,7 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
 
             {data.changelog.length > 0 && (
               <Section id="changelog" title="Changelog">
-                <p className="subtle">
+                <p className="text-muted-foreground">
                   One line per article revision — the growing part of the article lives here,
                   not in the body.
                 </p>
@@ -164,7 +164,7 @@ export default function ProjectArticle({ params }: { params: Promise<{ slug: str
                   {data.changelog.map((entry) => (
                     <li key={entry.note_id}>
                       {onDate(entry.date)} — {entry.change_summary}{' '}
-                      <span className="faint">
+                      <span className="text-sm text-muted-foreground">
                         (<Link href={`/notes/${entry.note_id}`}>v{entry.version}</Link>
                         {entry.source === 'human' && ', human'})
                       </span>
