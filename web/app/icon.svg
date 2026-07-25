@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32">
+  <!-- The churn, at favicon scale: one heavier arc plus the centre. Two thin arcs
+       close into a grey ring below ~20px, so the small mark drops the counter-arc
+       rather than rendering a smudge. Indigo is hardcoded because a favicon has no
+       currentColor to inherit. -->
+  <rect width="24" height="24" rx="5" fill="#4f46e5"/>
+  <path d="M19.5 12a7.5 7.5 0 1 1-3.7-6.48" stroke="#fff" stroke-width="2.4"
+        stroke-linecap="round" fill="none"/>
+  <circle cx="12" cy="12" r="2.9" fill="#fff"/>
+</svg>
