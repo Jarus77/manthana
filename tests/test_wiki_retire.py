@@ -83,7 +83,7 @@ def test_every_wiki_page_redirects_to_its_client_route() -> None:
     client, _store, config = _make(retired=True)
     _login(client, config)
     for url, target in (
-        ("/ui/home", "/"),
+        ("/ui/home", "/home"),
         ("/ui/page/project/bench", "/projects/bench"),
         (f"/ui/page/person/{ENG}", f"/people/{ENG.replace('@', '%40')}"),
         ("/ui/note/kn-1", "/notes/kn-1"),
@@ -122,7 +122,7 @@ def test_old_links_redirect_even_when_signed_out() -> None:
     # A bookmark or Slack link should land on the client (which will send the
     # reader to its own login), not on the retired server's login form.
     client, _store, _config = _make(retired=True)
-    assert client.get("/ui/home").headers["location"] == "/"
+    assert client.get("/ui/home").headers["location"] == "/home"
 
 
 # ── retired: writes are gone, not silently swallowed ─────────────────────
@@ -168,4 +168,4 @@ def test_engineers_are_still_bounced_off_oversight_pages() -> None:
     resp = client.get("/ui/sessions?org_id=o1")
     assert resp.status_code == 303
     assert resp.headers["location"] == "/ui/home"
-    assert client.get("/ui/home").headers["location"] == "/"
+    assert client.get("/ui/home").headers["location"] == "/home"

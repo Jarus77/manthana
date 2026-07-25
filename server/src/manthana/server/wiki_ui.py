@@ -203,7 +203,11 @@ def mount_retired_wiki(app: FastAPI) -> None:
 
     @app.get("/ui/home")
     def retired_home() -> Response:
-        return _to("/")
+        # /home, not /. The client's root became the marketing page, so sending an
+        # authenticated engineer to "/" would land them on the pitch for a product
+        # they already use. This path is the destination `signup.py` hands every
+        # engineer after Google sign-in, and the one the console sends them to.
+        return _to("/home")
 
     @app.get("/ui/page/project/{project}")
     def retired_project(project: str) -> Response:
