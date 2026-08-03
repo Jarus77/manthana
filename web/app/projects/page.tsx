@@ -5,7 +5,6 @@
 import { Wiki } from '@/components/Loader'
 import {
   Empty,
-  clip,
   PersonList,
   ProjectLink,
   Section,
@@ -20,11 +19,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import type { ProjectRollup } from '@/lib/types'
+import type { ProjectIndexRow } from '@/lib/types'
 
 interface ProjectIndex {
-  active: ProjectRollup[]
-  quiet: string[]
+  active: ProjectIndexRow[]
+  quiet: Array<{ project: string; description: string }>
   org_id: string
 }
 
@@ -44,7 +43,7 @@ export default function ProjectsIndexPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Project</TableHead>
-                    <TableHead>Latest work</TableHead>
+                    <TableHead>What this is</TableHead>
                     <TableHead>Contributors</TableHead>
                     <TableHead>Sessions</TableHead>
                     <TableHead>Last active</TableHead>
@@ -56,7 +55,13 @@ export default function ProjectsIndexPage() {
                       <TableCell style={{ whiteSpace: 'nowrap' }}>
                         <ProjectLink project={p.project} />
                       </TableCell>
-                      <TableCell>{p.top_intent ? clip(p.top_intent) : <span className="text-sm text-muted-foreground">—</span>}</TableCell>
+                      <TableCell>
+                        {p.description || (
+                          <span className="text-sm text-muted-foreground">
+                            not yet described
+                          </span>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <PersonList actors={p.actors} />
                       </TableCell>
@@ -76,8 +81,11 @@ export default function ProjectsIndexPage() {
               <p className="text-muted-foreground">Old, but still reachable.</p>
               <ul>
                 {data.quiet.map((p) => (
-                  <li key={p}>
-                    <ProjectLink project={p} />
+                  <li key={p.project}>
+                    <ProjectLink project={p.project} />
+                    {p.description && (
+                      <div className="text-sm text-muted-foreground">{p.description}</div>
+                    )}
                   </li>
                 ))}
               </ul>

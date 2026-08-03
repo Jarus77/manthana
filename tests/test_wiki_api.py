@@ -74,6 +74,7 @@ def _note(
     status: NoteStatus = NoteStatus.candidate,
     source: NoteSource = NoteSource.ai,
     days_ago: int = 1,
+    body: str = "2.5 breaks the eval harness.",
     **kw: object,
 ) -> KnowledgeNote:
     at = _NOW - timedelta(days=days_ago)
@@ -82,7 +83,7 @@ def _note(
         org_id=org_id,
         kind=kind,
         title=title,
-        body="2.5 breaks the eval harness.",
+        body=body,
         scope=f"project:{project}",
         entities=NoteEntities(projects=[project]),
         actors=actors if actors is not None else [ENG],
@@ -399,7 +400,68 @@ def test_projects_index_lists_active_and_dormant_projects() -> None:
     assert {p["project"] for p in payload["active"]} == {"bench", "search"}
     assert all(p["status"] in ("active", "stale") for p in payload["active"])
     # Quiet = no session in the window = stale by construction; still reachable.
-    assert payload["quiet"] == [{"project": "legacy", "status": "stale"}]
+    assert payload["quiet"] == [
+        {"project": "legacy", "status": "stale", "description": ""}
+    ]
+
+
+def test_projects_index_describes_each_project_from_its_article() -> None:
+    """The index says what each project IS. It used to quote one session's
+    intent, which is a sentence about a morning's work — a directory of those
+    tells a reader nothing about the places they name."""
+    client, store, config = _make()
+    _seed(store)
+    store.ingest_compaction(
+        _comp("c3", project="legacy", days_ago=400), org_id="o1", team_id="t1"
+    )
+    for project in ("bench", "legacy"):
+        store.upsert_note(
+            _note(
+                f"kn-ov-{project}",
+                kind=NoteKind.project_overview,
+                project=project,
+                title=project,
+                body=f"## What this is\n\n{project} is the thing itself.\n",
+            )
+        )
+    _login(client, _engineer(config))
+    payload = client.get(f"{API}/projects").json()
+    described = {p["project"]: p["description"] for p in payload["active"]}
+    assert described["bench"] == "bench is the thing itself."
+    # No article yet is an empty string, never a fallback to a session intent.
+    assert described["search"] == ""
+    # Dormant projects are described too — being quiet is not being nameless.
+    assert payload["quiet"][0]["description"] == "legacy is the thing itself."
+
+
+def test_project_page_only_promises_an_article_that_is_coming() -> None:
+    """The empty state's honesty is a property of the PAYLOAD, not the copy: the
+    client cannot work out whether the writing pass has given up, and inferring
+    it from session counts is how the page came to promise an article that would
+    never arrive."""
+    client, store, config = _make()
+    _seed(store)
+    _login(client, _engineer(config))
+
+    assert client.get(f"{API}/projects/bench").json()["outlook"] == "coming"
+
+    store.mark_overview_done(
+        "o1", "bench", contributors_hash="deadbeef", state="abandoned"
+    )
+    assert client.get(f"{API}/projects/bench").json()["outlook"] == "failed"
+
+    # Once the article exists the question is meaningless and is not asked.
+    store.clear_overview_state("o1", "bench")
+    store.upsert_note(
+        _note(
+            "kn-ov",
+            kind=NoteKind.project_overview,
+            project="bench",
+            body="## What this is\n\nbench benches.\n",
+        )
+    )
+    payload = client.get(f"{API}/projects/bench").json()
+    assert payload["overview"] is not None and payload["outlook"] == ""
 
 
 # ── knowledge browse: all-time, not just this week ───────────────────────
