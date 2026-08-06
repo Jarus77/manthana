@@ -12,8 +12,7 @@
 import useSWR from 'swr'
 import { PageTitle, useOrgId } from '@/components/console/Shell'
 import { QuotaNotice, quotaFrom } from '@/components/console/QuotaNotice'
-import { EmptyState, Mono, Notice } from '@/components/manthana'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Loading } from '@/components/Loader'
 import { ApiError, consoleFetcher, qs } from '@/lib/api'
 
 type Digest = {
@@ -45,36 +44,33 @@ export default function DigestPage() {
       {quota ? (
         <QuotaNotice quota={quota} />
       ) : error ? (
-        <Notice tone="disputed">{error.message}</Notice>
+        <div className="error-box">{error.message}</div>
       ) : isLoading || !data ? (
-        <>
-          <Skeleton className="h-6 w-64" />
-          <Skeleton className="mt-4 h-32 w-full" />
-        </>
+        <Loading />
       ) : (
         <>
-          <p className="mb-6 text-sm text-muted-foreground">
+          <p className="subtle">
             Aggregate, with the k-anonymity floor enforced — every section here is drawn from
             enough people that it describes the team rather than an individual.
           </p>
 
           {data.sections.length === 0 ? (
-            <EmptyState>
+            <div className="empty">
               Nothing cleared the floor for this window. Either the week was quiet, or the
               work was concentrated in too few hands to report as a team pattern.
-            </EmptyState>
+            </div>
           ) : (
             data.sections.map((s) => (
-              <section key={s.title} className="mb-8">
-                <h2 className="mb-2 text-base font-semibold">{s.title}</h2>
-                <p className="whitespace-pre-wrap text-sm">{s.narrative}</p>
+              <section key={s.title}>
+                <h2>{s.title}</h2>
+                <p style={{ whiteSpace: 'pre-wrap' }}>{s.narrative}</p>
                 {s.citations.length > 0 && (
-                  <p className="mt-2 text-xs text-muted-foreground">
+                  <p className="faint">
                     Sources:{' '}
                     {s.citations.map((c, i) => (
-                      <span key={c}>
+                      <span key={c} className="mono">
                         {i > 0 && ', '}
-                        <Mono>{c}</Mono>
+                        {c}
                       </span>
                     ))}
                   </p>
@@ -84,10 +80,13 @@ export default function DigestPage() {
           )}
 
           {data.omitted.length > 0 && (
-            <Notice tone="unreviewed" title="Some sections were left out.">
-              {data.omitted.join(', ')} — either no data for the window, or too few
-              contributors to report without naming someone.
-            </Notice>
+            <div className="ambox ambox-content">
+              <b>Some sections were left out.</b>
+              <p>
+                {data.omitted.join(', ')} — either no data for the window, or too few
+                contributors to report without naming someone.
+              </p>
+            </div>
           )}
         </>
       )}

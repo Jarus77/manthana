@@ -12,16 +12,7 @@ import Link from 'next/link'
 import useSWR from 'swr'
 import { PageTitle, useMe, useOrgId } from '@/components/console/Shell'
 import { usd } from '@/components/console/charts'
-import { EmptyState, Mono, SectionHeading, StatusText, Tag } from '@/components/manthana'
-import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Loading } from '@/components/Loader'
 import { ApiError, consoleFetcher, qs } from '@/lib/api'
 
 type Budget = {
@@ -52,18 +43,14 @@ function BudgetCell({ b }: { b: Budget }) {
   if (b.cap_usd <= 0) {
     return (
       <span className="tabular">
-        {usd(b.spent_usd)} <span className="text-muted-foreground">/ no cap</span>
+        {usd(b.spent_usd)} <span className="faint">/ no cap</span>
       </span>
     )
   }
   return (
     <span className="tabular">
-      {usd(b.spent_usd)} <span className="text-muted-foreground">/ {usd(b.cap_usd)}</span>
-      {b.blocked && (
-        <span className="ml-2">
-          <StatusText tone="danger">cap reached</StatusText>
-        </span>
-      )}
+      {usd(b.spent_usd)} <span className="faint">/ {usd(b.cap_usd)}</span>
+      {b.blocked && <span className="status-disputed"> cap reached</span>}
     </span>
   )
 }
@@ -87,7 +74,7 @@ export default function ConsoleOverview() {
     { revalidateOnFocus: false, shouldRetryOnError: false },
   )
 
-  if (isLoading || !orgs) return <Skeleton className="h-64 w-full" />
+  if (isLoading || !orgs) return <Loading />
 
   return (
     <>
@@ -96,124 +83,113 @@ export default function ConsoleOverview() {
       </PageTitle>
 
       {orgs.orgs.length === 0 ? (
-        <EmptyState>No organizations yet.</EmptyState>
+        <div className="empty">No organizations yet.</div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Org</TableHead>
-                <TableHead className="text-right">Teams</TableHead>
-                <TableHead className="text-right">Sessions</TableHead>
-                <TableHead className="text-right">Pending skills</TableHead>
-                <TableHead>AI spend this month</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+        <div className="scroll-x">
+          <table className="wikitable">
+            <thead>
+              <tr>
+                <th>Org</th>
+                <th>Teams</th>
+                <th>Sessions</th>
+                <th>Pending skills</th>
+                <th>AI spend this month</th>
+              </tr>
+            </thead>
+            <tbody>
               {orgs.orgs.map((o) => (
-                <TableRow key={o.id}>
-                  <TableCell>
-                    <Link
-                      className="font-medium text-primary underline-offset-4 hover:underline"
-                      href={`/console/sessions?org=${encodeURIComponent(o.id)}`}
-                    >
+                <tr key={o.id}>
+                  <td>
+                    <Link href={`/console/sessions?org=${encodeURIComponent(o.id)}`}>
                       {o.name}
                     </Link>
-                    <div className="text-xs text-muted-foreground">
-                      <Mono>{o.id}</Mono>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right tabular">{o.teams}</TableCell>
-                  <TableCell className="text-right tabular">{o.compactions}</TableCell>
-                  <TableCell className="text-right tabular">{o.pending_skills}</TableCell>
-                  <TableCell>
+                    <div className="mono faint">{o.id}</div>
+                  </td>
+                  <td className="tabular">{o.teams}</td>
+                  <td className="tabular">{o.compactions}</td>
+                  <td className="tabular">{o.pending_skills}</td>
+                  <td>
                     <BudgetCell b={o.budget} />
-                  </TableCell>
-                </TableRow>
+                  </td>
+                </tr>
               ))}
-            </TableBody>
-          </Table>
+            </tbody>
+          </table>
         </div>
       )}
 
       {/* ── members ─────────────────────────────────────────────────── */}
-      <SectionHeading>Members</SectionHeading>
-      <p className="mb-3 text-sm text-muted-foreground">
+      <h2>Members</h2>
+      <p>
         People who can sign in. Everyone who joins by email domain or an invite link lands as
         an engineer — they read and correct the wiki, but the oversight pages are not theirs.
       </p>
       {!members ? (
-        <Skeleton className="h-20 w-full" />
+        <Loading />
       ) : members.members.length === 0 ? (
-        <EmptyState>Nobody has signed in with Google yet.</EmptyState>
+        <div className="empty">Nobody has signed in with Google yet.</div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Role</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+        <div className="scroll-x">
+          <table className="wikitable">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Role</th>
+              </tr>
+            </thead>
+            <tbody>
               {members.members.map((m) => (
-                <TableRow key={m.id}>
-                  <TableCell>{m.display_name ?? m.email.split('@')[0]}</TableCell>
-                  <TableCell className="text-muted-foreground">{m.email}</TableCell>
-                  <TableCell>
-                    {m.role === 'founder' ? (
-                      <Tag tone="primary">founder</Tag>
-                    ) : (
-                      <Tag>engineer</Tag>
-                    )}
-                  </TableCell>
-                </TableRow>
+                <tr key={m.id}>
+                  <td>{m.display_name ?? m.email.split('@')[0]}</td>
+                  <td className="subtle">{m.email}</td>
+                  <td>{m.role === 'founder' ? <b>founder</b> : 'engineer'}</td>
+                </tr>
               ))}
-            </TableBody>
-          </Table>
+            </tbody>
+          </table>
         </div>
       )}
 
       {/* ── audit ───────────────────────────────────────────────────── */}
-      <SectionHeading>Recent questions</SectionHeading>
-      <p className="mb-3 text-sm text-muted-foreground">
+      <h2>Recent questions</h2>
+      <p>
         Every question asked of this org, answered or withheld. Withheld means the evidence
         did not clear the k-anonymity floor — a team pattern must never be one person&rsquo;s
         activity in disguise.
       </p>
       {!audit ? (
-        <Skeleton className="h-20 w-full" />
+        <Loading />
       ) : audit.entries.length === 0 ? (
-        <EmptyState>No questions asked yet.</EmptyState>
+        <div className="empty">No questions asked yet.</div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>When</TableHead>
-                <TableHead>Question</TableHead>
-                <TableHead>Result</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+        <div className="scroll-x">
+          <table className="wikitable">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Question</th>
+                <th>Result</th>
+              </tr>
+            </thead>
+            <tbody>
               {audit.entries.map((e) => (
-                <TableRow key={e.id}>
-                  <TableCell className="whitespace-nowrap text-muted-foreground">
+                <tr key={e.id}>
+                  <td style={{ whiteSpace: 'nowrap' }} className="subtle">
                     {e.created_at.slice(0, 16).replace('T', ' ')}
-                  </TableCell>
-                  <TableCell className="max-w-md truncate">{e.query}</TableCell>
-                  <TableCell>
+                  </td>
+                  <td>{e.query}</td>
+                  <td>
                     {e.insufficient ? (
-                      <StatusText tone="warning">withheld</StatusText>
+                      <span className="status-unreviewed">withheld</span>
                     ) : (
                       <span className="tabular">{e.citation_count} citations</span>
                     )}
-                  </TableCell>
-                </TableRow>
+                  </td>
+                </tr>
               ))}
-            </TableBody>
-          </Table>
+            </tbody>
+          </table>
         </div>
       )}
     </>

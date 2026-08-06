@@ -10,13 +10,21 @@
  * `navigator.clipboard` needs a secure context, so it is absent over plain HTTP on
  * anything but localhost. The text stays selectable and the button reports honestly
  * when it could not copy, instead of claiming success into a void.
+ *
+ * The confirmation is a WORD, not an icon. Vector has no icon set and this sheet
+ * is not going to acquire one for three states — and "Copied" is unambiguous in a
+ * way a tick sitting where a clipboard glyph used to be is not.
  */
 
-import { Check, Copy, X } from 'lucide-react'
 import { useState } from 'react'
-import { Button } from '@/components/ui/button'
 
 type State = 'idle' | 'copied' | 'failed'
+
+const LABELS: Record<State, string> = {
+  idle: 'Copy',
+  copied: 'Copied',
+  failed: 'Failed',
+}
 
 export function CopyBlock({ label, value }: { label?: string; value: string }) {
   const [state, setState] = useState<State>('idle')
@@ -34,29 +42,20 @@ export function CopyBlock({ label, value }: { label?: string; value: string }) {
 
   return (
     <div>
-      {label && <div className="mb-1.5 text-sm text-muted-foreground">{label}</div>}
-      <div className="flex items-start gap-2">
-        <pre className="min-w-0 flex-1 overflow-x-auto rounded-lg border bg-muted/40 px-3 py-2.5 text-sm">
-          <code className="font-mono">{value}</code>
-        </pre>
-        <Button
-          variant="outline"
-          size="icon"
+      {label && <div className="subtle">{label}</div>}
+      <div className="copyblock">
+        <code>{value}</code>
+        <button
+          type="button"
+          className="button"
           onClick={copy}
           aria-label={label ? `Copy ${label}` : 'Copy'}
-          className="mt-0.5 shrink-0"
         >
-          {state === 'copied' ? (
-            <Check className="size-4 text-success" />
-          ) : state === 'failed' ? (
-            <X className="size-4 text-destructive" />
-          ) : (
-            <Copy className="size-4" />
-          )}
-        </Button>
+          {LABELS[state]}
+        </button>
       </div>
       {state === 'failed' && (
-        <p className="mt-1 text-xs text-destructive">
+        <p className="faint">
           Could not reach the clipboard — select the text and copy it manually.
         </p>
       )}

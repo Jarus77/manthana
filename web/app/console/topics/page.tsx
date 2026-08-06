@@ -17,16 +17,7 @@
 
 import useSWR from 'swr'
 import { PageTitle, useOrgId } from '@/components/console/Shell'
-import { EmptyState, Notice } from '@/components/manthana'
-import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Loading } from '@/components/Loader'
 import { ApiError, consoleFetcher, qs } from '@/lib/api'
 
 type Topics = {
@@ -51,7 +42,7 @@ export default function TopicsPage() {
     { revalidateOnFocus: false, shouldRetryOnError: false },
   )
 
-  if (isLoading || !data) return <Skeleton className="h-64 w-full" />
+  if (isLoading || !data) return <Loading />
 
   return (
     <>
@@ -66,46 +57,47 @@ export default function TopicsPage() {
       </PageTitle>
 
       {data.coverage.truncated && (
-        <div className="mb-5">
-          <Notice tone="unreviewed" title="This is a partial view.">
+        <div className="ambox ambox-content">
+          <b>This is a partial view.</b>
+          <p>
             Clustered over the {data.coverage.used} most recent of {data.coverage.matched}{' '}
             sessions — older work is not represented here.
-          </Notice>
+          </p>
         </div>
       )}
 
       {data.topics.length === 0 ? (
-        <EmptyState>
+        <div className="empty">
           {data.named
             ? 'No cross-cutting topics yet — they emerge once several sessions share ground.'
             : `No topics clear the floor of ${data.k_anon_floor} contributors yet. Work is
                happening; it just is not yet shared enough between people to show as a team
                pattern.`}
-        </EmptyState>
+        </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Topic</TableHead>
-                <TableHead className="text-right">People</TableHead>
-                <TableHead className="text-right">Sessions</TableHead>
-                <TableHead>Sample work</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+        <div className="scroll-x">
+          <table className="wikitable">
+            <thead>
+              <tr>
+                <th>Topic</th>
+                <th>People</th>
+                <th>Sessions</th>
+                <th>Sample work</th>
+              </tr>
+            </thead>
+            <tbody>
               {data.topics.map((t) => (
-                <TableRow key={t.id}>
-                  <TableCell className="font-medium">{t.label}</TableCell>
-                  <TableCell className="text-right tabular">{t.contributors}</TableCell>
-                  <TableCell className="text-right tabular">{t.sessions}</TableCell>
-                  <TableCell className="max-w-lg text-sm text-muted-foreground">
-                    <span className="line-clamp-2">{t.sample_intents.join(' · ')}</span>
-                  </TableCell>
-                </TableRow>
+                <tr key={t.id}>
+                  <td>
+                    <b>{t.label}</b>
+                  </td>
+                  <td className="tabular">{t.contributors}</td>
+                  <td className="tabular">{t.sessions}</td>
+                  <td className="subtle">{t.sample_intents.join(' · ')}</td>
+                </tr>
               ))}
-            </TableBody>
-          </Table>
+            </tbody>
+          </table>
         </div>
       )}
     </>

@@ -13,8 +13,7 @@ import { useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
 import useSWR from 'swr'
 import { GoogleButton, Muted, SignupShell } from '@/components/signup/Shell'
-import { Notice } from '@/components/manthana'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Loading } from '@/components/Loader'
 import { ApiError, signupFetcher, qs } from '@/lib/api'
 
 function JoinBody() {
@@ -28,35 +27,30 @@ function JoinBody() {
   if (!code || error) {
     return (
       <>
-        <Notice tone="disputed" title="That invitation link is not valid.">
-          It may have expired, been used up, or been copied incompletely. Ask whoever sent it
-          for a fresh one.
-        </Notice>
-        <p className="mt-6 text-sm text-muted-foreground">
-          Setting up a team of your own instead?{' '}
-          <a className="text-primary underline-offset-4 hover:underline" href="/signup">
-            Create an organization
-          </a>
-          .
+        <div className="ambox ambox-serious">
+          <b>That invitation link is not valid.</b>
+          <p>
+            It may have expired, been used up, or been copied incompletely. Ask whoever sent
+            it for a fresh one.
+          </p>
+        </div>
+        <p>
+          Setting up a team of your own instead? <a href="/signup">Create an organization</a>.
         </p>
       </>
     )
   }
 
-  if (isLoading || !data) return <Skeleton className="h-24 w-full" />
+  if (isLoading || !data) return <Loading />
 
   return (
     <>
-      <h1 className="text-2xl font-semibold tracking-tight">
-        Join {data.org_name} on Manthana
-      </h1>
-      <p className="mt-2 text-sm text-muted-foreground">
+      <h2 className="first">Join {data.org_name} on Manthana</h2>
+      <p>
         You&rsquo;ll get their team wiki — what everyone is working on, and what the team has
         learned. Sign in to accept.
       </p>
-      <div className="mt-8">
-        <GoogleButton invite={code} />
-      </div>
+      <GoogleButton invite={code} />
       <Muted>We only ever read your name and email address.</Muted>
     </>
   )
@@ -65,7 +59,7 @@ function JoinBody() {
 export default function JoinPage() {
   return (
     <SignupShell>
-      <Suspense fallback={<Skeleton className="h-24 w-full" />}>
+      <Suspense fallback={<Loading />}>
         <JoinBody />
       </Suspense>
     </SignupShell>

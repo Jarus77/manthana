@@ -20,16 +20,7 @@
 import useSWR from 'swr'
 import { PageTitle, useOrgId } from '@/components/console/Shell'
 import { CostComparison, SpendByMonth, SpendByPurpose, usd } from '@/components/console/charts'
-import { Mono, Notice, SectionHeading } from '@/components/manthana'
-import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Loading } from '@/components/Loader'
 import { ApiError, consoleFetcher, qs } from '@/lib/api'
 
 type Usage = {
@@ -79,32 +70,33 @@ export default function CostPage() {
       <PageTitle aside={usage ? `month ${usage.month}` : undefined}>Cost</PageTitle>
 
       {usage?.blocked && (
-        <div className="mb-6">
-          <Notice tone="disputed" title="This org has reached its monthly AI budget.">
+        <div className="ambox ambox-serious">
+          <b>This org has reached its monthly AI budget.</b>
+          <p>
             Enrichment has stopped, so new sessions will stay unsummarised until the quota
-            resets at the start of next month. Nothing else breaks, and nothing is lost —
-            but the wiki will look stalled until then.
-          </Notice>
+            resets at the start of next month. Nothing else breaks, and nothing is lost — but
+            the wiki will look stalled until then.
+          </p>
         </div>
       )}
 
       {/* ── Manthana's own spend ─────────────────────────────────────── */}
-      <SectionHeading>Server AI spend</SectionHeading>
-      <p className="mb-5 max-w-2xl text-sm text-muted-foreground">
+      <h2>Server AI spend</h2>
+      <p>
         What Manthana spent turning this org&rsquo;s sessions into digests, notes, and
         narratives. Metered against the monthly cap.
       </p>
       {!usage ? (
-        <Skeleton className="h-40 w-full" />
+        <Loading />
       ) : (
-        <div className="grid gap-8 lg:grid-cols-2">
-          <div className="rounded-lg border p-5">
-            <h3 className="mb-4 text-sm font-medium">By month</h3>
+        <div className="panel-grid">
+          <div>
+            <h3>By month</h3>
             <SpendByMonth months={usage.months} capUsd={usage.cap_usd} />
           </div>
-          <div className="rounded-lg border p-5">
-            <h3 className="mb-1 text-sm font-medium">What spent it, this month</h3>
-            <p className="mb-4 text-xs text-muted-foreground">
+          <div>
+            <h3>What spent it, this month</h3>
+            <p className="faint">
               {usage.cap_is_override
                 ? 'This org has its own cap, set by the operator.'
                 : 'Using the server default cap.'}
@@ -115,72 +107,66 @@ export default function CostPage() {
       )}
 
       {/* ── the team's session cost ──────────────────────────────────── */}
-      <SectionHeading>What your sessions cost</SectionHeading>
-      <p className="mb-5 max-w-2xl text-sm text-muted-foreground">
+      <h2>What your sessions cost</h2>
+      <p>
         Your engineers&rsquo; own coding sessions, re-priced at one tier down wherever that
         looked safe. An observation about work that already happened — Manthana does not
         route anything.
       </p>
       {!cost ? (
-        <Skeleton className="h-40 w-full" />
+        <Loading />
       ) : (
         <>
-          <div className="rounded-lg border p-5">
-            <CostComparison
-              currentUsd={cost.current_usd}
-              projectedUsd={cost.projected_usd}
-              savingsUsd={cost.savings_usd}
-              savingsPct={cost.savings_pct}
-              priced={cost.priced}
-              skipped={cost.skipped_no_tokens}
-            />
-          </div>
+          <CostComparison
+            currentUsd={cost.current_usd}
+            projectedUsd={cost.projected_usd}
+            savingsUsd={cost.savings_usd}
+            savingsPct={cost.savings_pct}
+            priced={cost.priced}
+            skipped={cost.skipped_no_tokens}
+          />
 
           {cost.rows.length > 0 && (
             <>
-              <h3 className="mt-8 mb-3 text-sm font-medium">Session by session</h3>
-              <div className="overflow-x-auto rounded-lg border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Project</TableHead>
-                      <TableHead>Ran on</TableHead>
-                      <TableHead className="text-right">Cost</TableHead>
-                      <TableHead>Could have run on</TableHead>
-                      <TableHead className="text-right">Would save</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
+              <h3>Session by session</h3>
+              <div className="scroll-x">
+                <table className="wikitable">
+                  <thead>
+                    <tr>
+                      <th>Project</th>
+                      <th>Ran on</th>
+                      <th>Cost</th>
+                      <th>Could have run on</th>
+                      <th>Would save</th>
+                    </tr>
+                  </thead>
+                  <tbody>
                     {cost.rows.slice(0, 50).map((r) => (
-                      <TableRow key={r.id}>
-                        <TableCell>{r.project || '—'}</TableCell>
-                        <TableCell>
-                          <Mono>{r.tier}</Mono>
-                        </TableCell>
-                        <TableCell className="text-right tabular">
-                          {usd(r.current_usd)}
-                        </TableCell>
-                        <TableCell>
+                      <tr key={r.id}>
+                        <td>{r.project || '—'}</td>
+                        <td className="mono">{r.tier}</td>
+                        <td className="tabular">{usd(r.current_usd)}</td>
+                        <td>
                           {r.safe_to_downgrade && r.target_tier ? (
-                            <Mono>{r.target_tier}</Mono>
+                            <span className="mono">{r.target_tier}</span>
                           ) : (
-                            <span className="text-muted-foreground">stays where it is</span>
+                            <span className="subtle">stays where it is</span>
                           )}
-                        </TableCell>
-                        <TableCell className="text-right tabular">
+                        </td>
+                        <td className="tabular">
                           {r.savings_usd > 0 ? (
-                            <span className="text-success">{usd(r.savings_usd)}</span>
+                            <span className="status-confirmed">{usd(r.savings_usd)}</span>
                           ) : (
-                            <span className="text-muted-foreground">—</span>
+                            <span className="subtle">—</span>
                           )}
-                        </TableCell>
-                      </TableRow>
+                        </td>
+                      </tr>
                     ))}
-                  </TableBody>
-                </Table>
+                  </tbody>
+                </table>
               </div>
               {cost.rows.length > 50 && (
-                <p className="mt-2 text-xs text-muted-foreground">
+                <p className="faint">
                   Showing the 50 most expensive of {cost.rows.length}.
                 </p>
               )}

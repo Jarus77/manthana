@@ -16,9 +16,7 @@ import { useState } from 'react'
 import useSWR from 'swr'
 import { PageTitle, useOrgId } from '@/components/console/Shell'
 import { QuotaNotice, quotaFrom, type QuotaDetail } from '@/components/console/QuotaNotice'
-import { EmptyState, Notice, SectionHeading, StatusText } from '@/components/manthana'
-import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Loading } from '@/components/Loader'
 import { ApiError, consoleFetcher, consolePost, qs } from '@/lib/api'
 
 type Status = {
@@ -85,77 +83,66 @@ export default function MiningPage() {
         Skill mining
       </PageTitle>
 
-      <p className="mb-6 max-w-2xl text-sm text-muted-foreground">
+      <p>
         Looks for skills the team keeps demonstrating and proposes them. Nothing is published
         until you approve it — mining only ever adds to the queue.
       </p>
 
-      <div className="mb-6 flex flex-wrap items-center gap-3">
-        <Button onClick={start} disabled={busy || running}>
+      <p>
+        <button
+          type="button"
+          className="button button-progressive"
+          onClick={start}
+          disabled={busy || running}
+        >
           {running ? 'Mining…' : busy ? 'Starting…' : 'Mine org skills'}
-        </Button>
+        </button>
         {running && (
-          <span className="text-sm text-muted-foreground">
-            Running in the background — you can leave this page.
-          </span>
+          <span className="subtle"> Running in the background — you can leave this page.</span>
         )}
-      </div>
+      </p>
 
-      {quota && (
-        <div className="mb-6">
-          <QuotaNotice quota={quota} />
-        </div>
-      )}
-      {failure && (
-        <div className="mb-6">
-          <Notice tone="disputed">{failure}</Notice>
-        </div>
-      )}
+      {quota && <QuotaNotice quota={quota} />}
+      {failure && <div className="error-box">{failure}</div>}
 
       {isLoading ? (
-        <Skeleton className="h-32 w-full" />
+        <Loading />
       ) : !run ? (
-        <EmptyState>
-          No run yet in this server process. Run state is not persisted — after a restart
-          this is what you see, even if a run happened earlier.
-        </EmptyState>
+        <div className="empty">
+          No run yet in this server process. Run state is not persisted — after a restart this
+          is what you see, even if a run happened earlier.
+        </div>
       ) : (
         <>
-          <SectionHeading>Last run</SectionHeading>
-          <div className="rounded-lg border p-5">
-            <p className="text-sm">
-              {run.state === 'running' && <StatusText tone="warning">running</StatusText>}
-              {run.state === 'quota' && (
-                <StatusText tone="danger">stopped — budget spent</StatusText>
-              )}
-              {run.state === 'failed' && <StatusText tone="danger">failed</StatusText>}
-              {!['running', 'quota', 'failed'].includes(run.state) && (
-                <StatusText tone="distilled">done</StatusText>
-              )}
-              {run.detail && <span className="ml-2 text-muted-foreground">{run.detail}</span>}
-            </p>
+          <h2>Last run</h2>
+          <p>
+            {run.state === 'running' && <span className="status-unreviewed">running</span>}
+            {run.state === 'quota' && (
+              <span className="status-disputed">stopped — budget spent</span>
+            )}
+            {run.state === 'failed' && <span className="status-disputed">failed</span>}
+            {!['running', 'quota', 'failed'].includes(run.state) && (
+              <span className="status-confirmed">done</span>
+            )}
+            {run.detail && <span className="subtle"> {run.detail}</span>}
+          </p>
 
-            {/* No silent caps: when a bound bit, say so loudly — a partial run
-                must never be mistaken for a complete one. */}
-            <p
-              className={`mt-3 text-sm ${run.capped ? 'text-warning' : 'text-muted-foreground'}`}
-            >
-              {run.coverage_note}
-            </p>
+          {/* No silent caps: when a bound bit, say so loudly — a partial run
+              must never be mistaken for a complete one. */}
+          <p className={run.capped ? 'status-unreviewed' : 'subtle'}>{run.coverage_note}</p>
 
-            <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
-              {[
-                ['Started', run.started_at.slice(0, 16).replace('T', ' ')],
-                ['Finished', run.finished_at?.slice(0, 16).replace('T', ' ') ?? '—'],
-                ['Window', `${run.window_days} days`],
-                ['Proposed', String(run.queued)],
-              ].map(([k, v]) => (
-                <div key={k}>
-                  <dt className="text-muted-foreground">{k}</dt>
-                  <dd className="tabular">{v}</dd>
-                </div>
-              ))}
-            </dl>
+          <div className="stat-row">
+            {[
+              ['Started', run.started_at.slice(0, 16).replace('T', ' ')],
+              ['Finished', run.finished_at?.slice(0, 16).replace('T', ' ') ?? '—'],
+              ['Window', `${run.window_days} days`],
+              ['Proposed', String(run.queued)],
+            ].map(([k, v]) => (
+              <div key={k} className="stat">
+                <span className="stat-value">{v}</span>
+                <span className="stat-label">{k}</span>
+              </div>
+            ))}
           </div>
         </>
       )}
