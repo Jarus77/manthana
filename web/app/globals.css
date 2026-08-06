@@ -23,9 +23,22 @@
  * approximations, so they stay perceptually even across the ramp.
  */
 
+/* Cascade order, declared up front because the legacy stylesheet has to sit in a
+   very specific place: ABOVE `base`, so it still beats Tailwind's preflight and
+   the unported wiki pages render exactly as they always did — and BELOW
+   `utilities`, so its bare element selectors cannot reach into the new pages.
+
+   That second half was learned the hard way. The legacy sheet was originally
+   imported unlayered, which beats every layer: `a { color: var(--wiki-link) }`
+   then silently overrode `text-primary-foreground` on every link-shaped button in
+   the design system, and the marketing page shipped with an invisible call to
+   action. Unlayered is not "later in the cascade", it is "outranks everything". */
+@layer theme, base, legacy, components, utilities;
+
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "./legacy-wiki.css" layer(legacy);
 
 @custom-variant dark (&:is(.dark *));
 
@@ -169,114 +182,5 @@
      counts, session counts. Proportional digits make a column of money jitter. */
   .tabular {
     font-variant-numeric: tabular-nums;
-  }
-}
-
-@layer components {
-  /*
-   * Markdown note bodies.
-   *
-   * The one place the design system still needs real CSS rather than utilities:
-   * this styles HTML produced by react-markdown, so there is nothing to put a
-   * className on. Written on the tokens, so it follows the theme like everything
-   * else — unlike the legacy `.md` it replaces, which was a fixed light palette.
-   *
-   * Deliberately not the Tailwind typography plugin: this is one component's
-   * prose, the rules below are the ones actually exercised by note bodies, and a
-   * plugin would bring a second opinionated type scale to reconcile.
-   */
-  .prose-manthana {
-    font-size: 0.9375rem;
-    line-height: 1.65;
-  }
-  .prose-manthana > :first-child {
-    margin-top: 0;
-  }
-  .prose-manthana > :last-child {
-    margin-bottom: 0;
-  }
-  .prose-manthana p,
-  .prose-manthana ul,
-  .prose-manthana ol,
-  .prose-manthana blockquote {
-    margin-block: 0.75em;
-  }
-  .prose-manthana h1,
-  .prose-manthana h2,
-  .prose-manthana h3 {
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    margin: 1.5em 0 0.5em;
-  }
-  .prose-manthana h1 {
-    font-size: 1.35em;
-  }
-  .prose-manthana h2 {
-    font-size: 1.2em;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 0.25em;
-  }
-  .prose-manthana h3 {
-    font-size: 1.05em;
-  }
-  .prose-manthana ul,
-  .prose-manthana ol {
-    padding-left: 1.5em;
-  }
-  .prose-manthana ul {
-    list-style: disc;
-  }
-  .prose-manthana ol {
-    list-style: decimal;
-  }
-  .prose-manthana li {
-    margin-block: 0.2em;
-  }
-  .prose-manthana a {
-    color: var(--primary);
-    text-underline-offset: 4px;
-  }
-  .prose-manthana a:hover {
-    text-decoration: underline;
-  }
-  .prose-manthana code {
-    font-family: var(--font-mono);
-    font-size: 0.9em;
-    background: var(--muted);
-    border-radius: var(--radius-sm);
-    padding: 0.1em 0.35em;
-  }
-  .prose-manthana pre {
-    background: var(--muted);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    padding: 0.9em 1em;
-    overflow-x: auto;
-    line-height: 1.5;
-  }
-  .prose-manthana pre code {
-    background: none;
-    padding: 0;
-  }
-  .prose-manthana blockquote {
-    border-left: 3px solid var(--border);
-    padding-left: 1em;
-    color: var(--muted-foreground);
-  }
-  .prose-manthana table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-block: 1em;
-    font-size: 0.95em;
-  }
-  .prose-manthana th,
-  .prose-manthana td {
-    border: 1px solid var(--border);
-    padding: 0.4em 0.6em;
-    text-align: left;
-  }
-  .prose-manthana th {
-    background: var(--muted);
-    font-weight: 600;
   }
 }

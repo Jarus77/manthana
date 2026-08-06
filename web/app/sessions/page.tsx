@@ -117,7 +117,7 @@ function Browser() {
   return (
     <>
       <Title>Recent sessions</Title>
-      <p className="mb-4">
+      <p className="lead">
         Every session digest released to this wiki, newest first. Digests record what an
         engineer set out to do, how they approached it and how it went — the raw transcripts
         are not part of the wiki.

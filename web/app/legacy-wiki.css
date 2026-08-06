@@ -1,0 +1,760 @@
+/*
+ * TRANSITIONAL — the encyclopedia stylesheet, kept alive until the wiki pages
+ * are ported.
+ *
+ * Everything here was `globals.css` before the design system landed. The 13 wiki
+ * pages still render against these class names, so it stays until Phase 5 moves
+ * them onto shadcn components, at which point this file is deleted whole.
+ *
+ * Two things make cohabiting with Tailwind safe:
+ *
+ *   1. Every custom property is namespaced `--wiki-*`. Both systems wanted
+ *      `--border`, and shadcn's utilities read it — an unprefixed collision
+ *      silently repainted every legacy border.
+ *   2. This file is imported into `@layer legacy`, declared in globals.css to sit
+ *      ABOVE `base` and BELOW `utilities`. Above base, so Tailwind's preflight
+ *      cannot restyle these pages out from under themselves. Below utilities, so
+ *      the bare element selectors here — `a`, `button`, `body`, `h2` — cannot
+ *      reach into the new pages.
+ *
+ *      It was originally imported unlayered, which sounds equivalent and is not:
+ *      unlayered CSS outranks EVERY layer, so `a { color: var(--wiki-link) }`
+ *      overrode `text-primary-foreground` on every link-shaped button in the
+ *      design system and shipped an invisible call to action.
+ *
+ * Do not add to this file. New work belongs in the design system.
+ *
+ * ── original header ────────────────────────────────────────────────────────
+ *
+ * Manthana wiki — encyclopedia styling.
+ *
+ * This is modelled directly on MediaWiki's Vector 2022 skin, because the thing
+ * being built IS an encyclopedia: articles about people, projects, sessions and
+ * claims, cross-linked, cited, and versioned. The first version of this file
+ * styled the same data as a product dashboard — cards, pills, panels — and read
+ * like a SaaS admin screen rather than something you browse to learn.
+ *
+ * Values are Wikimedia Codex design tokens, not approximations:
+ *   color-base #202122 · color-subtle #54595d · color-progressive #36c
+ *   color-visited #6a60b0 · border-color-base #a2a9b1 · subtle #c8ccd1
+ *   background-color-neutral-subtle #f8f9fa · content width 960px
+ *   body 0.875em sans-serif · h1/h2 serif with a hairline rule beneath
+ *
+ * LIGHT ONLY, deliberately. The previous file auto-switched on
+ * prefers-color-scheme, so anyone on a dark-mode machine got a dark wiki no
+ * matter what. Wikipedia ships light by default and treats dark as an explicit
+ * opt-in; a white page is part of what makes an encyclopedia read as one.
+ */
+
+:root {
+  --wiki-base: #202122;
+  --wiki-subtle: #54595d;
+  --wiki-faint: #72777d;
+  --wiki-link: #36c;
+  --wiki-link-visited: #6a60b0;
+  --wiki-link-hover: #447ff5;
+  --wiki-border: #a2a9b1;
+  --wiki-border-subtle: #c8ccd1;
+  --wiki-surface: #fff;
+  --wiki-neutral: #f8f9fa;
+  --wiki-header-bg: #eaecf0;
+  --wiki-page-bg: #f8f9fa;
+
+  --wiki-warning: #886425;
+  --wiki-error: #bf3c2c;
+  --wiki-success: #177860;
+
+  --wiki-serif: 'Linux Libertine', 'Georgia', 'Times New Roman', Times, serif;
+  --wiki-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --wiki-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --wiki-content-width: 960px;
+  --wiki-sidebar-width: 176px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--wiki-page-bg);
+  color: var(--wiki-base);
+  font-family: var(--wiki-sans);
+  font-size: 0.875em; /* 14px — Vector's base */
+  line-height: 1.6;
+}
+
+/* ── links: the most Wikipedia thing on the page ──────────────────────── */
+a {
+  color: var(--wiki-link);
+  text-decoration: none;
+}
+
+a:visited {
+  color: var(--wiki-link-visited);
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+a.new,
+a.missing {
+  color: var(--wiki-error);
+}
+
+/* ── shell ────────────────────────────────────────────────────────────── */
+.shell {
+  display: flex;
+  align-items: flex-start;
+}
+
+.sidebar {
+  width: var(--wiki-sidebar-width);
+  flex: none;
+  padding: 12px 0 40px 12px;
+  font-size: 0.875em;
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  overflow-y: auto;
+}
+
+.brand {
+  display: block;
+  font-family: var(--wiki-serif);
+  font-size: 1.6em;
+  line-height: 1.2;
+  color: var(--wiki-base);
+  padding: 0 8px 2px;
+}
+
+.brand:hover {
+  text-decoration: none;
+}
+
+.brand-sub {
+  display: block;
+  padding: 0 8px 20px;
+  color: var(--wiki-faint);
+  font-size: 0.85em;
+}
+
+.nav-portal {
+  margin-bottom: 16px;
+}
+
+.nav-label {
+  padding: 0 8px 4px;
+  color: var(--wiki-faint);
+  font-size: 0.85em;
+  border-bottom: 1px solid var(--wiki-border-subtle);
+  margin-bottom: 4px;
+}
+
+.nav-link {
+  display: block;
+  padding: 2px 8px;
+  color: var(--wiki-link);
+}
+
+.nav-link[aria-current='page'] {
+  font-weight: 700;
+  color: var(--wiki-base);
+}
+
+.nav-link[aria-current='page']:hover {
+  text-decoration: none;
+}
+
+.nav-count {
+  color: var(--wiki-faint);
+}
+
+.nav-link-empty {
+  color: var(--wiki-faint);
+}
+
+/* The article surface: white, bordered, centred — the encyclopedia page. */
+.main {
+  flex: 1;
+  min-width: 0;
+  background: var(--wiki-surface);
+  border-left: 1px solid var(--wiki-border-subtle);
+  min-height: 100vh;
+}
+
+.content {
+  max-width: var(--wiki-content-width);
+  padding: 20px 32px 64px;
+}
+
+/* ── article furniture ────────────────────────────────────────────────── */
+.firstHeading {
+  font-family: var(--wiki-serif);
+  font-size: 1.9em;
+  font-weight: normal;
+  line-height: 1.25;
+  margin: 0 0 0.25em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--wiki-border);
+}
+
+.tagline {
+  color: var(--wiki-subtle);
+  font-size: 0.9em;
+  margin: -0.15em 0 1em;
+}
+
+h2 {
+  /* Never let a section rule run underneath a floated infobox — the heading
+     starts below it instead, which is what MediaWiki's own layout does. */
+  clear: right;
+  font-family: var(--wiki-serif);
+  font-size: 1.5em;
+  font-weight: normal;
+  line-height: 1.3;
+  margin: 1.4em 0 0.5em;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid var(--wiki-border);
+}
+
+h3 {
+  font-family: var(--wiki-sans);
+  font-size: 1.1em;
+  font-weight: 700;
+  margin: 1.2em 0 0.4em;
+}
+
+h4 {
+  font-family: var(--wiki-sans);
+  font-size: 1em;
+  font-weight: 700;
+  margin: 1em 0 0.3em;
+}
+
+p {
+  margin: 0.5em 0 1em;
+}
+
+/* Wikipedia's lead: the subject in bold, first thing you read. */
+.lead {
+  margin-bottom: 1em;
+}
+
+.lead b,
+.lead strong {
+  font-weight: 700;
+}
+
+/* Hatnote — italic, indented; context above the article proper. */
+.hatnote {
+  padding-left: 1.6em;
+  margin-bottom: 1em;
+  font-style: italic;
+  color: var(--wiki-base);
+}
+
+/* Maintenance banner (MediaWiki's "ambox"). Manthana's editorial states map
+   onto this exactly: an unreviewed AI claim is Wikipedia's unsourced article,
+   and a disputed one is its contradiction notice. Far more legible than a
+   coloured chip — it says what is wrong and what to do about it. */
+.ambox {
+  border: 1px solid var(--wiki-border-subtle);
+  border-left: 10px solid var(--wiki-faint);
+  background: var(--wiki-neutral);
+  margin: 0 0 1em;
+  padding: 0.5em 1em;
+  font-size: 0.95em;
+}
+
+.ambox-content {
+  border-left-color: #fc3;
+}
+
+.ambox-style {
+  border-left-color: #36c;
+}
+
+.ambox-serious {
+  border-left-color: var(--wiki-error);
+}
+
+.ambox b {
+  font-weight: 700;
+}
+
+.ambox p {
+  margin: 0.2em 0;
+}
+
+/* Infobox — right-floated key facts. */
+.infobox {
+  float: right;
+  clear: right;
+  width: 22em;
+  max-width: 100%;
+  margin: 0 0 1em 1.5em;
+  padding: 0;
+  border: 1px solid var(--wiki-border);
+  background: var(--wiki-neutral);
+  font-size: 0.88em;
+  line-height: 1.5;
+  border-spacing: 3px;
+}
+
+.infobox-title {
+  font-family: var(--wiki-serif);
+  font-size: 1.25em;
+  text-align: center;
+  padding: 0.4em 0.6em;
+  background: var(--wiki-header-bg);
+  border-bottom: 1px solid var(--wiki-border);
+}
+
+.infobox-sub {
+  text-align: center;
+  padding: 0.3em 0.6em;
+  background: var(--wiki-header-bg);
+  font-weight: 700;
+  border-bottom: 1px solid var(--wiki-border);
+}
+
+.infobox table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.infobox th {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.3em 0.6em;
+  width: 38%;
+  font-weight: 700;
+}
+
+.infobox td {
+  vertical-align: top;
+  padding: 0.3em 0.6em;
+}
+
+.infobox tr + tr th,
+.infobox tr + tr td {
+  border-top: 1px solid var(--wiki-border-subtle);
+}
+
+/* Table of contents — bordered box after the lead. */
+.toc {
+  display: inline-block;
+  min-width: 240px;
+  border: 1px solid var(--wiki-border-subtle);
+  background: var(--wiki-neutral);
+  padding: 0.6em 1.2em 0.6em 0.8em;
+  margin: 0 0 1.2em;
+  font-size: 0.95em;
+}
+
+.toc-title {
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 0.3em;
+}
+
+.toc ol {
+  margin: 0;
+  padding-left: 1.6em;
+}
+
+.toc li {
+  margin: 0.1em 0;
+}
+
+/* ── tables ───────────────────────────────────────────────────────────── */
+.wikitable {
+  border-collapse: collapse;
+  border: 1px solid var(--wiki-border);
+  background: var(--wiki-surface);
+  margin: 0.5em 0 1.2em;
+  width: 100%;
+  font-size: 0.95em;
+}
+
+.wikitable > thead > tr > th,
+.wikitable > tbody > tr > th {
+  background: var(--wiki-header-bg);
+  border: 1px solid var(--wiki-border);
+  padding: 0.3em 0.6em;
+  text-align: left;
+  font-weight: 700;
+}
+
+.wikitable > tbody > tr > td {
+  border: 1px solid var(--wiki-border);
+  padding: 0.3em 0.6em;
+  vertical-align: top;
+}
+
+/* ── lists ────────────────────────────────────────────────────────────── */
+ul,
+ol {
+  margin: 0.3em 0 1em;
+  padding-left: 1.8em;
+}
+
+li {
+  margin-bottom: 0.15em;
+}
+
+/* Reference list — evidence, set small and numbered like citations. */
+.reflist {
+  font-size: 0.9em;
+  margin: 0.4em 0 1em;
+  padding-left: 2em;
+}
+
+.reflist li {
+  margin-bottom: 0.3em;
+}
+
+sup.reference {
+  font-size: 0.8em;
+  line-height: 1;
+  vertical-align: super;
+}
+
+sup.reference a {
+  padding: 0 1px;
+}
+
+/* Category footer. */
+.catlinks {
+  border: 1px solid var(--wiki-border-subtle);
+  background: var(--wiki-neutral);
+  padding: 0.4em 0.8em;
+  margin-top: 2.5em;
+  font-size: 0.95em;
+}
+
+.catlinks ul {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.catlinks li {
+  display: inline-block;
+  margin: 0;
+  padding: 0 0.6em;
+  border-left: 1px solid var(--wiki-border-subtle);
+}
+
+.catlinks li:first-child {
+  border-left: 0;
+  padding-left: 0.4em;
+}
+
+/* ── search ───────────────────────────────────────────────────────────── */
+.searchbar {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 1.2em;
+}
+
+.searchbar input {
+  flex: 1;
+  min-width: 0;
+}
+
+input[type='text'],
+input[type='password'],
+input[type='search'],
+textarea,
+select {
+  font-family: inherit;
+  font-size: 1em;
+  padding: 5px 8px;
+  border: 1px solid var(--wiki-border);
+  background: var(--wiki-surface);
+  color: var(--wiki-base);
+  border-radius: 2px;
+  width: 100%;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--wiki-link);
+  box-shadow: inset 0 0 0 1px var(--wiki-link);
+}
+
+textarea {
+  min-height: 140px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+label {
+  display: block;
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.field {
+  margin-bottom: 0.8em;
+}
+
+/* ── buttons ──────────────────────────────────────────────────────────── */
+button,
+.button {
+  font-family: inherit;
+  font-size: 1em;
+  padding: 5px 12px;
+  border: 1px solid var(--wiki-border);
+  background: var(--wiki-neutral);
+  color: var(--wiki-base);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--wiki-header-bg);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.button-progressive {
+  background: var(--wiki-link);
+  border-color: var(--wiki-link);
+  color: #fff;
+}
+
+.button-progressive:hover {
+  background: #447ff5;
+  border-color: #447ff5;
+}
+
+/* ── small helpers ────────────────────────────────────────────────────── */
+.subtle {
+  color: var(--wiki-subtle);
+}
+
+.faint {
+  color: var(--wiki-faint);
+  font-size: 0.95em;
+}
+
+.mono {
+  font-family: var(--wiki-mono);
+  font-size: 0.92em;
+}
+
+.empty {
+  color: var(--wiki-subtle);
+  font-style: italic;
+  margin: 0.4em 0 1em;
+}
+
+.editsection {
+  font-size: 0.75em;
+  font-weight: normal;
+  font-family: var(--wiki-sans);
+  margin-left: 0.6em;
+  white-space: nowrap;
+}
+
+.editsection::before {
+  content: '[';
+  color: var(--wiki-subtle);
+}
+
+.editsection::after {
+  content: ']';
+  color: var(--wiki-subtle);
+}
+
+/* Status wording, set inline as text rather than as coloured pills. */
+.status-unreviewed {
+  color: var(--wiki-warning);
+}
+.status-disputed {
+  color: var(--wiki-error);
+}
+.status-confirmed {
+  color: var(--wiki-success);
+}
+
+.error-box {
+  border: 1px solid var(--wiki-error);
+  border-left: 10px solid var(--wiki-error);
+  background: #fee7e6;
+  padding: 0.5em 1em;
+  margin-bottom: 1em;
+}
+
+.clear {
+  clear: both;
+}
+
+.scroll-x {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* ── article prose (markdown note bodies) ─────────────────────────────── */
+.md > *:first-child {
+  margin-top: 0;
+}
+
+.md > *:last-child {
+  margin-bottom: 0;
+}
+
+.md h1,
+.md h2 {
+  /* Never let a section rule run underneath a floated infobox — the heading
+     starts below it instead, which is what MediaWiki's own layout does. */
+  clear: right;
+  font-family: var(--wiki-serif);
+  font-weight: normal;
+  border-bottom: 1px solid var(--wiki-border);
+  padding-bottom: 0.2em;
+}
+
+.md h2 {
+  font-size: 1.4em;
+}
+
+.md h3 {
+  font-size: 1.05em;
+}
+
+.md code {
+  font-family: var(--wiki-mono);
+  font-size: 0.92em;
+  background: var(--wiki-neutral);
+  border: 1px solid var(--wiki-border-subtle);
+  border-radius: 2px;
+  padding: 1px 4px;
+}
+
+.md pre {
+  background: var(--wiki-neutral);
+  border: 1px solid var(--wiki-border-subtle);
+  padding: 1em;
+  overflow-x: auto;
+  line-height: 1.45;
+}
+
+.md pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+.md blockquote {
+  margin: 0 0 1em;
+  padding-left: 1em;
+  border-left: 3px solid var(--wiki-border-subtle);
+  color: var(--wiki-subtle);
+}
+
+.md table {
+  border-collapse: collapse;
+  border: 1px solid var(--wiki-border);
+  margin-bottom: 1em;
+}
+
+.md th,
+.md td {
+  border: 1px solid var(--wiki-border);
+  padding: 0.3em 0.6em;
+  text-align: left;
+}
+
+.md th {
+  background: var(--wiki-header-bg);
+}
+
+/* ── main page (portal) boxes ─────────────────────────────────────────── */
+.portal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1em;
+}
+
+.portal-box {
+  border: 1px solid var(--wiki-border-subtle);
+  background: var(--wiki-surface);
+  padding: 0.8em 1em 1em;
+}
+
+.portal-box > h2 {
+  margin-top: 0;
+  font-size: 1.2em;
+}
+
+.portal-lead {
+  border: 1px solid var(--wiki-border-subtle);
+  background: var(--wiki-neutral);
+  padding: 1em 1.2em;
+  margin-bottom: 1.2em;
+  text-align: center;
+}
+
+.portal-lead h1 {
+  font-family: var(--wiki-serif);
+  font-weight: normal;
+  font-size: 1.7em;
+  margin: 0 0 0.2em;
+  border: 0;
+}
+
+/* ── login ────────────────────────────────────────────────────────────── */
+.login-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 60px 20px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  border: 1px solid var(--wiki-border-subtle);
+  background: var(--wiki-surface);
+  padding: 24px;
+}
+
+/* ── responsive ───────────────────────────────────────────────────────── */
+@media (max-width: 850px) {
+  .shell {
+    display: block;
+  }
+  .sidebar {
+    width: auto;
+    position: static;
+    max-height: none;
+    border-bottom: 1px solid var(--wiki-border-subtle);
+    padding-bottom: 12px;
+  }
+  .main {
+    border-left: 0;
+  }
+  .content {
+    padding: 16px;
+  }
+  .infobox {
+    float: none;
+    width: auto;
+    margin: 0 0 1em;
+  }
+}

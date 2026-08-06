@@ -1,28 +1,25 @@
 'use client'
 
 /**
- * The wiki's vocabulary, on the design system.
+ * Encyclopedia furniture — TRANSITIONAL.
  *
- * These are the parts an article is assembled from — a maintenance notice, a facts
- * card, a contents list, a reference list, a category footer — plus the small
- * inline pieces (links to people, projects, sessions).
+ * These are the parts a Wikipedia article is assembled from — hatnote, infobox,
+ * maintenance banner, table of contents, reference list, category footer — plus
+ * the small inline pieces (links to people, projects, sessions).
  *
- * The names are kept from the encyclopedia version because they carry domain
- * meaning that generic component names lose: `Ambox` is a notice about an ENTRY's
- * trustworthiness, `Reflist` is the sessions a claim stands on, `Citation` is the
- * superscript that points at one. What changed is the styling underneath, not what
- * any of them means.
+ * The 13 wiki pages still import from here and still render against
+ * `app/legacy-wiki.css`. Phase 5 moves them onto `components/manthana/*`, which
+ * is the same vocabulary rebuilt on shadcn, and deletes this file.
  *
- * The formatting rules live in `lib/format.ts` and are re-exported here, so the
- * wording survives the restyle untouched — that split is exactly why this file
- * could be rewritten without re-deciding how a session gets titled.
+ * The formatting rules that used to live here now live in `lib/format.ts` and are
+ * re-exported below, so nothing importing them had to change. That split is the
+ * point: the wording decisions are pure functions and must survive the restyle
+ * untouched, while everything visual below is scheduled for replacement.
  */
 
 import Link from 'next/link'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Citations, EmptyState, Mono, Notice, Tag } from '@/components/manthana'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   PENDING_TITLE,
   clip,
@@ -35,45 +32,27 @@ import {
   when,
 } from '@/lib/format'
 import type { Note, NoteStatus, Session } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
-export {
-  PENDING_TITLE, clip, isPending, leadParagraph, onDate, restOfBody, sessionTitle,
-  shortName, when,
-}
+export { PENDING_TITLE, clip, isPending, leadParagraph, onDate, restOfBody, sessionTitle, shortName, when }
 
 /* ── inline links ───────────────────────────────────────────────────────── */
 
-const LINK = 'text-primary underline-offset-4 hover:underline'
-
 export function PersonLink({ actor }: { actor: string }) {
-  return (
-    <Link className={LINK} href={`/people/${encodeURIComponent(actor)}`}>
-      {shortName(actor)}
-    </Link>
-  )
+  return <Link href={`/people/${encodeURIComponent(actor)}`}>{shortName(actor)}</Link>
 }
 
 export function ProjectLink({ project }: { project: string }) {
-  if (!project) return <span className="text-muted-foreground">none</span>
-  return (
-    <Link className={LINK} href={`/projects/${encodeURIComponent(project)}`}>
-      {project}
-    </Link>
-  )
+  if (!project) return <span className="faint">none</span>
+  return <Link href={`/projects/${encodeURIComponent(project)}`}>{project}</Link>
 }
 
 export function SessionLink({ session }: { session: Session }) {
-  return (
-    <Link className={LINK} href={`/sessions/${session.id}`}>
-      {sessionTitle(session)}
-    </Link>
-  )
+  return <Link href={`/sessions/${session.id}`}>{sessionTitle(session)}</Link>
 }
 
 /** Comma-separated links, with "and" before the last — reads as a sentence. */
 export function PersonList({ actors }: { actors: string[] }) {
-  if (!actors.length) return <span className="text-muted-foreground">nobody</span>
+  if (!actors.length) return <span className="faint">nobody</span>
   return (
     <>
       {actors.map((a, i) => (
@@ -96,25 +75,22 @@ export function Title({
   tagline?: React.ReactNode
 }) {
   return (
-    <div className="mb-6 border-b pb-3">
-      <h1 className="text-2xl font-semibold tracking-tight">{children}</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        {tagline ?? 'From the Manthana wiki'}
-      </p>
-    </div>
+    <>
+      <h1 className="firstHeading">{children}</h1>
+      <p className="tagline">{tagline ?? 'From the Manthana wiki'}</p>
+    </>
   )
 }
 
-/** Context above the article proper. */
 export function Hatnote({ children }: { children: React.ReactNode }) {
-  return <p className="mb-4 pl-6 text-sm italic text-muted-foreground">{children}</p>
+  return <div className="hatnote">{children}</div>
 }
 
 /**
- * A notice about the ENTRY's trustworthiness — not about the reader's last action.
- * Kept as a left-edge rule rather than a filled panel: these sit above article
- * text, and a saturated block at the top of every unreviewed note would make the
- * common case look like an error.
+ * Maintenance banner. Manthana's editorial states map onto MediaWiki's ambox
+ * almost exactly — an unreviewed AI claim is an unsourced article, and a
+ * disputed one is a contradiction notice — so the notice says what is wrong and
+ * what would fix it, instead of leaving a reader to decode a coloured dot.
  */
 export function Ambox({
   kind = 'content',
@@ -123,39 +99,35 @@ export function Ambox({
   kind?: 'content' | 'style' | 'serious'
   children: React.ReactNode
 }) {
-  const tone = kind === 'serious' ? 'disputed' : kind === 'content' ? 'unreviewed' : 'info'
-  return <Notice tone={tone}>{children}</Notice>
+  return <div className={`ambox ambox-${kind}`}>{children}</div>
 }
 
 export function NoteBanners({ note }: { note: Note }) {
   return (
-    <div className="mb-4 space-y-3">
+    <>
       {note.status === 'disputed' && (
-        <Notice tone="disputed" title="The accuracy of this entry is disputed.">
-          Later sessions contradict it. The conflicting evidence is listed under{' '}
-          <a className={LINK} href="#disputed">
-            Conflicting evidence
-          </a>
-          ; correcting the text resolves the dispute.
-        </Notice>
+        <Ambox kind="serious">
+          <b>The accuracy of this entry is disputed.</b> Later sessions contradict it. The
+          conflicting evidence is listed under <a href="#disputed">Conflicting evidence</a>;
+          correcting the text resolves the dispute.
+        </Ambox>
       )}
       {note.status === 'candidate' && (
-        <Notice tone="unreviewed" title="This entry has not been reviewed by a human.">
-          Manthana wrote it from the sessions cited below. Read it against that evidence,
-          then correct or confirm it.
-        </Notice>
+        <Ambox kind="content">
+          <b>This entry has not been reviewed by a human.</b> Manthana wrote it from the
+          sessions cited below. Read it against that evidence, then correct or confirm it.
+        </Ambox>
       )}
       {note.status === 'stale' && (
-        <Notice title="The evidence behind this entry has been purged.">
-          It is kept because nobody has disputed it, but the sessions it came from can no
-          longer be read.
-        </Notice>
+        <Ambox>
+          <b>The evidence behind this entry has been purged.</b> It is kept because nobody has
+          disputed it, but the sessions it came from can no longer be read.
+        </Ambox>
       )}
-    </div>
+    </>
   )
 }
 
-/** Key facts about a subject, floated beside the article on wide screens. */
 export function Infobox({
   title,
   subtitle,
@@ -167,37 +139,33 @@ export function Infobox({
 }) {
   const shown = rows.filter(([, v]) => v !== null && v !== undefined && v !== '')
   return (
-    <Card className="mb-6 w-full lg:float-right lg:clear-right lg:ml-6 lg:w-80">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">{title}</CardTitle>
-        {subtitle && <p className="text-sm text-muted-foreground">{subtitle}</p>}
-      </CardHeader>
-      <CardContent>
-        <dl className="grid grid-cols-[minmax(0,8rem)_1fr] gap-x-4 gap-y-2 text-sm">
+    <div className="infobox">
+      <div className="infobox-title">{title}</div>
+      {subtitle && <div className="infobox-sub">{subtitle}</div>}
+      <table>
+        <tbody>
           {shown.map(([label, value]) => (
-            <div key={label} className="contents">
-              <dt className="text-muted-foreground">{label}</dt>
-              <dd className="min-w-0 break-words">{value}</dd>
-            </div>
+            <tr key={label}>
+              <th scope="row">{label}</th>
+              <td>{value}</td>
+            </tr>
           ))}
-        </dl>
-      </CardContent>
-    </Card>
+        </tbody>
+      </table>
+    </div>
   )
 }
 
-/** Contents. Rendered only with enough sections to be worth navigating. */
+/** Contents box. Rendered only with enough sections to be worth navigating. */
 export function Toc({ sections }: { sections: Array<{ id: string; label: string }> }) {
   if (sections.length < 3) return null
   return (
-    <nav className="mb-6 inline-block rounded-lg border bg-muted/40 px-5 py-3">
-      <div className="mb-1 text-sm font-medium">Contents</div>
-      <ol className="list-decimal space-y-0.5 pl-5 text-sm">
+    <nav className="toc">
+      <div className="toc-title">Contents</div>
+      <ol>
         {sections.map((s) => (
           <li key={s.id}>
-            <a className={LINK} href={`#${s.id}`}>
-              {s.label}
-            </a>
+            <a href={`#${s.id}`}>{s.label}</a>
           </li>
         ))}
       </ol>
@@ -217,39 +185,35 @@ export function Section({
   children: React.ReactNode
 }) {
   return (
-    <section className="clear-right">
-      <div className="mt-8 mb-3 flex items-baseline justify-between gap-4 border-b pb-2">
-        <h2 id={id} className="text-lg font-semibold tracking-tight">
-          {title}
-        </h2>
-        {action && <div className="text-sm text-muted-foreground">{action}</div>}
-      </div>
+    <section>
+      <h2 id={id}>
+        {title}
+        {action && <span className="editsection">{action}</span>}
+      </h2>
       {children}
     </section>
   )
 }
 
-/** Sources — the sessions a claim stands on. */
+/** Sources, as a numbered reference list. */
 export function Reflist({ sessions }: { sessions: Session[] }) {
   if (!sessions.length) return null
   return (
-    <Citations>
+    <ol className="reflist">
       {sessions.map((s) => (
         <li key={s.id} id={`ref-${s.id}`}>
           <SessionLink session={s} /> — <PersonLink actor={s.actor} />,{' '}
           <ProjectLink project={s.project} />, {onDate(s.started_at)} ({s.outcome})
         </li>
       ))}
-    </Citations>
+    </ol>
   )
 }
 
 export function Citation({ n, id }: { n: number; id: string }) {
   return (
-    <sup className="ml-0.5 align-super text-[0.7em] leading-none">
-      <a className="text-primary hover:underline" href={`#ref-${id}`}>
-        [{n}]
-      </a>
+    <sup className="reference">
+      <a href={`#ref-${id}`}>[{n}]</a>
     </sup>
   )
 }
@@ -257,39 +221,34 @@ export function Citation({ n, id }: { n: number; id: string }) {
 export function CatLinks({ categories }: { categories: Array<{ label: string; href?: string }> }) {
   if (!categories.length) return null
   return (
-    <div className="mt-10 flex flex-wrap items-center gap-2 border-t pt-4 text-sm">
-      <span className="text-muted-foreground">Categories</span>
-      {categories.map((c) => (
-        <Tag key={c.label}>
-          {c.href ? (
-            <Link className="hover:underline" href={c.href}>
-              {c.label}
-            </Link>
-          ) : (
-            c.label
-          )}
-        </Tag>
-      ))}
+    <div className="catlinks">
+      <b>Categories</b>:{' '}
+      <ul>
+        {categories.map((c) => (
+          <li key={c.label}>{c.href ? <Link href={c.href}>{c.label}</Link> : c.label}</li>
+        ))}
+      </ul>
     </div>
   )
 }
 
-/** Project status as a word, computed server-side from timestamps. */
+/** Status as text with the wiki's editorial colours — active green, stale amber.
+ *  Computed from timestamps server-side; this only words it. */
 export function StatusWord({ status }: { status: 'active' | 'stale' }) {
   return (
-    <span className={cn('font-medium', status === 'active' ? 'text-success' : 'text-warning')}>
+    <span className={status === 'active' ? 'status-confirmed' : 'status-unreviewed'}>
       {status}
     </span>
   )
 }
 
 export function Empty({ children }: { children: React.ReactNode }) {
-  return <EmptyState>{children}</EmptyState>
+  return <p className="empty">{children}</p>
 }
 
 export function Markdown({ children }: { children: string }) {
   return (
-    <div className="prose-manthana">
+    <div className="md">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
     </div>
   )
@@ -297,16 +256,21 @@ export function Markdown({ children }: { children: string }) {
 
 /* ── list rows ──────────────────────────────────────────────────────────── */
 
-/** Human wording for an editorial state. Tone names a product state, not a colour. */
+/**
+ * Legacy wording + legacy CSS class, kept so the unported pages keep rendering.
+ * `lib/format.ts`'s `statusWord` is the replacement: it returns a product TONE
+ * (`distilled`, `warning`, `danger`) rather than a stylesheet class name, so the
+ * meaning no longer travels as a colour.
+ */
 export function statusWord(note: Note): { text: string; cls: string } | null {
   const map: Partial<Record<NoteStatus, { text: string; cls: string }>> = {
-    candidate: { text: 'unreviewed', cls: 'text-warning' },
-    disputed: { text: 'disputed', cls: 'text-destructive' },
-    stale: { text: 'stale', cls: 'text-muted-foreground' },
+    candidate: { text: 'unreviewed', cls: 'status-unreviewed' },
+    disputed: { text: 'disputed', cls: 'status-disputed' },
+    stale: { text: 'stale', cls: 'faint' },
   }
   const s = map[note.status]
   if (s) return s
-  if (note.confirmed_by) return { text: 'confirmed', cls: 'text-distilled' }
+  if (note.confirmed_by) return { text: 'confirmed', cls: 'status-confirmed' }
   return null
 }
 
@@ -315,37 +279,30 @@ export function NoteRow({ note, movedFrom }: { note: Note; movedFrom?: string })
   const status = statusWord(note)
   const gloss = note.body.length > 200 ? `${note.body.slice(0, 200).trimEnd()}…` : note.body
   return (
-    <li className="mb-3">
-      <Link className={LINK} href={`/notes/${note.id}`}>
-        {note.title}
-      </Link>
+    <li style={{ marginBottom: '0.6em' }}>
+      <Link href={`/notes/${note.id}`}>{note.title}</Link>
       {note.kind === 'benchmark' && note.value && (
         <>
-          {' — '}
-          <Mono>
+          {' '}
+          —{' '}
+          <span className="mono">
             {movedFrom && `${movedFrom} → `}
             <b>{note.value}</b>
-          </Mono>
+          </span>
         </>
       )}
-      {status && (
-        <>
-          {' ('}
-          <span className={cn('font-medium', status.cls)}>{status.text}</span>
-          {')'}
-        </>
-      )}
-      <div className="text-sm text-muted-foreground">{gloss}</div>
+      {status && <> ({<span className={status.cls}>{status.text}</span>})</>}
+      <div className="subtle">{gloss}</div>
     </li>
   )
 }
 
 export function SessionRow({ session }: { session: Session }) {
   return (
-    <li className="mb-1.5">
+    <li style={{ marginBottom: '0.35em' }}>
       <SessionLink session={session} /> — <PersonLink actor={session.actor} />,{' '}
       <ProjectLink project={session.project} />, {when(session.started_at)}{' '}
-      <span className="text-muted-foreground">
+      <span className="faint">
         ({isPending(session) ? 'not yet summarised' : session.outcome})
       </span>
     </li>

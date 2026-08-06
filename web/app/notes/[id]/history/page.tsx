@@ -15,14 +15,6 @@ import { use, useState } from 'react'
 import { post } from '@/lib/api'
 import { Wiki } from '@/components/Loader'
 import { Hatnote, Markdown, Title, onDate, statusWord } from '@/components/primitives'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import type { Note } from '@/lib/types'
 
 export default function NoteHistory({ params }: { params: Promise<{ id: string }> }) {
@@ -42,34 +34,34 @@ export default function NoteHistory({ params }: { params: Promise<{ id: string }
               Back to <Link href={`/notes/${current.id}`}>the entry</Link>.
             </Hatnote>
 
-            <p className="mb-4">
+            <p className="lead">
               This entry has <b>{versions.length}</b> revision
               {versions.length === 1 ? '' : 's'}. Restoring an earlier one publishes its text as
               a new revision — nothing is erased.
             </p>
 
-            <div className="overflow-x-auto rounded-lg border"><Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Revision</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Author</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+            <table className="wikitable">
+              <thead>
+                <tr>
+                  <th>Revision</th>
+                  <th>Date</th>
+                  <th>Author</th>
+                  <th>Status</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
                 {versions.map((v, i) => {
                   const status = statusWord(v)
                   return (
-                    <TableRow key={v.id}>
-                      <TableCell style={{ whiteSpace: 'nowrap' }}>
+                    <tr key={v.id}>
+                      <td style={{ whiteSpace: 'nowrap' }}>
                         v{v.version} {i === 0 && <b>(current)</b>}
-                      </TableCell>
-                      <TableCell style={{ whiteSpace: 'nowrap' }}>{onDate(v.updated_at)}</TableCell>
-                      <TableCell>{v.author ?? 'Manthana'}</TableCell>
-                      <TableCell className={status?.cls}>{status?.text ?? 'established'}</TableCell>
-                      <TableCell>
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{onDate(v.updated_at)}</td>
+                      <td>{v.author ?? 'Manthana'}</td>
+                      <td className={status?.cls}>{status?.text ?? 'established'}</td>
+                      <td>
                         {i !== 0 && (
                           <button
                             disabled={!!busy}
@@ -85,18 +77,18 @@ export default function NoteHistory({ params }: { params: Promise<{ id: string }
                             {busy === v.id ? 'Restoring…' : 'restore'}
                           </button>
                         )}
-                      </TableCell>
-                    </TableRow>
+                      </td>
+                    </tr>
                   )
                 })}
-              </TableBody>
-            </Table></div>
+              </tbody>
+            </table>
 
             {versions.map((v) => (
               <section key={v.id}>
                 <h2>
                   Revision {v.version}
-                  <span className="ml-2 text-xs font-normal">
+                  <span className="editsection">
                     {v.author ?? 'Manthana'}, {onDate(v.updated_at)}
                   </span>
                 </h2>

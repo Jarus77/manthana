@@ -1,27 +1,26 @@
 'use client'
 
 /**
- * Wiki chrome: a quiet left rail and a reading surface.
+ * Wiki chrome: a plain-text left rail and a white article surface.
  *
- * The restraint is doing work. Navigation stays recessive so the article is the
- * loudest thing on screen, which is the opposite of the console, where the chrome
- * has jobs of its own. The rail deliberately does NOT enumerate note kinds — a
- * taxonomy-shaped sidebar made the reader choose a category before they could read
- * anything, which is backwards for an article surface.
+ * MediaWiki's sidebar is a stack of "portals" — small labelled groups of plain
+ * blue links, no icons, no pills, no counts styled as badges. That restraint is
+ * doing work: the navigation stays out of the way so the article is the loudest
+ * thing on screen, which is exactly backwards from a dashboard, where the
+ * chrome competes with the content.
  *
- * That principle survived the move onto the design system; what changed is that
- * the styling now comes from the same tokens as everything else, so the wiki
- * follows the theme instead of being permanently light.
+ * The rail is two portals: a fixed NAV (main page, sessions, people, projects)
+ * and an identity portal built from /me. It deliberately does NOT enumerate the
+ * org's note kinds — that navigation was removed because a taxonomy-shaped
+ * sidebar made the reader choose a category before they could read anything,
+ * which is the opposite of what an article surface wants.
  */
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import useSWR from 'swr'
-import { Logo } from '@/components/Logo'
-import { ThemeToggle } from '@/components/ThemeToggle'
 import { fetcher, post } from '@/lib/api'
 import type { Me } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 const NAV = [
   { href: '/home', label: 'Main page' },
@@ -30,21 +29,17 @@ const NAV = [
   { href: '/projects', label: 'Projects' },
 ]
 
-function NavLink({ href, label }: { href: string; label: string }) {
+function NavLink({ href, label, count }: { href: string; label: string; count?: number }) {
   const pathname = usePathname()
-  const active = href === '/home' ? pathname === '/home' : pathname.startsWith(href)
+  const active = href === '/' ? pathname === '/' : pathname.startsWith(href)
   return (
     <Link
-      className={cn(
-        'block rounded-md px-2 py-1 text-sm transition-colors',
-        active
-          ? 'bg-muted font-medium text-foreground'
-          : 'text-muted-foreground hover:text-foreground',
-      )}
+      className={`nav-link${count === 0 ? ' nav-link-empty' : ''}`}
       href={href}
       aria-current={active ? 'page' : undefined}
     >
       {label}
+      {count !== undefined && count > 0 && <span className="nav-count"> ({count})</span>}
     </Link>
   )
 }
@@ -54,9 +49,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   // Routes that draw their own full-page chrome, and so must not be framed by
   // this rail: /login has no session yet, / is the marketing page, /design is the
-  // design system itself, the onboarding routes give someone mid-signup exactly
-  // one thing to do, and the console has its own nav. Asking /me on any of them
-  // would produce a 401 the page has no use for.
+  // system scheduled to replace this one, and the onboarding routes give someone
+  // mid-signup exactly one thing to do. Asking /me on any of them would produce a
+  // 401 the page has no use for.
   const bare =
     pathname === '/login' ||
     pathname === '/design' ||
@@ -73,77 +68,40 @@ export function Shell({ children }: { children: React.ReactNode }) {
   if (bare) return <>{children}</>
 
   return (
-    <div className="min-h-screen bg-background font-sans text-foreground">
-      {/* Mobile: the rail collapses to a header rather than stacking a column of
-          links above every article. Outside the flex row on purpose — a full-width
-          child inside it would sit beside the content, not above it. */}
-      <header className="flex items-center justify-between gap-2 border-b px-4 py-3 md:hidden">
-        <Link href="/home">
-          <Logo size={18} />
+    <div className="shell">
+      <nav className="sidebar">
+        <Link className="brand" href="/home">
+          Manthana
         </Link>
-        <div className="flex items-center gap-0.5">
+        <span className="brand-sub">{me?.org_id ?? 'team wiki'}</span>
+
+        <div className="nav-portal">
+          <div className="nav-label">Navigation</div>
           {NAV.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="rounded-md px-1.5 py-1 text-xs text-muted-foreground"
-            >
-              {item.label.replace('Recent ', '')}
-            </Link>
+            <NavLink key={item.href} {...item} />
           ))}
-          <ThemeToggle />
         </div>
-      </header>
 
-      <div className="mx-auto flex max-w-6xl items-start gap-8 px-4 md:px-6">
-        <nav className="sticky top-0 hidden w-44 shrink-0 py-6 md:block">
-          <Link href="/home" className="mb-1 block">
-            <Logo size={20} />
-          </Link>
-          <div className="mb-6 pl-1 text-xs text-muted-foreground">
-            {me?.org_id ?? 'team wiki'}
+        {me && (
+          <div className="nav-portal">
+            <div className="nav-label">{me.actor ?? me.role}</div>
+            <a
+              className="nav-link"
+              href="#"
+              onClick={async (e) => {
+                e.preventDefault()
+                await post('/logout')
+                router.replace('/login')
+              }}
+            >
+              Log out
+            </a>
           </div>
+        )}
+      </nav>
 
-          <div className="mb-6 space-y-0.5">
-            <div className="mb-1 border-b pb-1 pl-2 text-xs text-muted-foreground">
-              Navigation
-            </div>
-            {NAV.map((item) => (
-              <NavLink key={item.href} {...item} />
-            ))}
-          </div>
-
-          {me && (
-            <div className="space-y-0.5">
-              <div className="mb-1 border-b pb-1 pl-2 text-xs text-muted-foreground">
-                {me.actor ?? me.role}
-              </div>
-              {me.role !== 'engineer' && (
-                <Link
-                  className="block rounded-md px-2 py-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
-                  href="/console"
-                >
-                  Console
-                </Link>
-              )}
-              <button
-                type="button"
-                className="block w-full rounded-md px-2 py-1 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
-                onClick={async () => {
-                  await post('/logout')
-                  router.replace('/login')
-                }}
-              >
-                Log out
-              </button>
-              <div className="pt-2 pl-1">
-                <ThemeToggle />
-              </div>
-            </div>
-          )}
-        </nav>
-
-        <main className="min-w-0 flex-1 py-6 md:border-l md:pl-8">{children}</main>
+      <div className="main">
+        <div className="content">{children}</div>
       </div>
     </div>
   )
