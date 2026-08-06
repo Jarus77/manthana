@@ -17,15 +17,22 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
+from fastapi.testclient import TestClient
 from manthana.schemas import EngineeringCompaction, NoteKind, NoteSource, Outcome, Surface
-from manthana.server import ServerConfig, ServerStore
-from manthana.server.llm import LLMProvider, ScriptedProvider
+from manthana.server import ServerConfig, ServerStore, create_app
+from manthana.server.llm import LLMProvider, MockProvider, ScriptedProvider
 from manthana.server.overview import (
+    ARTICLE_COMING,
+    ARTICLE_FAILED,
+    ARTICLE_NO_SESSIONS,
+    ARTICLE_TOO_THIN,
     OverviewStats,
+    article_outlook,
     build_overview_note,
     contributors_hash,
     refresh_org_overviews,
 )
+from manthana.server.storage import InMemoryObjectStore
 
 _NOW = datetime(2026, 3, 1, tzinfo=UTC)
 _GOOD = json.dumps(
@@ -211,6 +218,63 @@ def test_unusable_payload_is_a_bounded_failure_then_abandoned() -> None:
     assert states.get("scribe") == "abandoned"
 
 
+# ── what the page is allowed to promise a reader ─────────────────────────
+def test_outlook_promises_an_article_only_while_one_is_actually_coming() -> None:
+    """The page used to say "it appears on the next pass" whenever any session
+    was summarised. These are the two states where that sentence is a standing
+    lie: the pass has settled on the exact session set and skips it from here."""
+    store = _store(_comp("c1"), _comp("c2"))
+    cfg = _config()
+
+    # Never attempted — the promise is true.
+    assert article_outlook(store, cfg, "o1", "scribe") == ARTICLE_COMING
+
+    _run(store, _CountingProvider([json.dumps({"insufficient": True})]))
+    assert article_outlook(store, cfg, "o1", "scribe") == ARTICLE_TOO_THIN
+
+
+def test_outlook_reports_failure_once_the_pass_has_given_up() -> None:
+    store = _store(_comp("c1"), _comp("c2"))
+    cfg = _config(overview_max_attempts=2)
+    for _ in range(3):
+        refresh_org_overviews(
+            store, _CountingProvider(["not json"] * 10), cfg, org_id="o1", limit=10, now=_NOW
+        )
+    assert article_outlook(store, cfg, "o1", "scribe") == ARTICLE_FAILED
+
+
+def test_new_work_revives_too_thin_but_never_revives_a_given_up_project() -> None:
+    """The asymmetry the outlook must not paper over. ``insufficient`` is stored
+    WITH the contributors hash, so new sessions expire the verdict; ``abandoned``
+    is checked before the hash is read, so nothing but an operator revives it.
+    Say the wrong one and the page is lying again in the other direction."""
+    cfg = _config()
+
+    thin = _store(_comp("c1"), _comp("c2"))
+    _run(thin, _CountingProvider([json.dumps({"insufficient": True})]))
+    assert article_outlook(thin, cfg, "o1", "scribe") == ARTICLE_TOO_THIN
+    thin.ingest_compaction(_comp("c3"), org_id="o1", team_id="t1")
+    assert article_outlook(thin, cfg, "o1", "scribe") == ARTICLE_COMING
+
+    gone = _store(_comp("c1"), _comp("c2"))
+    hard = _config(overview_max_attempts=2)
+    for _ in range(3):
+        refresh_org_overviews(
+            gone, _CountingProvider(["not json"] * 10), hard, org_id="o1", limit=10, now=_NOW
+        )
+    gone.ingest_compaction(_comp("c3"), org_id="o1", team_id="t1")
+    assert article_outlook(gone, hard, "o1", "scribe") == ARTICLE_FAILED
+
+    # …and the operator's escape hatch is the only thing that changes that.
+    assert gone.clear_overview_state("o1", "scribe") is True
+    assert article_outlook(gone, hard, "o1", "scribe") == ARTICLE_COMING
+
+
+def test_outlook_distinguishes_no_readable_work_from_a_verdict() -> None:
+    store = _store(_comp("c1"))  # min is 2
+    assert article_outlook(store, _config(), "o1", "scribe") == ARTICLE_NO_SESSIONS
+
+
 def test_junk_project_slugs_are_never_described() -> None:
     store = _store(_comp("c1", project="unknown"), _comp("c2", project="unknown"))
     provider = _CountingProvider([_GOOD])
@@ -356,3 +420,93 @@ def test_prior_article_is_fed_back_into_the_prompt() -> None:
     _run(store, provider)
     assert "THE CURRENT ARTICLE" in provider.prompts[1]
     assert "Whisper wrapper wired" in provider.prompts[1]
+
+
+# ── the operator's view ──────────────────────────────────────────────────
+def _admin_client(store: ServerStore) -> TestClient:
+    return TestClient(
+        create_app(
+            ServerConfig(jwt_secret="x" * 40, admin_token="adm"),
+            store,
+            InMemoryObjectStore(),
+            MockProvider("{}"),
+        ),
+        follow_redirects=False,
+    )
+
+
+def test_admin_overview_names_the_projects_that_will_never_get_an_article() -> None:
+    """Why this endpoint exists. Enrichment and consolidation are keyed on rows,
+    so their backlogs are countable; an overview is keyed on a project, which is
+    a string with no row of its own, so "no article yet" and "skipped forever"
+    look identical from outside. Diagnosing one such project in production took
+    an hour of reading `skipped_unchanged` counts out of CloudWatch."""
+    # list_projects is sorted, so scribe is offered the good response and zulu
+    # the verdict — the scripted provider has no other way to tell them apart.
+    store = _store(
+        _comp("c1"), _comp("c2"), _comp("d1", project="zulu"), _comp("d2", project="zulu")
+    )
+    refresh_org_overviews(
+        store,
+        _CountingProvider([_GOOD, json.dumps({"insufficient": True})]),
+        _config(),
+        org_id="o1",
+        limit=10,
+        now=_NOW,
+    )
+
+    client = _admin_client(store)
+    assert client.get("/v1/admin/overview?org_id=o1").status_code in (401, 403, 422)
+
+    body = client.get(
+        "/v1/admin/overview?org_id=o1", headers={"x-admin-token": "adm"}
+    ).json()
+    assert body["projects"] == 2 and body["described"] == 1
+    assert body["never_retried"] == ["zulu"]
+    by_project = {r["project"]: r for r in body["detail"]}
+    assert by_project["scribe"]["has_article"] is True
+    assert by_project["zulu"]["state"] == "insufficient"
+    assert by_project["zulu"]["has_article"] is False
+
+
+def test_admin_overview_reports_a_never_attempted_project_as_such() -> None:
+    """The state that has no row. Reporting it as an absence is what made the
+    silent-skip case invisible; it is a first-class answer here."""
+    store = _store(_comp("c1"), _comp("c2"))
+    body = _admin_client(store).get(
+        "/v1/admin/overview?org_id=o1", headers={"x-admin-token": "adm"}
+    ).json()
+    assert body["detail"] == [
+        {
+            "project": "scribe",
+            "has_article": False,
+            "state": "never_attempted",
+            "attempts": 0,
+            "detail": "",
+            "updated_at": "",
+        }
+    ]
+
+
+def test_admin_retry_is_the_only_way_out_of_abandoned() -> None:
+    store = _store(_comp("c1"), _comp("c2"))
+    cfg = _config(overview_max_attempts=2)
+    for _ in range(3):
+        refresh_org_overviews(
+            store, _CountingProvider(["not json"] * 10), cfg, org_id="o1", limit=10, now=_NOW
+        )
+    assert article_outlook(store, cfg, "o1", "scribe") == ARTICLE_FAILED
+
+    client = _admin_client(store)
+    assert client.post("/v1/admin/overview/retry?org_id=o1&project=scribe").status_code in (
+        401, 403, 422
+    )
+    resp = client.post(
+        "/v1/admin/overview/retry?org_id=o1&project=scribe", headers={"x-admin-token": "adm"}
+    )
+    assert resp.status_code == 200 and resp.json()["cleared"] is True
+    assert article_outlook(store, cfg, "o1", "scribe") == ARTICLE_COMING
+    # Idempotent: clearing nothing says so rather than pretending it worked.
+    assert client.post(
+        "/v1/admin/overview/retry?org_id=o1&project=scribe", headers={"x-admin-token": "adm"}
+    ).json()["cleared"] is False

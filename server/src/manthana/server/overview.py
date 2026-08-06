@@ -69,6 +69,53 @@ _log = logging.getLogger(__name__)
 #: States that mean "nothing to do unless the work changes".
 _SETTLED = ("done", "human_held", "insufficient")
 
+#: What a reader should be told about a project that has no article yet. These
+#: exist because "it appears on the next pass" is a PROMISE, and two of the
+#: pass's own states break it: ``insufficient`` and ``abandoned`` both record the
+#: contributors hash and are then skipped forever, so the sentence would be a
+#: standing lie on exactly the pages whose readers most need the truth.
+ARTICLE_COMING = "coming"  # the pass will write one
+ARTICLE_NO_SESSIONS = "no_sessions"  # nothing readable to write from yet
+ARTICLE_TOO_THIN = "too_thin"  # judged insufficient, and nothing has changed since
+ARTICLE_FAILED = "failed"  # attempts exhausted, and nothing has changed since
+
+
+def article_outlook(
+    store: ServerStore, config: ServerConfig, org_id: str, project: str
+) -> str:
+    """Whether an article is actually coming for a project that has none.
+
+    Deliberately lives beside the pass rather than in ``pages.py``: it answers a
+    question only the pass's own rules can answer, and if the two ever disagree
+    the page starts lying again. It mirrors ``refresh_org_overviews``'s skip
+    checks IN THE SAME ORDER, which is what makes the two asymmetric states
+    readable:
+
+      * ``insufficient`` is recorded WITH the contributors hash, so new work
+        changes the hash and the project is described after all;
+      * ``abandoned`` is checked before the hash is even looked at, so no amount
+        of new work revives it — only ``clear_overview_state`` does.
+
+    That asymmetry is deliberate (a verdict about thin work should expire; a
+    string of hard failures should not re-spend money by itself), and it is
+    exactly the sort of thing a page must not paper over.
+    """
+    comps = contributing_compactions(
+        store, org_id, project, limit=config.overview_session_limit
+    )
+    if len(comps) < config.overview_min_sessions:
+        return ARTICLE_NO_SESSIONS
+    st = store.get_overview_state(org_id, project)
+    if st is None:
+        return ARTICLE_COMING
+    if st.state == "abandoned" or (
+        st.state == "failed" and st.attempts >= config.overview_max_attempts
+    ):
+        return ARTICLE_FAILED
+    if st.state == "insufficient" and st.contributors_hash == contributors_hash(comps):
+        return ARTICLE_TOO_THIN
+    return ARTICLE_COMING
+
 
 @dataclass
 class OverviewStats:
@@ -444,7 +491,12 @@ def run_overview_pass(
 
 
 __all__ = [
+    "ARTICLE_COMING",
+    "ARTICLE_FAILED",
+    "ARTICLE_NO_SESSIONS",
+    "ARTICLE_TOO_THIN",
     "OverviewStats",
+    "article_outlook",
     "build_overview_note",
     "build_overview_prompt",
     "contributing_compactions",

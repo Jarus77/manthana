@@ -54,8 +54,13 @@ PERSON_SESSIONS_PER_PROJECT = 3
 PERSON_SCAN_LIMIT = 500
 
 
-def _article_lead(body: str) -> str:
-    """The article's "What this is" line: first non-heading, non-empty line."""
+def article_lead(body: str) -> str:
+    """The article's "What this is" line: first non-heading, non-empty line.
+
+    Public because two different indexes now describe a project by it — the
+    person page and the project list — and both must clip the same sentence, or
+    the same project reads as two different things depending on where you found
+    it."""
     for line in (body or "").splitlines():
         stripped = line.strip()
         if stripped and not stripped.startswith("#") and not stripped.startswith("-"):
@@ -398,7 +403,7 @@ def person_page(
     for note in _live_notes(store, org_id, kind=str(NoteKind.project_overview)):
         slug = note.scope.removeprefix("project:")
         if slug and slug not in leads:
-            leads[slug] = _article_lead(note.body)
+            leads[slug] = article_lead(note.body)
 
     # Grouped over ``recent`` — the same rows that get listed — so every block's
     # header describes exactly the sessions beneath it. project_rollups already

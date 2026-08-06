@@ -95,6 +95,13 @@ export interface ProjectRollup {
   total_tokens: number
 }
 
+/** A row in the projects index: the rollup plus the article's opening line.
+ *  `description` is empty until the overview pass has written one. */
+export interface ProjectIndexRow extends ProjectRollup {
+  status: ProjectStatus
+  description: string
+}
+
 export interface ActorActivity {
   actor: string
   sessions: number
@@ -211,11 +218,22 @@ export interface ChangelogEntry {
   change_summary: string
 }
 
+/** Whether an article is actually coming for a project that has none.
+ *
+ *  The page used to promise one unconditionally ("it appears on the next pass"),
+ *  which is false in two of the pass's own states: it gives up on work it judges
+ *  too thin, and it gives up after repeated failures. Both are recorded against
+ *  the exact session set, so both are also UNDONE by new work — which is why the
+ *  server resolves this rather than the client inferring it from counts. */
+export type ArticleOutlook = '' | 'coming' | 'no_sessions' | 'too_thin' | 'failed'
+
 export interface ProjectPage {
   project: string
   status: ProjectStatus
   /** The living article — a versioned, human-correctable note. */
   overview: Note | null
+  /** Empty when `overview` is present; only asked when there is nothing to show. */
+  outlook: ArticleOutlook
   /** Append-only, from the article's version chain. Newest first. */
   changelog: ChangelogEntry[]
   rollup: ProjectRollup | null

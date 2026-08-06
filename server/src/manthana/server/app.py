@@ -27,7 +27,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from manthana.schemas import CompactionAdapter
+from manthana.schemas import CompactionAdapter, NoteKind
 from pydantic import BaseModel, ValidationError
 
 from .analyzer import analyze_counterfactual_costs
@@ -60,7 +60,7 @@ from .hardening import install_hardening
 from .llm import LLMProvider, make_consolidate_provider, make_enrich_provider, make_provider
 from .metering import MeteredProvider, QuotaExceededError, month_key
 from .mining import FAILED, QUOTA, MineRunRegistry, run_mining
-from .overview import overview_provider_for, run_overview_pass
+from .overview import overview_provider_for, refresh_org_overviews, run_overview_pass
 from .purge import PurgeSelector, purge
 from .purge import delete_org as delete_org_tenant
 from .signup import mount_signup
@@ -1145,6 +1145,100 @@ def create_app(
             limit=config.consolidate_batch_per_org,
         )
         return stats.as_dict()
+
+    @app.get("/v1/admin/overview")
+    def overview_status(
+        org_id: str, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """Why each project does or does not have an article.
+
+        The third of the three background passes to become observable, and the
+        one that needed it most: enrichment and consolidation are keyed on rows
+        that exist, so a backlog is countable. An overview is keyed on a project
+        — a STRING with no row of its own — so "no article" and "never even
+        looked at" are indistinguishable from outside. Answering it once cost an
+        hour of reading `skipped_unchanged` counts out of CloudWatch.
+
+        ``never_attempted`` is therefore a first-class state here rather than an
+        absence: it is what a project looks like before its first pass, and it is
+        also what a project looks like when the pass is silently skipping it.
+        """
+        described = {
+            n.scope.removeprefix("project:")
+            for n in store.query_notes(
+                org_id, kind=str(NoteKind.project_overview), exclude_superseded=True
+            )
+        }
+        state = store.overview_state(org_id)
+        projects = [
+            {
+                "project": p,
+                "has_article": p in described,
+                "state": state[p].state if p in state else "never_attempted",
+                "attempts": state[p].attempts if p in state else 0,
+                "detail": state[p].detail if p in state else "",
+                "updated_at": state[p].updated_at if p in state else "",
+            }
+            for p in store.list_projects(org_id)
+        ]
+        return {
+            "org_id": org_id,
+            "enabled": config.enable_project_overview,
+            "model": config.consolidate_model,  # the pass shares the bulk tier
+            "interval_seconds": config.overview_interval_seconds,
+            "min_sessions": config.overview_min_sessions,
+            "projects": len(projects),
+            "described": sum(1 for p in projects if p["has_article"]),
+            # The question the endpoint exists to answer: these will NEVER get an
+            # article until new sessions land or an operator calls /retry, and
+            # nothing else in the system says so.
+            "never_retried": [
+                p["project"]
+                for p in projects
+                if p["state"] in ("insufficient", "abandoned")
+            ],
+            "detail": projects,
+        }
+
+    @app.post("/v1/admin/overview/run")
+    def overview_run(
+        org_id: str, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """Run one overview pass for a single org now, instead of waiting out the
+        hour-long interval. Same bounds, same metering, same skip rules — so a
+        project the background pass would skip is skipped here too."""
+        inner = overview_provider if overview_provider is not None else provider
+        stats = refresh_org_overviews(
+            store,
+            MeteredProvider(
+                inner, store, org_id,
+                store.get_org_quota(org_id) or config.llm_monthly_cap_usd,
+                purpose="overview",
+            ),
+            config,
+            org_id=org_id,
+            limit=config.overview_max_per_pass,
+        )
+        return stats.as_dict()
+
+    @app.post("/v1/admin/overview/retry")
+    def overview_retry(
+        org_id: str, project: str, _: Annotated[None, Depends(require_admin)]
+    ) -> dict[str, Any]:
+        """Put one project back in the queue by forgetting what the pass decided.
+
+        The escape hatch for ``insufficient`` and ``abandoned``. Both record the
+        contributors hash, so the pass skips the project until new sessions
+        change it — correct when the verdict was about the work, useless when it
+        was about a bad model call or a prompt that has since improved. Scoped to
+        one project on purpose: clearing an org wholesale would re-price every
+        description it already paid for.
+        """
+        return {
+            "org_id": org_id,
+            "project": project,
+            "cleared": store.clear_overview_state(org_id, project),
+        }
 
     @app.post("/v1/admin/purge")
     def purge_compactions(

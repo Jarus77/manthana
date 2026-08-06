@@ -59,11 +59,13 @@ from .config import ServerConfig
 from .graph import entity_node_id, project_neighbors, related_people, session_related
 from .llm import LLMProvider
 from .metering import QuotaExceededError
+from .overview import article_outlook
 from .pages import (
     HOME_WINDOW_DAYS,
     PROJECT_WINDOW_DAYS,
     SECTION_ORDER,
     _readable,
+    article_lead,
     discovery_feed,
     note_page,
     person_page,
@@ -299,13 +301,29 @@ def mount_wiki_api(
         comps = store.query_compactions(org_id=org_id, since=_since_days(days))
         rollups = project_rollups(comps)
         seen = {r.project for r in rollups}
+        # One query for every article lead, matched by scope — the same shape the
+        # person page uses. The index describes what each project IS rather than
+        # quoting one session's intent: an intent is a sentence about a morning's
+        # work, and a directory of those tells a reader nothing about the place.
+        leads: dict[str, str] = {}
+        for note in store.query_notes(
+            org_id, kind=str(NoteKind.project_overview), exclude_superseded=True
+        ):
+            slug = note.scope.removeprefix("project:")
+            if slug and slug not in leads:
+                leads[slug] = article_lead(note.body)
         return {
             "active": [
-                {**_jsonable(r), "status": project_status(r.last_active)} for r in rollups
+                {
+                    **_jsonable(r),
+                    "status": project_status(r.last_active),
+                    "description": leads.get(r.project, ""),
+                }
+                for r in rollups
             ],
             # Quiet = no session in the window = stale by construction.
             "quiet": [
-                {"project": p, "status": "stale"}
+                {"project": p, "status": "stale", "description": leads.get(p, "")}
                 for p in store.list_projects(org_id)
                 if p not in seen
             ],
@@ -324,6 +342,13 @@ def mount_wiki_api(
             "project": page.project,
             "status": page.status,
             "overview": _jsonable(page.overview),
+            # Only asked when there is nothing to show: it costs a hash over the
+            # project's digests, and the answer is meaningless once an article
+            # exists.
+            "outlook": (
+                "" if page.overview is not None
+                else article_outlook(store, config, org_id, project)
+            ),
             "changelog": _jsonable(page.changelog),
             "rollup": _jsonable(page.rollup),
             "sessions": _jsonable(page.sessions),

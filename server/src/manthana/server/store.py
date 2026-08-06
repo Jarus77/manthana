@@ -1033,6 +1033,33 @@ class ServerStore:
             )
             return {row.project: row for row in db.exec(stmt)}
 
+    def get_overview_state(self, org_id: str, project: str) -> ProjectOverviewStateRow | None:
+        """One project's row. Separate from ``overview_state`` because a page
+        render asks about a single project and should not load the org's whole
+        table to answer."""
+        with DBSession(self._engine) as db:
+            return db.get(ProjectOverviewStateRow, _pk(org_id, project))
+
+    def clear_overview_state(self, org_id: str, project: str) -> bool:
+        """Forget everything the pass decided about one project, so the next pass
+        treats it as new. Returns False when there was nothing to forget.
+
+        This is the ONLY way out of ``insufficient`` and ``abandoned``: both
+        record the contributors hash, and the pass then skips the project until
+        new sessions change that hash. When the cause was transient — a bad model
+        day, a provider outage, a prompt since improved — the work never changes,
+        so nothing would ever retry it. Deleting the row rather than resetting a
+        field keeps that recovery in one place: there is exactly one shape a
+        never-attempted project has, and this restores it.
+        """
+        with DBSession(self._engine) as db:
+            row = db.get(ProjectOverviewStateRow, _pk(org_id, project))
+            if row is None:
+                return False
+            db.delete(row)
+            db.commit()
+            return True
+
     def mark_overview_done(
         self,
         org_id: str,
