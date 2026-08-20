@@ -30,14 +30,6 @@ import {
   onDate,
   sessionTitle,
 } from '@/components/primitives'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import type { SessionPage } from '@/lib/types'
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
@@ -52,9 +44,9 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 function ListCell({ items }: { items: string[] }) {
-  if (!items.length) return <span className="text-sm text-muted-foreground">—</span>
+  if (!items.length) return <span className="faint">—</span>
   return (
-    <ul style={{ margin: 0, paddingLeft: '1.2em' }} className="font-mono text-[0.925em]">
+    <ul style={{ margin: 0, paddingLeft: '1.2em' }} className="mono">
       {items.map((v, i) => (
         <li key={i}>{v}</li>
       ))}
@@ -78,7 +70,7 @@ export default function VerbatimCompaction({ params }: { params: Promise<{ id: s
               <Link href={`/sessions/${s.id}`}>{sessionTitle(s)}</Link>.
             </Hatnote>
 
-            <p className="mb-4">
+            <p className="lead">
               This is the digest exactly as <PersonLink actor={s.actor} /> released it on{' '}
               {onDate(s.started_at)} — no summarising, no rewriting. Free text was redacted
               before it left their laptop. The raw transcript is not part of the wiki.
@@ -87,7 +79,7 @@ export default function VerbatimCompaction({ params }: { params: Promise<{ id: s
             <h2>Agent summary</h2>
             {data.native_summary ? (
               <>
-                <p className="text-muted-foreground">
+                <p className="subtle">
                   Written by the coding agent itself. The structured fields below were derived
                   from this.
                 </p>
@@ -114,10 +106,10 @@ export default function VerbatimCompaction({ params }: { params: Promise<{ id: s
             )}
 
             <h2>Released fields</h2>
-            <div className="overflow-x-auto rounded-lg border"><Table>
-              <TableBody>
-                <Field label="Compaction id" value={<span className="font-mono text-[0.925em]">{s.id}</span>} />
-                <Field label="Session id" value={<span className="font-mono text-[0.925em]">{s.session_id}</span>} />
+            <table className="wikitable">
+              <tbody>
+                <Field label="Compaction id" value={<span className="mono">{s.id}</span>} />
+                <Field label="Session id" value={<span className="mono">{s.session_id}</span>} />
                 <Field label="Engineer" value={<PersonLink actor={s.actor} />} />
                 <Field label="Project" value={<ProjectLink project={s.project} />} />
                 <Field label="Surface" value={s.surface} />
@@ -133,16 +125,16 @@ export default function VerbatimCompaction({ params }: { params: Promise<{ id: s
                       ? 'Task intent (raw opening prompt — not yet summarised)'
                       : 'Task intent'
                   }
-                  value={s.task_intent || <span className="text-sm text-muted-foreground">—</span>}
+                  value={s.task_intent || <span className="faint">—</span>}
                 />
-                <Field label="Approach" value={s.approach || <span className="text-sm text-muted-foreground">—</span>} />
+                <Field label="Approach" value={s.approach || <span className="faint">—</span>} />
                 <Field label="Friction" value={<ListCell items={s.friction} />} />
                 <Field label="Artifacts" value={<ListCell items={s.artifacts} />} />
                 <Field label="Files touched" value={<ListCell items={s.files_touched} />} />
                 <Field label="Pull requests" value={<ListCell items={s.prs_opened} />} />
                 <Field label="Tests added" value={<ListCell items={s.tests_added} />} />
                 <Field label="Languages" value={<ListCell items={s.languages} />} />
-                <Field label="Model tier" value={s.tier_used ?? <span className="text-sm text-muted-foreground">—</span>} />
+                <Field label="Model tier" value={s.tier_used ?? <span className="faint">—</span>} />
                 <Field
                   label="Estimated cost"
                   value={s.est_cost_usd != null ? `$${s.est_cost_usd.toFixed(4)}` : '—'}
@@ -152,8 +144,8 @@ export default function VerbatimCompaction({ params }: { params: Promise<{ id: s
                   label="Digest source"
                   value={
                     <>
-                      <span className="font-mono text-[0.925em]">{data.source ?? s.source}</span>{' '}
-                      <span className="text-sm text-muted-foreground">
+                      <span className="mono">{data.source ?? s.source}</span>{' '}
+                      <span className="faint">
                         {(data.source ?? s.source) === 'pending'
                           ? '(deterministic extraction; not yet enriched)'
                           : (data.source ?? s.source) === 'claude_summary'
@@ -164,10 +156,10 @@ export default function VerbatimCompaction({ params }: { params: Promise<{ id: s
                   }
                 />
                 <Field label="Released" value={s.released ? 'yes' : 'no'} />
-              </TableBody>
-            </Table></div>
+              </tbody>
+            </table>
 
-            <p className="text-sm text-muted-foreground">
+            <p className="faint">
               Anything missing here was missing from the release. Nothing on this page has been
               rewritten by Manthana.
             </p>

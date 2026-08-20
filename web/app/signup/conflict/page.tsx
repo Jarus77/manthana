@@ -17,9 +17,7 @@ import { useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
 import useSWR from 'swr'
 import { SignupShell } from '@/components/signup/Shell'
-import { Notice } from '@/components/manthana'
-import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Loading } from '@/components/Loader'
 import { ApiError, signupFetcher, qs } from '@/lib/api'
 
 type Conflict = {
@@ -38,30 +36,28 @@ function ConflictBody() {
 
   if (error) {
     return (
-      <Notice tone="disputed" title="We could not read that invitation.">
-        It may have expired. Ask whoever sent it for a fresh one.
-      </Notice>
+      <div className="ambox ambox-serious">
+        <b>We could not read that invitation.</b>
+        <p>It may have expired. Ask whoever sent it for a fresh one.</p>
+      </div>
     )
   }
-  if (isLoading || !data) return <Skeleton className="h-32 w-full" />
+  if (isLoading || !data) return <Loading />
 
   return (
     <>
-      <h1 className="text-2xl font-semibold tracking-tight">You&rsquo;re already in a team</h1>
-      <p className="mt-3 text-sm text-muted-foreground">
-        Your account belongs to{' '}
-        <span className="font-medium text-foreground">{data.your_org_name}</span>, so it
-        can&rsquo;t also join{' '}
-        <span className="font-medium text-foreground">{data.invited_org_name}</span> — one
-        account belongs to one organization.
+      <h2 className="first">You&rsquo;re already in a team</h2>
+      <p>
+        Your account belongs to <b>{data.your_org_name}</b>, so it can&rsquo;t also join{' '}
+        <b>{data.invited_org_name}</b> — one account belongs to one organization.
       </p>
-      <p className="mt-3 text-sm text-muted-foreground">
+      <p>
         To join with a separate identity, sign in with a different Google account. The
         invitation is untouched and still works.
       </p>
-      <Button asChild className="mt-6">
-        <a href={data.continue_to}>Continue to {data.your_org_name}</a>
-      </Button>
+      <a className="button button-progressive" href={data.continue_to}>
+        Continue to {data.your_org_name}
+      </a>
     </>
   )
 }
@@ -69,7 +65,7 @@ function ConflictBody() {
 export default function ConflictPage() {
   return (
     <SignupShell>
-      <Suspense fallback={<Skeleton className="h-32 w-full" />}>
+      <Suspense fallback={<Loading />}>
         <ConflictBody />
       </Suspense>
     </SignupShell>

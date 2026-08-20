@@ -13,8 +13,8 @@ import { use } from 'react'
 import useSWR from 'swr'
 import { PageTitle, useOrgId } from '@/components/console/Shell'
 import { usd } from '@/components/console/charts'
-import { EmptyState, FactCard, Mono, Notice, SectionHeading } from '@/components/manthana'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Infobox } from '@/components/primitives'
+import { Loading } from '@/components/Loader'
 import { ApiError, consoleFetcher, qs } from '@/lib/api'
 
 type Detail = {
@@ -45,86 +45,79 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
 
   if (error?.status === 404) {
     return (
-      <Notice tone="disputed" title="Not found in this organization.">
-        The session may have been purged, or it belongs to a different org.{' '}
-        <Link className="text-primary underline-offset-4 hover:underline" href="/console/sessions">
-          Back to sessions
-        </Link>
-        .
-      </Notice>
+      <div className="ambox ambox-serious">
+        <b>Not found in this organization.</b>
+        <p>
+          The session may have been purged, or it belongs to a different org.{' '}
+          <Link href="/console/sessions">Back to sessions</Link>.
+        </p>
+      </div>
     )
   }
-  if (isLoading || !data) return <Skeleton className="h-64 w-full" />
+  if (isLoading || !data) return <Loading />
 
   return (
     <>
       <PageTitle>{data.task_intent}</PageTitle>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
-        <div className="order-2 lg:order-1">
-          <SectionHeading>Approach</SectionHeading>
-          {data.approach ? (
-            <p className="whitespace-pre-wrap text-sm">{data.approach}</p>
-          ) : (
-            <EmptyState>Not recorded for this session.</EmptyState>
-          )}
+      {/* The same right-floated fact table an article gets — a session digest IS
+          a subject with key facts, and it should read like one. */}
+      <Infobox
+        title="Session"
+        subtitle={data.project || undefined}
+        rows={[
+          ['When', data.started_at.slice(0, 16).replace('T', ' ')],
+          ['Project', data.project || '—'],
+          ...(data.named && data.actor
+            ? ([['Engineer', data.actor]] as Array<[string, React.ReactNode]>)
+            : []),
+          ['Outcome', data.outcome],
+          ['Surface', data.surface],
+          ['Cost', <span key="c" className="mono">{usd(data.est_cost_usd)}</span>],
+          ['Session id', <span key="s" className="mono">{data.session_id}</span>],
+        ]}
+      />
 
-          <SectionHeading>Friction</SectionHeading>
-          {data.friction_points.length ? (
-            <ul className="space-y-2 text-sm">
-              {data.friction_points.map((f, i) => (
-                <li key={i}>
-                  <span className="font-medium">{f.category}</span>
-                  <span className="text-muted-foreground"> — {f.description}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState>None recorded.</EmptyState>
-          )}
+      <h2>Approach</h2>
+      {data.approach ? (
+        <p style={{ whiteSpace: 'pre-wrap' }}>{data.approach}</p>
+      ) : (
+        <div className="empty">Not recorded for this session.</div>
+      )}
 
-          <SectionHeading>Files touched</SectionHeading>
-          {data.files_touched.length ? (
-            <ul className="space-y-1 text-sm">
-              {data.files_touched.map((f) => (
-                <li key={f}>
-                  <Mono>{f}</Mono>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState>None recorded.</EmptyState>
-          )}
-        </div>
+      <h2>Friction</h2>
+      {data.friction_points.length ? (
+        <ul>
+          {data.friction_points.map((f, i) => (
+            <li key={i}>
+              <b>{f.category}</b>
+              <span className="subtle"> — {f.description}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="empty">None recorded.</div>
+      )}
 
-        <div className="order-1 lg:order-2">
-          <FactCard
-            title="Session"
-            rows={[
-              ['When', data.started_at.slice(0, 16).replace('T', ' ')],
-              ['Project', data.project || '—'],
-              ...(data.named && data.actor
-                ? ([['Engineer', data.actor]] as Array<[string, React.ReactNode]>)
-                : []),
-              ['Outcome', data.outcome],
-              ['Surface', data.surface],
-              ['Cost', <Mono key="c">{usd(data.est_cost_usd)}</Mono>],
-              ['Session id', <Mono key="s">{data.session_id}</Mono>],
-            ]}
-          />
-          <p className="mt-3 text-xs text-muted-foreground">
-            Cost is the API list-price equivalent for this session, not a bill.
-          </p>
-        </div>
-      </div>
+      <h2>Files touched</h2>
+      {data.files_touched.length ? (
+        <ul>
+          {data.files_touched.map((f) => (
+            <li key={f} className="mono">
+              {f}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="empty">None recorded.</div>
+      )}
 
-      <p className="mt-10">
-        <Link
-          className="text-sm text-primary underline-offset-4 hover:underline"
-          href={`/console/sessions${qs({ org })}`}
-        >
-          ← All sessions
-        </Link>
+      <div className="clear" />
+      <p className="faint">
+        Cost is the API list-price equivalent for this session, not a bill.
+      </p>
+      <p>
+        <Link href={`/console/sessions${qs({ org })}`}>← All sessions</Link>
       </p>
     </>
   )

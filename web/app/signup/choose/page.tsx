@@ -16,12 +16,7 @@
 import { useState } from 'react'
 import useSWR from 'swr'
 import { SignupShell } from '@/components/signup/Shell'
-import { Notice } from '@/components/manthana'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Loading } from '@/components/Loader'
 import { ApiError, signupFetcher, signupPost } from '@/lib/api'
 
 type Pending = {
@@ -69,72 +64,59 @@ export default function ChoosePage() {
   if (isLoading || !data) {
     return (
       <SignupShell wide>
-        <Skeleton className="h-5 w-56" />
-        <Skeleton className="mt-6 h-40 w-full" />
+        <Loading />
       </SignupShell>
     )
   }
 
   return (
     <SignupShell wide>
-      <p className="text-sm text-muted-foreground">
-        Signed in as <span className="font-medium text-foreground">{data.display_name ?? data.email}</span>
+      <p className="tagline">
+        Signed in as <b>{data.display_name ?? data.email}</b>
       </p>
 
-      {failure && (
-        <div className="mt-4">
-          <Notice tone="disputed">{failure}</Notice>
-        </div>
-      )}
+      {failure && <div className="error-box">{failure}</div>}
 
       {data.join_org_id && (
-        <Card className="mt-6">
-          <CardHeader>
-            <CardTitle className="text-base">Join {data.join_org_name}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Someone from your email domain is already using Manthana. Join them and
-              you&rsquo;ll get the team wiki — a founder can give you the full console
-              afterwards.
-            </p>
-            <Button
-              className="mt-4"
-              disabled={busy !== null}
-              onClick={() => submit('join')}
-            >
-              {busy === 'join' ? 'Joining…' : `Join ${data.join_org_name}`}
-            </Button>
-          </CardContent>
-        </Card>
+        <>
+          <h2 className="first">Join {data.join_org_name}</h2>
+          <p>
+            Someone from your email domain is already using Manthana. Join them and
+            you&rsquo;ll get the team wiki — a founder can give you the full console
+            afterwards.
+          </p>
+          <button
+            type="button"
+            className="button button-progressive"
+            disabled={busy !== null}
+            onClick={() => submit('join')}
+          >
+            {busy === 'join' ? 'Joining…' : `Join ${data.join_org_name}`}
+          </button>
+        </>
       )}
 
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle className="text-base">Create a new organization</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              void submit('create')
-            }}
-          >
-            <div className="grid gap-2">
-              <Label htmlFor="org">Organization name</Label>
-              <Input
-                id="org"
-                value={orgName ?? data.suggested_org_name}
-                onChange={(e) => setOrgName(e.target.value)}
-                required
-              />
-            </div>
-            <Button type="submit" className="mt-4" disabled={busy !== null}>
-              {busy === 'create' ? 'Creating…' : 'Create organization'}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+      <h2 className={data.join_org_id ? undefined : 'first'}>Create a new organization</h2>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          void submit('create')
+        }}
+      >
+        <div className="field">
+          <label htmlFor="org">Organization name</label>
+          <input
+            id="org"
+            type="text"
+            value={orgName ?? data.suggested_org_name}
+            onChange={(e) => setOrgName(e.target.value)}
+            required
+          />
+        </div>
+        <button type="submit" className="button button-progressive" disabled={busy !== null}>
+          {busy === 'create' ? 'Creating…' : 'Create organization'}
+        </button>
+      </form>
     </SignupShell>
   )
 }

@@ -21,10 +21,6 @@
 import { useState } from 'react'
 import useSWR from 'swr'
 import { GoogleButton, Muted, SignupShell } from '@/components/signup/Shell'
-import { Notice } from '@/components/manthana'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { ApiError, post } from '@/lib/api'
 
 type PublicConfig = { signup_enabled: boolean }
@@ -68,32 +64,22 @@ export default function LoginPage() {
 
   return (
     <SignupShell>
-      <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
+      <h2 className="first">Sign in</h2>
 
       {config?.signup_enabled && (
         <>
-          <div className="mt-6">
-            <GoogleButton />
-          </div>
+          <GoogleButton />
           <Muted>We only ever read your name and email address.</Muted>
-          <div className="my-8 flex items-center gap-3">
-            <div className="h-px flex-1 bg-border" />
-            <span className="text-xs text-muted-foreground">or use a token</span>
-            <div className="h-px flex-1 bg-border" />
-          </div>
+          <div className="or-rule">or use a token</div>
         </>
       )}
 
-      {error && (
-        <div className="mb-4">
-          <Notice tone="disputed">{error}</Notice>
-        </div>
-      )}
+      {error && <div className="error-box">{error}</div>}
 
-      <form onSubmit={submit} className={config?.signup_enabled ? '' : 'mt-6'}>
-        <div className="grid gap-2">
-          <Label htmlFor="token">Your Manthana token</Label>
-          <Input
+      <form onSubmit={submit}>
+        <div className="field">
+          <label htmlFor="token">Your Manthana token</label>
+          <input
             id="token"
             type="password"
             autoFocus={!config?.signup_enabled}
@@ -102,12 +88,16 @@ export default function LoginPage() {
             placeholder="eyJhbGciOi…"
           />
         </div>
-        <Button type="submit" className="mt-4 w-full" disabled={busy || !token}>
+        <button
+          type="submit"
+          className="button button-progressive button-wide"
+          disabled={busy || !token}
+        >
           {busy ? 'Signing in…' : 'Sign in'}
-        </Button>
+        </button>
       </form>
 
-      <p className="mt-6 text-xs text-muted-foreground">
+      <p className="faint">
         Founders and the operator land on the console; engineers land on the team wiki.
       </p>
     </SignupShell>

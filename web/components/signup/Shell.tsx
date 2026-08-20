@@ -1,16 +1,18 @@
 'use client'
 
 /**
- * Chrome for the onboarding pages.
+ * Chrome for the onboarding pages, on the encyclopedia stylesheet.
  *
- * Deliberately not the wiki rail and not the marketing header: someone in the
+ * Deliberately not the wiki rail and not a marketing header: someone in the
  * middle of signing up has exactly one thing to do, and every extra link is an
- * invitation to leave. Just the mark and the theme toggle.
+ * invitation to leave. Just the wordmark over a hairline rule.
+ *
+ * No theme toggle. The encyclopedia sheet is light only — a white page is part
+ * of what makes the product read as a reference work rather than a dashboard —
+ * so there is nothing for a toggle to switch between.
  */
 
 import Link from 'next/link'
-import { Logo } from '@/components/Logo'
-import { ThemeToggle } from '@/components/ThemeToggle'
 
 export function SignupShell({
   children,
@@ -20,31 +22,35 @@ export function SignupShell({
   wide?: boolean
 }) {
   return (
-    <div className="min-h-screen bg-background font-sans text-foreground">
-      <header className="border-b">
-        <div className="mx-auto flex max-w-4xl items-center justify-between px-6 py-4">
-          <Link href="/">
-            <Logo />
-          </Link>
-          <ThemeToggle />
-        </div>
+    <div className="signup-shell">
+      <header className="signup-header">
+        <Link className="brand" href="/">
+          Manthana
+        </Link>
       </header>
-      <main className={`mx-auto px-6 py-12 ${wide ? 'max-w-3xl' : 'max-w-md'}`}>
-        {children}
-      </main>
+      {/* Narrow pages get the bordered card the old sign-in page used; the wide
+          ones (choosing an org, the welcome hand-off) carry too much for a
+          380px column and read as a page instead. */}
+      <div className={wide ? 'signup-wide' : 'login-wrap'}>
+        {wide ? children : <div className="login-card">{children}</div>}
+      </div>
     </div>
   )
 }
 
-/** Google's own wordmark colours, so the button is recognisable at a glance. */
+/**
+ * Google's button, as a progressive action.
+ *
+ * Vector has exactly one emphasised button style and this is it — the same
+ * treatment "Create organization" and "Sign in" get, because they are the same
+ * kind of act. The mark keeps its own geometry so the button is still
+ * recognisable at a glance.
+ */
 export function GoogleButton({ invite }: { invite?: string }) {
   const href = invite ? `/ui/auth/google?invite=${encodeURIComponent(invite)}` : '/ui/auth/google'
   return (
-    <a
-      href={href}
-      className="inline-flex h-10 w-full items-center justify-center gap-3 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-    >
-      <svg viewBox="0 0 18 18" className="size-4" aria-hidden>
+    <a href={href} className="button button-progressive button-wide">
+      <svg viewBox="0 0 18 18" width="14" height="14" aria-hidden>
         <path
           fill="currentColor"
           d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62Z"
@@ -71,5 +77,5 @@ export function GoogleButton({ invite }: { invite?: string }) {
 }
 
 export function Muted({ children }: { children: React.ReactNode }) {
-  return <p className="mt-4 text-center text-xs text-muted-foreground">{children}</p>
+  return <p className="signup-muted">{children}</p>
 }

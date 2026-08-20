@@ -11,8 +11,6 @@
 import { useRouter } from 'next/navigation'
 import { useEffect } from 'react'
 import useSWR from 'swr'
-import { Notice } from '@/components/manthana'
-import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, fetcher } from '@/lib/api'
 
 export function useWiki<T>(path: string | null) {
@@ -30,20 +28,12 @@ export function useWiki<T>(path: string | null) {
 }
 
 export function Loading() {
-  return (
-    <div className="space-y-3">
-      <Skeleton className="h-6 w-64" />
-      <Skeleton className="h-4 w-full" />
-      <Skeleton className="h-4 w-5/6" />
-    </div>
-  )
+  return <div className="empty">Loading…</div>
 }
 
 export function ErrorBox({ error }: { error: ApiError }) {
-  // A 401 is not an error state — the layout is already redirecting to /login, so
-  // showing a failure would flash a problem the reader cannot act on.
   if (error.unauthenticated) return <Loading />
-  return <Notice tone="disputed">{error.message}</Notice>
+  return <div className="error-box">{error.message}</div>
 }
 
 /** Render `children` once data has arrived, with consistent loading/error UI. */

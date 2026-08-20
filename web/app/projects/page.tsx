@@ -11,18 +11,14 @@ import {
   Title,
   when,
 } from '@/components/primitives'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import type { ProjectIndexRow } from '@/lib/types'
 
 interface ProjectIndex {
   active: ProjectIndexRow[]
+  /** Objects, not strings — the server sends {project, status, description}.
+   *  Typing this as string[] passed the whole object to ProjectLink, which
+   *  renders it as a child, and React threw on every org that had a dormant
+   *  project. */
   quiet: Array<{ project: string; description: string }>
   org_id: string
 }
@@ -33,44 +29,44 @@ export default function ProjectsIndexPage() {
       {(data) => (
         <>
           <Title>Projects</Title>
-          <p className="mb-4">
+          <p className="lead">
             Every project in <b>{data.org_id}</b> that engineers have released sessions against.
           </p>
 
           <Section title="Active">
             {data.active.length ? (
-              <div className="overflow-x-auto rounded-lg border"><Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Project</TableHead>
-                    <TableHead>What this is</TableHead>
-                    <TableHead>Contributors</TableHead>
-                    <TableHead>Sessions</TableHead>
-                    <TableHead>Last active</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
+              <table className="wikitable">
+                <thead>
+                  <tr>
+                    <th>Project</th>
+                    {/* What the project IS, from its article — not one session's
+                        intent. An intent is a sentence about a morning's work,
+                        and a directory of those names places without describing
+                        any of them. */}
+                    <th>What this is</th>
+                    <th>Contributors</th>
+                    <th>Sessions</th>
+                    <th>Last active</th>
+                  </tr>
+                </thead>
+                <tbody>
                   {data.active.map((p) => (
-                    <TableRow key={p.project}>
-                      <TableCell style={{ whiteSpace: 'nowrap' }}>
+                    <tr key={p.project}>
+                      <td style={{ whiteSpace: 'nowrap' }}>
                         <ProjectLink project={p.project} />
-                      </TableCell>
-                      <TableCell>
-                        {p.description || (
-                          <span className="text-sm text-muted-foreground">
-                            not yet described
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell>
+                      </td>
+                      <td>
+                        {p.description || <span className="faint">not yet described</span>}
+                      </td>
+                      <td>
                         <PersonList actors={p.actors} />
-                      </TableCell>
-                      <TableCell>{p.sessions}</TableCell>
-                      <TableCell style={{ whiteSpace: 'nowrap' }}>{when(p.last_active)}</TableCell>
-                    </TableRow>
+                      </td>
+                      <td>{p.sessions}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{when(p.last_active)}</td>
+                    </tr>
                   ))}
-                </TableBody>
-              </Table></div>
+                </tbody>
+              </table>
             ) : (
               <Empty>No project has seen a released session recently.</Empty>
             )}
@@ -78,14 +74,12 @@ export default function ProjectsIndexPage() {
 
           {data.quiet.length > 0 && (
             <Section title="Dormant">
-              <p className="text-muted-foreground">Old, but still reachable.</p>
+              <p className="subtle">Old, but still reachable.</p>
               <ul>
                 {data.quiet.map((p) => (
                   <li key={p.project}>
                     <ProjectLink project={p.project} />
-                    {p.description && (
-                      <div className="text-sm text-muted-foreground">{p.description}</div>
-                    )}
+                    {p.description && <div className="subtle">{p.description}</div>}
                   </li>
                 ))}
               </ul>

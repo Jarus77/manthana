@@ -12,7 +12,6 @@
 
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
-import { Notice } from '@/components/manthana'
 import { ApiError, post } from '@/lib/api'
 import type { Note } from '@/lib/types'
 
@@ -49,22 +48,22 @@ export function TeachControls({ note, onChanged }: { note: Note; onChanged: () =
   if (editing) {
     return (
       <div>
-        {error && <Notice tone="disputed">{error}</Notice>}
-        <div className="mb-3 grid gap-1.5">
+        {error && <div className="error-box">{error}</div>}
+        <div className="field">
           <label htmlFor="title">Title</label>
           <input id="title" type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
         </div>
-        <div className="mb-3 grid gap-1.5">
+        <div className="field">
           <label htmlFor="body">Body (markdown)</label>
           <textarea id="body" value={body} onChange={(e) => setBody(e.target.value)} />
         </div>
-        <p className="text-sm text-muted-foreground">
+        <p className="subtle">
           Publishing saves a new revision authored by you. The previous one stays in the
           history — nothing is overwritten, and Manthana will not overwrite yours.
         </p>
         <div style={{ display: 'flex', gap: 8 }}>
           <button
-            className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            className="button-progressive"
             disabled={busy || !title.trim() || !body.trim()}
             onClick={() =>
               run(async () => {
@@ -88,8 +87,8 @@ export function TeachControls({ note, onChanged }: { note: Note; onChanged: () =
 
   return (
     <div>
-      {error && <Notice tone="disputed">{error}</Notice>}
-      <p className="text-sm text-muted-foreground">
+      {error && <div className="error-box">{error}</div>}
+      <p className="subtle">
         Anyone signed in can correct this. Corrections are attributed to you and outrank
         anything Manthana writes later.
       </p>
@@ -126,8 +125,8 @@ export function NewNoteForm({
 
   return (
     <div>
-      {error && <Notice tone="disputed">{error}</Notice>}
-      <div className="mb-3 grid gap-1.5">
+      {error && <div className="error-box">{error}</div>}
+      <div className="field">
         <label htmlFor="kind">Kind</label>
         <select id="kind" value={kind} onChange={(e) => setKind(e.target.value)}>
           {kinds.map((k) => (
@@ -137,7 +136,7 @@ export function NewNoteForm({
           ))}
         </select>
       </div>
-      <div className="mb-3 grid gap-1.5">
+      <div className="field">
         <label htmlFor="new-title">Title</label>
         <input
           id="new-title"
@@ -147,7 +146,7 @@ export function NewNoteForm({
           placeholder="the claim, in one line"
         />
       </div>
-      <div className="mb-3 grid gap-1.5">
+      <div className="field">
         <label htmlFor="new-body">Body (markdown)</label>
         <textarea
           id="new-body"
@@ -158,7 +157,7 @@ export function NewNoteForm({
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
         <button
-          className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          className="button-progressive"
           disabled={busy || !title.trim() || !body.trim()}
           onClick={() =>
             run(async () => {

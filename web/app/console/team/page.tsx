@@ -16,19 +16,7 @@ import { useState } from 'react'
 import useSWR from 'swr'
 import { PageTitle, useOrgId } from '@/components/console/Shell'
 import { CopyBlock } from '@/components/signup/CopyBlock'
-import { EmptyState, Notice, SectionHeading, Tag } from '@/components/manthana'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Loading } from '@/components/Loader'
 import { ApiError, consoleFetcher, consolePost, qs } from '@/lib/api'
 
 type Invite = {
@@ -73,21 +61,17 @@ export default function TeamPage() {
     <>
       <PageTitle>Team</PageTitle>
 
-      {failure && (
-        <div className="mb-6">
-          <Notice tone="disputed">{failure}</Notice>
-        </div>
-      )}
+      {failure && <div className="error-box">{failure}</div>}
 
       {/* ── invites ─────────────────────────────────────────────────── */}
-      <SectionHeading>Invite engineers</SectionHeading>
-      <p className="mb-4 max-w-2xl text-sm text-muted-foreground">
+      <h2>Invite engineers</h2>
+      <p>
         One line to send them. That is their whole onboarding, and it is what starts their
         sessions flowing into the wiki. Leave the email blank for a shared invite the whole
         team can use; fill it in for a single-use, per-person one.
       </p>
       <form
-        className="mb-5 flex flex-wrap items-end gap-2"
+        className="form-row"
         onSubmit={(e) => {
           e.preventDefault()
           void run('invite', async () => {
@@ -97,28 +81,28 @@ export default function TeamPage() {
           })
         }}
       >
-        <div className="grid gap-1.5">
-          <Label htmlFor="invite-for">Engineer email (optional)</Label>
-          <Input
+        <div className="field grow">
+          <label htmlFor="invite-for">Engineer email (optional)</label>
+          <input
             id="invite-for"
-            className="w-72"
+            type="email"
             value={inviteFor}
             onChange={(e) => setInviteFor(e.target.value)}
             placeholder="engineer@yourcompany.com"
           />
         </div>
-        <Button type="submit" disabled={busy === 'invite'}>
+        <button type="submit" className="button button-progressive" disabled={busy === 'invite'}>
           {busy === 'invite' ? 'Creating…' : 'Create invite'}
-        </Button>
+        </button>
       </form>
 
       {minted && (
-        <div className="mb-6 space-y-3 rounded-lg border p-5">
-          <p className="text-sm">
+        <div className="portal-box">
+          <p>
             Invite created{' '}
             {minted.actor ? (
               <>
-                for <span className="font-medium">{minted.actor}</span> — single use.
+                for <b>{minted.actor}</b> — single use.
               </>
             ) : (
               <>— shared, reusable by the whole team.</>
@@ -130,30 +114,30 @@ export default function TeamPage() {
       )}
 
       {!invites ? (
-        <Skeleton className="h-20 w-full" />
+        <Loading />
       ) : invites.invites.length === 0 ? (
-        <EmptyState>No open invites.</EmptyState>
+        <div className="empty">No open invites.</div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>For</TableHead>
-                <TableHead className="text-right">Uses left</TableHead>
-                <TableHead>Expires</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+        <div className="scroll-x">
+          <table className="wikitable">
+            <thead>
+              <tr>
+                <th>For</th>
+                <th>Uses left</th>
+                <th>Expires</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
               {invites.invites.map((i) => (
-                <TableRow key={i.code}>
-                  <TableCell>{i.actor ?? <span className="text-muted-foreground">shared</span>}</TableCell>
-                  <TableCell className="text-right tabular">{i.uses_left}</TableCell>
-                  <TableCell className="text-muted-foreground">{i.expires_at.slice(0, 10)}</TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
+                <tr key={i.code}>
+                  <td>{i.actor ?? <span className="subtle">shared</span>}</td>
+                  <td className="tabular">{i.uses_left}</td>
+                  <td className="subtle">{i.expires_at.slice(0, 10)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="button"
                       onClick={() =>
                         void run('revoke', async () => {
                           await consolePost('/invites/revoke', { org_id: org, code: i.code })
@@ -162,23 +146,23 @@ export default function TeamPage() {
                       }
                     >
                       Revoke
-                    </Button>
-                  </TableCell>
-                </TableRow>
+                    </button>
+                  </td>
+                </tr>
               ))}
-            </TableBody>
-          </Table>
+            </tbody>
+          </table>
         </div>
       )}
 
       {/* ── wiki logins ─────────────────────────────────────────────── */}
-      <SectionHeading>Wiki access without installing anything</SectionHeading>
-      <p className="mb-4 max-w-2xl text-sm text-muted-foreground">
+      <h2>Wiki access without installing anything</h2>
+      <p>
         A login for someone who should read and correct the wiki but is not running the
         agent. They never see cost, mining, or audit — those are yours.
       </p>
       <form
-        className="mb-5 flex flex-wrap items-end gap-2"
+        className="form-row"
         onSubmit={(e) => {
           e.preventDefault()
           void run('token', async () => {
@@ -191,71 +175,72 @@ export default function TeamPage() {
           })
         }}
       >
-        <div className="grid gap-1.5">
-          <Label htmlFor="token-for">Their email</Label>
-          <Input
+        <div className="field grow">
+          <label htmlFor="token-for">Their email</label>
+          <input
             id="token-for"
-            className="w-72"
+            type="email"
             value={tokenFor}
             onChange={(e) => setTokenFor(e.target.value)}
             placeholder="teammate@yourcompany.com"
             required
           />
         </div>
-        <Button type="submit" variant="secondary" disabled={busy === 'token' || !tokenFor.trim()}>
+        <button type="submit" className="button" disabled={busy === 'token' || !tokenFor.trim()}>
           {busy === 'token' ? 'Creating…' : 'Create wiki login'}
-        </Button>
+        </button>
       </form>
 
       {token && (
-        <div className="mb-6 space-y-3 rounded-lg border p-5">
-          <p className="text-sm">
-            Wiki login for <span className="font-medium">{token.actor}</span>. Their edits will
-            be recorded under their own name.
+        <div className="portal-box">
+          <p>
+            Wiki login for <b>{token.actor}</b>. Their edits will be recorded under their own
+            name.
           </p>
           <CopyBlock label="Token" value={token.token} />
           <CopyBlock label="Sign-in link" value={token.login_url} />
-          <Notice tone="unreviewed" title="Shown once.">
-            It is a signed token, so there is nothing stored to look up later. If it is lost,
-            create another — both keep working.
-          </Notice>
+          <div className="ambox ambox-content">
+            <b>Shown once.</b>
+            <p>
+              It is a signed token, so there is nothing stored to look up later. If it is
+              lost, create another — both keep working.
+            </p>
+          </div>
         </div>
       )}
 
       {/* ── members ─────────────────────────────────────────────────── */}
-      <SectionHeading>Members</SectionHeading>
-      <p className="mb-4 max-w-2xl text-sm text-muted-foreground">
+      <h2>Members</h2>
+      <p>
         Everyone who joins by email domain or an invite link lands as an engineer. Promote
         someone when they should also see cost, mining, and audit.
       </p>
       {!members ? (
-        <Skeleton className="h-20 w-full" />
+        <Loading />
       ) : members.members.length === 0 ? (
-        <EmptyState>Nobody has signed in with Google yet.</EmptyState>
+        <div className="empty">Nobody has signed in with Google yet.</div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+        <div className="scroll-x">
+          <table className="wikitable">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
               {members.members.map((m) => (
-                <TableRow key={m.id}>
-                  <TableCell>{m.display_name ?? m.email.split('@')[0]}</TableCell>
-                  <TableCell className="text-muted-foreground">{m.email}</TableCell>
-                  <TableCell>
-                    {m.role === 'founder' ? <Tag tone="primary">founder</Tag> : <Tag>engineer</Tag>}
-                  </TableCell>
-                  <TableCell className="text-right">
+                <tr key={m.id}>
+                  <td>{m.display_name ?? m.email.split('@')[0]}</td>
+                  <td className="subtle">{m.email}</td>
+                  <td>{m.role === 'founder' ? <b>founder</b> : 'engineer'}</td>
+                  <td>
                     {m.role !== 'founder' && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
+                      <button
+                        type="button"
+                        className="button"
                         onClick={() =>
                           void run('promote', async () => {
                             await consolePost('/members/promote', {
@@ -266,13 +251,13 @@ export default function TeamPage() {
                         }
                       >
                         Make founder
-                      </Button>
+                      </button>
                     )}
-                  </TableCell>
-                </TableRow>
+                  </td>
+                </tr>
               ))}
-            </TableBody>
-          </Table>
+            </tbody>
+          </table>
         </div>
       )}
     </>

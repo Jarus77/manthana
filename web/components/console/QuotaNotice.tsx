@@ -9,7 +9,6 @@
  * is a different, more actionable thing to read than "quota exceeded".
  */
 
-import { Notice } from '@/components/manthana'
 import { usd } from '@/components/console/charts'
 import { ApiError } from '@/lib/api'
 
@@ -30,12 +29,15 @@ export function quotaFrom(error: unknown): QuotaDetail | null {
 
 export function QuotaNotice({ quota }: { quota: QuotaDetail }) {
   return (
-    <Notice tone="disputed" title="This org has used its monthly AI budget.">
-      <span className="tabular">
-        {usd(quota.spent_usd)} of {usd(quota.cap_usd)}
-      </span>{' '}
-      spent. It resets at the start of next month; until then, ask your Manthana operator to
-      raise it. Nothing is lost — new sessions still arrive, they just stay unsummarised.
-    </Notice>
+    <div className="ambox ambox-serious">
+      <b>This org has used its monthly AI budget.</b>
+      <p>
+        <span className="tabular">
+          {usd(quota.spent_usd)} of {usd(quota.cap_usd)}
+        </span>{' '}
+        spent. It resets at the start of next month; until then, ask your Manthana operator to
+        raise it. Nothing is lost — new sessions still arrive, they just stay unsummarised.
+      </p>
+    </div>
   )
 }

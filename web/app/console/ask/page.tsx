@@ -19,10 +19,7 @@ import { useState } from 'react'
 import { PageTitle, useOrgId } from '@/components/console/Shell'
 import { QuotaNotice, quotaFrom, type QuotaDetail } from '@/components/console/QuotaNotice'
 import { usd } from '@/components/console/charts'
-import { EmptyState, Mono, Notice, SectionHeading } from '@/components/manthana'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Loading } from '@/components/Loader'
 import { ApiError, consolePost } from '@/lib/api'
 
 type Answer = {
@@ -72,17 +69,18 @@ export default function AskPage() {
     <>
       <PageTitle aside="answers cite the sessions they came from">Ask</PageTitle>
 
-      <form onSubmit={ask} className="mb-6 flex flex-wrap gap-2">
-        <Input
-          className="min-w-64 flex-1"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="What has the team been working on?"
-          aria-label="Question"
-        />
+      <form onSubmit={ask} className="form-row">
+        <div className="grow">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="What has the team been working on?"
+            aria-label="Question"
+          />
+        </div>
         <select
           aria-label="Sources"
-          className="h-9 rounded-md border bg-background px-2 text-sm"
           value={source}
           onChange={(e) => setSource(e.target.value)}
         >
@@ -90,47 +88,44 @@ export default function AskPage() {
           <option value="full">Full digests only</option>
           <option value="claude_summary">Claude summaries only</option>
         </select>
-        <Button type="submit" disabled={busy || !query.trim()}>
+        <button
+          type="submit"
+          className="button button-progressive"
+          disabled={busy || !query.trim()}
+        >
           {busy ? 'Asking…' : 'Ask'}
-        </Button>
+        </button>
       </form>
 
-      {quota && (
-        <div className="mb-6">
-          <QuotaNotice quota={quota} />
-        </div>
-      )}
-      {failure && (
-        <div className="mb-6">
-          <Notice tone="disputed">{failure}</Notice>
-        </div>
-      )}
-      {busy && <Skeleton className="h-40 w-full" />}
+      {quota && <QuotaNotice quota={quota} />}
+      {failure && <div className="error-box">{failure}</div>}
+      {busy && <Loading />}
 
       {answer && (
         <>
           {answer.insufficient ? (
-            <Notice tone="unreviewed" title="Not enough evidence to answer this.">
-              Too few people contributed to what this question asks about, so answering it
-              would describe one person&rsquo;s work as a team pattern. Nothing was returned,
-              and the question is on the record either way.
-            </Notice>
+            <div className="ambox ambox-content">
+              <b>Not enough evidence to answer this.</b>
+              <p>
+                Too few people contributed to what this question asks about, so answering it
+                would describe one person&rsquo;s work as a team pattern. Nothing was
+                returned, and the question is on the record either way.
+              </p>
+            </div>
           ) : (
             <>
-              <SectionHeading>Answer</SectionHeading>
-              <p className="whitespace-pre-wrap text-sm">{answer.narrative}</p>
+              <h2>Answer</h2>
+              <p style={{ whiteSpace: 'pre-wrap' }}>{answer.narrative}</p>
 
-              {answer.coverage && (
-                <p className="mt-3 text-xs text-muted-foreground">{answer.coverage}</p>
-              )}
+              {answer.coverage && <p className="faint">{answer.coverage}</p>}
 
               {answer.citations.length > 0 && (
                 <>
-                  <SectionHeading>Sources</SectionHeading>
-                  <ul className="space-y-1 text-sm">
+                  <h2>Sources</h2>
+                  <ul className="reflist">
                     {answer.citations.map((c) => (
-                      <li key={c}>
-                        <Mono>{c}</Mono>
+                      <li key={c} className="mono">
+                        {c}
                       </li>
                     ))}
                   </ul>
@@ -139,21 +134,21 @@ export default function AskPage() {
 
               {answer.rollup && (
                 <>
-                  <SectionHeading>What it looked at</SectionHeading>
-                  <div className="grid gap-4 sm:grid-cols-4">
+                  <h2>What it looked at</h2>
+                  <div className="stat-row">
                     {[
                       ['Sessions', String(answer.rollup.sessions)],
                       ['Contributors', String(answer.rollup.contributors)],
                       ['Tokens', answer.rollup.tokens.toLocaleString()],
                       ['Cost', usd(answer.rollup.cost_usd)],
                     ].map(([label, value]) => (
-                      <div key={label} className="rounded-lg border p-4">
-                        <div className="text-xs text-muted-foreground">{label}</div>
-                        <div className="mt-1 text-lg font-semibold tabular">{value}</div>
+                      <div key={label} className="stat">
+                        <span className="stat-value">{value}</span>
+                        <span className="stat-label">{label}</span>
                       </div>
                     ))}
                   </div>
-                  <p className="mt-3 text-xs text-muted-foreground">
+                  <p className="faint">
                     Cost is the API list-price equivalent for the sessions this answer drew
                     on — not a bill.
                   </p>
@@ -165,10 +160,10 @@ export default function AskPage() {
       )}
 
       {!answer && !busy && !quota && !failure && (
-        <EmptyState>
+        <div className="empty">
           Ask in plain language. Answers come back grounded in real sessions, with the
           evidence attached — and say so when there is not enough.
-        </EmptyState>
+        </div>
       )}
     </>
   )

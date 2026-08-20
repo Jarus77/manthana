@@ -12,7 +12,6 @@
 import { useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
 import { GoogleButton, Muted, SignupShell } from '@/components/signup/Shell'
-import { Notice } from '@/components/manthana'
 
 const ERRORS: Record<string, string> = {
   google: 'We could not complete sign-in with Google. Please try again.',
@@ -29,19 +28,13 @@ function SignupBody() {
 
   return (
     <>
-      {message && (
-        <div className="mb-6">
-          <Notice tone="disputed">{message}</Notice>
-        </div>
-      )}
-      <h1 className="text-2xl font-semibold tracking-tight">Create your organization</h1>
-      <p className="mt-2 text-sm text-muted-foreground">
+      {message && <div className="error-box">{message}</div>}
+      <h2 className="first">Create your organization</h2>
+      <p>
         About a minute. You&rsquo;ll get a command to send your engineers — nothing to
         configure.
       </p>
-      <div className="mt-8">
-        <GoogleButton />
-      </div>
+      <GoogleButton />
       <Muted>We only ever read your name and email address.</Muted>
     </>
   )

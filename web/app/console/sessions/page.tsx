@@ -16,16 +16,7 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
 import { PageTitle, useOrgId } from '@/components/console/Shell'
-import { EmptyState, StatusText } from '@/components/manthana'
-import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Loading } from '@/components/Loader'
 import { ApiError, consoleFetcher, qs } from '@/lib/api'
 
 type SessionRow = {
@@ -65,7 +56,7 @@ export default function SessionsPage() {
     router.push(`/console/sessions?${next.toString()}`)
   }
 
-  if (isLoading || !data) return <Skeleton className="h-64 w-full" />
+  if (isLoading || !data) return <Loading />
 
   return (
     <>
@@ -80,10 +71,9 @@ export default function SessionsPage() {
         Sessions
       </PageTitle>
 
-      <div className="mb-5 flex flex-wrap gap-2">
+      <div className="form-row">
         <select
           aria-label="Project"
-          className="h-9 rounded-md border bg-background px-2 text-sm"
           value={project}
           onChange={(e) => setFilter('project', e.target.value)}
         >
@@ -97,7 +87,6 @@ export default function SessionsPage() {
         {data.named && (
           <select
             aria-label="Engineer"
-            className="h-9 rounded-md border bg-background px-2 text-sm"
             value={engineer}
             onChange={(e) => setFilter('engineer', e.target.value)}
           >
@@ -112,54 +101,50 @@ export default function SessionsPage() {
       </div>
 
       {data.sessions.length === 0 ? (
-        <EmptyState hint="Sessions appear once an engineer runs `manthana setup` and releases work.">
-          No sessions match.
-        </EmptyState>
+        <div className="empty">
+          No sessions match. Sessions appear once an engineer runs{' '}
+          <span className="mono">manthana setup</span> and releases work.
+        </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>When</TableHead>
-                {data.named && <TableHead>Engineer</TableHead>}
-                <TableHead>Project</TableHead>
-                <TableHead>What they set out to do</TableHead>
-                <TableHead>Outcome</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+        <div className="scroll-x">
+          <table className="wikitable">
+            <thead>
+              <tr>
+                <th>When</th>
+                {data.named && <th>Engineer</th>}
+                <th>Project</th>
+                <th>What they set out to do</th>
+                <th>Outcome</th>
+              </tr>
+            </thead>
+            <tbody>
               {data.sessions.map((s) => (
-                <TableRow key={s.id}>
-                  <TableCell className="whitespace-nowrap text-muted-foreground">
+                <tr key={s.id}>
+                  <td style={{ whiteSpace: 'nowrap' }} className="subtle">
                     {s.started_at.slice(0, 16).replace('T', ' ')}
-                  </TableCell>
-                  {data.named && (
-                    <TableCell>{(s.actor ?? '').split('@')[0]}</TableCell>
-                  )}
-                  <TableCell className="text-muted-foreground">{s.project || '—'}</TableCell>
-                  <TableCell className="max-w-md">
-                    <Link
-                      className="text-primary underline-offset-4 hover:underline"
-                      href={`/console/sessions/${encodeURIComponent(s.id)}${qs({ org })}`}
-                    >
-                      <span className="line-clamp-1">{s.task_intent}</span>
+                  </td>
+                  {data.named && <td>{(s.actor ?? '').split('@')[0]}</td>}
+                  <td className="subtle">{s.project || '—'}</td>
+                  <td>
+                    <Link href={`/console/sessions/${encodeURIComponent(s.id)}${qs({ org })}`}>
+                      {s.task_intent}
                     </Link>
-                  </TableCell>
-                  <TableCell>
+                  </td>
+                  <td>
                     {s.outcome === 'success' ? (
-                      <StatusText tone="distilled">success</StatusText>
+                      <span className="status-confirmed">success</span>
                     ) : (
-                      <StatusText tone="muted">{s.outcome}</StatusText>
+                      <span className="subtle">{s.outcome}</span>
                     )}
-                  </TableCell>
-                </TableRow>
+                  </td>
+                </tr>
               ))}
-            </TableBody>
-          </Table>
+            </tbody>
+          </table>
         </div>
       )}
       {data.sessions.length >= data.limit && (
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="faint">
           Showing the {data.limit} most recent. Filter by project to narrow it.
         </p>
       )}

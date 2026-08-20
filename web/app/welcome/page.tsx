@@ -18,9 +18,7 @@ import { useState } from 'react'
 import useSWR from 'swr'
 import { CopyBlock } from '@/components/signup/CopyBlock'
 import { SignupShell } from '@/components/signup/Shell'
-import { Notice, SectionHeading } from '@/components/manthana'
-import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Loading } from '@/components/Loader'
 import { ApiError, signupFetcher, signupPost } from '@/lib/api'
 
 type Welcome = {
@@ -52,28 +50,27 @@ function ApiTokenSection({ sessionDays }: { sessionDays: number }) {
 
   return (
     <>
-      <p className="text-sm text-muted-foreground">
+      <p>
         Your browser session lasts {sessionDays} days. For the MCP gateway or the API you need
         a long-lived token — generate one when you actually need it.
       </p>
       {!token && (
-        <Button className="mt-4" variant="outline" onClick={mint} disabled={busy}>
+        <button type="button" className="button" onClick={mint} disabled={busy}>
           {busy ? 'Generating…' : 'Generate API token'}
-        </Button>
+        </button>
       )}
-      {failed && (
-        <div className="mt-4">
-          <Notice tone="disputed">Could not generate a token. Please try again.</Notice>
-        </div>
-      )}
+      {failed && <div className="error-box">Could not generate a token. Please try again.</div>}
       {token && (
-        <div className="mt-4 space-y-3">
+        <>
           <CopyBlock label="API token" value={token} />
-          <Notice tone="unreviewed" title="Shown once.">
-            It is not stored anywhere. If you lose it, generate another — both keep working
-            until revoked.
-          </Notice>
-        </div>
+          <div className="ambox ambox-content">
+            <b>Shown once.</b>
+            <p>
+              It is not stored anywhere. If you lose it, generate another — both keep working
+              until revoked.
+            </p>
+          </div>
+        </>
       )}
     </>
   )
@@ -96,45 +93,45 @@ export default function WelcomePage() {
   if (isLoading || !data) {
     return (
       <SignupShell wide>
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="mt-6 h-32 w-full" />
+        <Loading />
       </SignupShell>
     )
   }
 
   return (
     <SignupShell wide>
-      <h1 className="text-2xl font-semibold tracking-tight">{data.org_name} is ready</h1>
-      <p className="mt-2 text-sm text-muted-foreground">
+      <h1 className="firstHeading">{data.org_name} is ready</h1>
+      <p className="tagline">
         Nothing else to configure. Send your engineers the two lines below and their work
         starts arriving.
       </p>
 
-      <SectionHeading>1 · Send this to your engineers</SectionHeading>
-      <p className="mb-4 text-sm text-muted-foreground">
+      <h2>1 · Send this to your engineers</h2>
+      <p>
         Two lines on their laptop — no account to create, nothing to set up. This invite is
         good for {data.invite_days} days.
       </p>
       <CopyBlock value={`${data.install_line}\n${data.setup_line}`} />
 
-      <SectionHeading>2 · Or invite them in a browser</SectionHeading>
-      <p className="mb-4 text-sm text-muted-foreground">
+      <h2>2 · Or invite them in a browser</h2>
+      <p>
         The same invite, for anyone who wants to read and correct the team&rsquo;s shared
         context without installing anything.
       </p>
       <CopyBlock value={data.join_url} />
 
-      <SectionHeading>3 · Connect Claude Code or scripts</SectionHeading>
+      <h2>3 · Connect Claude Code or scripts</h2>
       <ApiTokenSection sessionDays={data.session_days} />
 
-      <div className="mt-12 flex flex-wrap gap-3 border-t pt-6">
-        <Button asChild>
-          <a href="/ui">Go to the console</a>
-        </Button>
-        <Button asChild variant="outline">
-          <Link href="/home">Open the team wiki</Link>
-        </Button>
-      </div>
+      <h2>Where to next</h2>
+      <p>
+        <a className="button button-progressive" href="/ui">
+          Go to the console
+        </a>{' '}
+        <Link className="button" href="/home">
+          Open the team wiki
+        </Link>
+      </p>
     </SignupShell>
   )
 }

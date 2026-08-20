@@ -1,10 +1,13 @@
 'use client'
 
 /**
- * Console chrome.
+ * Console chrome, on the encyclopedia stylesheet.
  *
- * Its own nav, distinct from the wiki rail and the marketing header, because the
- * console is a different job: the wiki is for reading, this is for oversight.
+ * The console keeps its own nav rather than borrowing the wiki rail, because it
+ * is a different job — the wiki is for reading, this is for oversight — but it is
+ * now the same SURFACE: same tokens, same type, same links. A founder moving
+ * between a project article and the spend page should not feel they changed
+ * product.
  *
  * THE ORG LIVES IN THE URL. An admin can see every tenant, and which one they are
  * looking at is part of the address rather than component state — so a view can be
@@ -17,11 +20,8 @@
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
-import { Logo } from '@/components/Logo'
-import { ThemeToggle } from '@/components/ThemeToggle'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Loading } from '@/components/Loader'
 import { ApiError, consoleFetcher } from '@/lib/api'
-import { cn } from '@/lib/utils'
 
 export type Me = {
   role: string
@@ -70,7 +70,6 @@ function OrgSwitcher({ me }: { me: Me }) {
   return (
     <select
       aria-label="Organization"
-      className="h-8 rounded-md border bg-background px-2 text-sm"
       value={current}
       onChange={(e) => router.push(`${pathname}?org=${encodeURIComponent(e.target.value)}`)}
     >
@@ -100,48 +99,33 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
   const link = (href: string) => href + (org ? `?org=${org}` : '')
 
   return (
-    <div className="min-h-screen bg-background font-sans text-foreground">
-      <header className="border-b">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-3 px-6 py-3">
-          <Link href="/console">
-            <Logo size={20} />
-          </Link>
-          <nav className="flex items-center gap-1">
-            {NAV.map((item) => {
-              const active =
-                item.href === '/console' ? pathname === '/console' : pathname.startsWith(item.href)
-              return (
-                <Link
-                  key={item.href}
-                  href={link(item.href)}
-                  aria-current={active ? 'page' : undefined}
-                  className={cn(
-                    'rounded-md px-2.5 py-1.5 text-sm transition-colors',
-                    active
-                      ? 'bg-muted font-medium text-foreground'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {item.label}
-                </Link>
-              )
-            })}
-          </nav>
-          <div className="ml-auto flex items-center gap-2">
-            {me && <OrgSwitcher me={me} />}
-            <Link
-              href="/home"
-              className="rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:text-foreground"
-            >
-              Wiki
-            </Link>
-            <ThemeToggle />
-          </div>
+    <div className="signup-shell">
+      <header className="console-header">
+        <Link className="brand" href="/console">
+          Manthana
+        </Link>
+        <nav className="console-nav">
+          {NAV.map((item) => {
+            const active =
+              item.href === '/console' ? pathname === '/console' : pathname.startsWith(item.href)
+            return (
+              <Link
+                key={item.href}
+                className="nav-link"
+                href={link(item.href)}
+                aria-current={active ? 'page' : undefined}
+              >
+                {item.label}
+              </Link>
+            )
+          })}
+        </nav>
+        <div className="console-actions">
+          {me && <OrgSwitcher me={me} />}
+          <Link href="/home">Wiki</Link>
         </div>
       </header>
-      <main className="mx-auto max-w-6xl px-6 py-8">
-        {isLoading ? <Skeleton className="h-40 w-full" /> : children}
-      </main>
+      <main className="console-main">{isLoading ? <Loading /> : children}</main>
     </div>
   )
 }
@@ -155,9 +139,9 @@ export function PageTitle({
   aside?: React.ReactNode
 }) {
   return (
-    <div className="mb-6 flex flex-wrap items-baseline justify-between gap-3">
-      <h1 className="text-xl font-semibold tracking-tight">{children}</h1>
-      {aside && <div className="text-sm text-muted-foreground">{aside}</div>}
-    </div>
+    <>
+      <h1 className="firstHeading">{children}</h1>
+      {aside && <p className="tagline">{aside}</p>}
+    </>
   )
 }
