@@ -13,7 +13,7 @@ releases it. Personal-mode sessions never leave the machine at all. Free text is
 redacted on the way out, and the founder's raw drill-down is audited every time
 it's used.
 
-**→ [Documentation](docs/README.md)**
+**→ [Documentation](https://docs.latentspaces.in)** · [in this repo](docs/README.md)
 
 | You are… | Start here |
 |---|---|
@@ -30,16 +30,32 @@ Reference: [CLI](docs/reference/cli.md) ·
 
 ---
 
-## Install
+## Start
 
-**Engineer:**
+Pick the one that describes you. Each is the whole setup, not a first step.
+
+### 1. Founder — use the hosted server, install nothing
+
+Sign in at **<https://api.latentspaces.in>** with Google. You get an organization
+and a one-line invite to send your engineers. About a minute, no card, no call.
+
+That is the entire setup. Skip to step 2 and send your engineers the line the
+welcome page prints.
+
+### 2. Engineer — you were sent an invite
 
 ```bash
 curl -LsSf https://github.com/Jarus77/manthana/releases/latest/download/install.sh | sh
-manthana setup mia_…        # the one-liner your admin sent you
+manthana setup mia_…        # the one-liner you were sent
 ```
 
-**Admin — a secure team server, no domain and no certificates, using Tailscale:**
+Two lines, and you are done. Nothing to configure, no account to create. Your
+finished sessions start appearing in the team wiki after you release them.
+
+### 3. Self-hosting — your own server
+
+Tailscale is the shortest path: a secure team server with no domain and no
+certificates.
 
 ```bash
 curl -LsSf https://github.com/Jarus77/manthana/releases/latest/download/install.sh | sh -s server
@@ -47,21 +63,29 @@ manthana-server serve --tailscale
 manthana-server enroll acme platform --open --server-url https://<machine>.<tailnet>.ts.net
 ```
 
-Send the printed `manthana setup …` line to each engineer. That's their entire
-onboarding. Other deploy paths — your own domain behind Caddy, the full Docker
-stack, Kubernetes — are in [docs/self-hosting/](docs/self-hosting/index.md).
+Send the printed `manthana setup …` line to each engineer. Other deploy paths —
+your own domain behind Caddy, the full Docker stack, Kubernetes — are in
+[docs/self-hosting/](docs/self-hosting/index.md).
 
-Try the whole flow locally with no infrastructure and no permanent changes:
-`./scripts/quickstart_demo.sh`.
+### 4. Just looking
+
+Run the whole flow locally, no infrastructure and no permanent changes:
+
+```bash
+./scripts/quickstart_demo.sh      # the capture → digest → wiki loop, end to end
+./scripts/preview_wiki.sh         # the web UI against a seeded throwaway database
+```
 
 ---
 
 ## Two things to know before you judge the output
 
-**The server does no LLM work until you turn it on.** Enrichment, consolidation,
-and project overviews all default to off, because each is a background loop that
-spends real money. Out of the box you get faithful digests and no wiki articles.
-See [privacy & budgets](docs/founders/privacy-and-budgets.md).
+**A self-hosted server does no LLM work until you turn it on.** Enrichment,
+consolidation, and project overviews all default to off, because each is a
+background loop that spends real money — so out of the box you get faithful
+digests and no wiki articles. The hosted server at `api.latentspaces.in` has them
+on, which is why articles appear there without you doing anything. See
+[privacy & budgets](docs/founders/privacy-and-budgets.md).
 
 **Cross-engineer features need ≥4 contributors.** The k-anonymity floor withholds
 aggregates that could re-identify someone, so with three people most org-wide
@@ -96,6 +120,12 @@ uv run ruff check . && uv run pyright && uv run pytest     # the gate
 uv sync --extra embeddings                                 # optional: bge-large embeddings
 cd web && npm install && npm run build                     # the client (also type-checks)
 ```
+
+`uv sync` without `--all-packages` prunes the workspace members and leaves the
+test suite unable to import them — the failure looks like broken code and is not.
+
+To see a change in a browser, `./scripts/preview_wiki.sh` starts the server and
+the client against a seeded throwaway database and prints the URL.
 
 ## Licensing
 
