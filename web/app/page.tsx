@@ -7,12 +7,19 @@
  *
  * The copy makes the argument the product actually makes, and says only things
  * that are true of the shipped software: what gets captured, who can see it, and
- * what it costs. No invented customers, no metrics nobody measured — the reader
- * is an engineer who will check.
+ * what it costs. No invented customers, no metrics nobody measured, no pricing —
+ * the reader is an engineer who will check, and none of those numbers exist yet.
+ *
+ * THE SAMPLE ARTICLE IS THE ONE FICTION, and it is labelled twice — in the
+ * heading and under the panel. The distinction that makes it honest: it
+ * demonstrates the OUTPUT SHAPE, which is real and checkable, rather than
+ * implying a customer, a scale, or a result. The product's entire claim is that
+ * it writes one of these, and describing that in prose while never showing one
+ * was the weakest thing about this page.
  *
  * On the encyclopedia sheet it reads as a portal page, which is what Wikipedia's
- * own main page is: a lead panel and a grid of boxes. No icons — Vector has no
- * icon set, and three decorative glyphs are not worth acquiring one for.
+ * own main page is — including leading with a featured article. No icons: Vector
+ * has no icon set, and three decorative glyphs are not worth acquiring one for.
  */
 
 import type { Metadata } from 'next'
@@ -72,6 +79,60 @@ export default function LandingPage() {
           <span className="faint">Creates your organization. About a minute.</span>
         </p>
 
+        <h2>What Manthana writes — an example</h2>
+        <p>
+          One small article per project, rewritten as the work changes. This is the shape of
+          it. Every claim carries the session it came from, so a reader who doubts a line can
+          go read the work behind it.
+        </p>
+        <div className="featured">
+          <div className="featured-head">checkout-rewrite</div>
+          <p className="featured-sub">A project in the acme organisation · active</p>
+          <dl className="featured-facts">
+            <div>
+              <dt>Sessions</dt>
+              <dd>34</dd>
+            </div>
+            <div>
+              <dt>Contributors</dt>
+              <dd>4</dd>
+            </div>
+            <div>
+              <dt>Last active</dt>
+              <dd>2 hours ago</dd>
+            </div>
+            <div>
+              <dt>Revisions</dt>
+              <dd>7</dd>
+            </div>
+          </dl>
+          <p>
+            <b>checkout-rewrite</b> replaces the legacy payment flow with a stateless
+            checkout service. It owns card capture, 3DS, and the retry ladder in front of the
+            processor.
+          </p>
+          <h3>Current state</h3>
+          <ul>
+            <li>
+              3DS challenge flow works end to end against the sandbox; live keys are still
+              pending compliance sign-off.<cite>[1]</cite>
+            </li>
+            <li>
+              Retries were moved off exponential backoff after it doubled processor
+              charges on a partial outage.<cite>[2]</cite>
+            </li>
+            <li>Idempotency keys are now required on every write path.<cite>[2]</cite></li>
+          </ul>
+          <h3>Open questions</h3>
+          <ul>
+            <li>Does the retry ladder need a per-processor cap, or is the global one enough?</li>
+          </ul>
+        </div>
+        <p className="faint">
+          Illustrative — not a real customer&rsquo;s article. Nobody wrote any of this by
+          hand; it is assembled from finished sessions and rewritten as they arrive.
+        </p>
+
         <h2>The install, in full</h2>
         <p>Then each engineer runs two lines. No account to create, nothing to configure.</p>
         <div className="scroll-x">
@@ -115,25 +176,44 @@ export default function LandingPage() {
           </p>
         </div>
 
-        <h2>What it does not do</h2>
-        <div className="portal-grid">
-          <div className="portal-box">
-            <h2>It is not surveillance</h2>
-            <p>
-              Engineers choose what is released. A session can be marked personal and never
-              leaves the laptop. Nothing is captured in real time — only finished sessions,
-              only after review.
-            </p>
-          </div>
-          <div className="portal-box">
-            <h2>Aggregates have a floor</h2>
-            <p>
-              By default, cross-team answers need contributions from several people before they
-              are shown at all, so a &ldquo;team pattern&rdquo; can never be one person&rsquo;s
-              activity in disguise. An org can waive this deliberately; it is not off by
-              accident.
-            </p>
-          </div>
+        <h2>What leaves the laptop, and what never does</h2>
+        <p>
+          The first question an engineer asks is &ldquo;so my founder can read my
+          chats?&rdquo; The answer is no, and it is worth being precise about why — a tool a
+          team quietly turns off produces nothing.
+        </p>
+        <table className="wikitable">
+          <thead>
+            <tr>
+              <th>Never leaves the machine</th>
+              <th>Leaves, once the engineer releases it</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Sessions marked personal — at any point, retroactively</td>
+              <td>A typed digest: intent, approach, files touched, outcome, cost</td>
+            </tr>
+            <tr>
+              <td>Anything not yet released — sync pushes released work only</td>
+              <td>Free text, after redaction on the way out</td>
+            </tr>
+            <tr>
+              <td>Live keystrokes — nothing is captured in real time, only finished sessions</td>
+              <td>
+                The raw transcript, behind a founder-only drill-down that records every look
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div className="ambox ambox-style">
+          <b>Aggregates have a floor.</b>
+          <p>
+            Cross-team answers need contributions from several people before they are shown at
+            all, so a &ldquo;team pattern&rdquo; can never be one person&rsquo;s activity in
+            disguise. With three engineers, most org-wide output is empty by design. An org
+            can waive this deliberately; it is never off by accident.
+          </p>
         </div>
 
         <h2>Start with your own sessions</h2>

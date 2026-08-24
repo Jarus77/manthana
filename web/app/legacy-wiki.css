@@ -1173,3 +1173,76 @@ textarea {
   font-size: 1em;
   line-height: 1.5;
 }
+
+/* ── featured article, on the front door ───────────────────────────────────
+ *
+ * Wikipedia's main page leads with "From today's featured article", and the
+ * same move does real work here: this product's entire claim is that it WRITES
+ * one of these, and the old landing page only described that in prose. A reader
+ * who can see the output — the lead sentence, the fact table, the citation
+ * superscripts — has already understood the pitch.
+ *
+ * Marked as an example in the heading, not in small print. It is illustrative,
+ * and a landing page that lets a reader think it is a real customer's article
+ * has lied to them.
+ */
+.featured {
+  border: 1px solid var(--wiki-border-subtle);
+  background: var(--wiki-surface);
+  padding: 1em 1.2em 1.2em;
+  margin-bottom: 1.5em;
+}
+
+.featured-head {
+  font-family: var(--wiki-serif);
+  font-size: 1.5em;
+  line-height: 1.2;
+  margin: 0 0 0.1em;
+}
+
+.featured-sub {
+  color: var(--wiki-subtle);
+  font-size: 0.9em;
+  margin: 0 0 0.8em;
+  padding-bottom: 0.4em;
+  border-bottom: 1px solid var(--wiki-border-subtle);
+}
+
+/* The fact strip. A row rather than the article page's floated infobox — at
+   this width a float would leave the prose in a 12-word column. */
+.featured-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em 1.6em;
+  background: var(--wiki-neutral);
+  border: 1px solid var(--wiki-border-subtle);
+  padding: 0.5em 0.8em;
+  margin-bottom: 0.9em;
+  font-size: 0.92em;
+}
+
+.featured-facts dt {
+  display: inline;
+  color: var(--wiki-subtle);
+}
+
+.featured-facts dd {
+  display: inline;
+  margin: 0 0 0 0.35em;
+  font-weight: 700;
+}
+
+.featured cite {
+  font-style: normal;
+  font-size: 0.75em;
+  vertical-align: super;
+  margin-left: 0.1em;
+  color: var(--wiki-link);
+}
+
+/* Two columns of prose with a rule between, for what-leaves / what-stays. */
+.split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0 2em;
+}
