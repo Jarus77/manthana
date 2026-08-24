@@ -1,12 +1,12 @@
 [project]
 name = "manthana-server"
-version = "0.7.7"
+version = "0.7.8"
 description = "Manthana org server — ingestion, multi-tenancy, k-anonymity, founder query (AGPL-3.0)."
 requires-python = ">=3.11"
 license = "AGPL-3.0-or-later"
 dependencies = [
-    "manthana-schemas==0.7.7",
-    "manthana-skills==0.7.7",
+    "manthana-schemas==0.7.8",
+    "manthana-skills==0.7.8",
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "python-multipart>=0.0.9",
@@ -26,7 +26,13 @@ s3 = ["boto3>=1.35"]
 llm = ["anthropic>=0.40"]
 # Founder MCP gateway — Claude Code connects over MCP/HTTP (spec: manthana-founder-mcp).
 # Optional; the gateway degrades to an install hint when absent.
-mcp = ["mcp>=1.0"]
+#
+# UPPER BOUND IS LOAD-BEARING. mcp 2.0.0 removed `mcp.server.fastmcp`, which this
+# gateway is built on. Unpinned, that release reached a production image and the
+# server refused to start — the deploy rolled back on its own, but only because
+# the container exits rather than degrading. Lift this when the gateway is ported
+# to the 2.x API, not before.
+mcp = ["mcp>=1.0,<2"]
 
 [project.scripts]
 manthana-server = "manthana.server.cli:main"

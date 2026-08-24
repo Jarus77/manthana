@@ -199,3 +199,38 @@ def test_mcp_endpoint_requires_founder_token():
 def test_mcp_endpoint_absent_when_flag_off():
     with TestClient(_app(False)) as c:
         assert c.post("/mcp/", json=_INIT, headers=_MCP_HEADERS).status_code == 404
+
+
+# ── the diagnosis, which is what actually cost a production deploy ────────
+def test_unavailable_reason_tells_absent_apart_from_incompatible(monkeypatch) -> None:
+    """mcp 2.0.0 dropped mcp.server.fastmcp. The old guard caught every exception
+    around that import and reported "the extra is missing", so a container refused
+    to start telling the operator to install a package that WAS installed. These
+    two failures must never collapse into one message again."""
+    import builtins
+
+    from manthana.server import founder_mcp
+
+    real_import = builtins.__import__
+
+    def fake(name, *args, **kw):
+        if name == "mcp" or name.startswith("mcp."):
+            raise ImportError(f"No module named {name!r}")
+        return real_import(name, *args, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", fake)
+    absent = founder_mcp.unavailable_reason()
+    assert "not installed" in absent and "uv sync --extra mcp" in absent
+
+    def fake_v2(name, *args, **kw):
+        if name == "mcp.server.fastmcp":
+            raise ModuleNotFoundError("No module named 'mcp.server.fastmcp'")
+        if name == "mcp":
+            return real_import("sys")  # stands in for an installed mcp package
+        return real_import(name, *args, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", fake_v2)
+    incompatible = founder_mcp.unavailable_reason()
+    assert "not installed" not in incompatible
+    assert "mcp.server.fastmcp" in incompatible and "2.0" in incompatible
+    assert founder_mcp.available() is False

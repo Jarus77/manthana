@@ -16,5 +16,5 @@
 services:
   server:
     build: !reset null  # drop the source build — use the registry image
-    image: ${MANTHANA_IMAGE:-ghcr.io/jarus77/manthana-server}:${MANTHANA_VERSION:-0.7.7}
+    image: ${MANTHANA_IMAGE:-ghcr.io/jarus77/manthana-server}:${MANTHANA_VERSION:-0.7.8}
     pull_policy: always

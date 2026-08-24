@@ -58,13 +58,33 @@ _GREP_MAX_SESSIONS = 500
 _GREP_MAX_HITS = 50
 
 
-def available() -> bool:
+def unavailable_reason() -> str:
+    """Why the gateway cannot be built, in words an operator can act on. '' when it can.
+
+    Two DIFFERENT failures used to collapse into one message. A bare
+    ``except Exception`` around the import meant "package absent" and "package
+    present but incompatible" both reported as the extra being missing — so when
+    mcp 2.0.0 dropped ``mcp.server.fastmcp``, a production container refused to
+    start telling the operator to install something that was already installed.
+    Distinguishing them is the whole point of this function.
+    """
+    try:
+        import mcp  # type: ignore[import-not-found]  # noqa: F401
+    except ImportError:
+        return "the 'mcp' extra is not installed — install: uv sync --extra mcp"
     try:
         import mcp.server.fastmcp  # type: ignore[import-not-found]  # noqa: F401
+    except Exception as exc:  # noqa: BLE001 - any breakage here is a version mismatch
+        return (
+            f"the installed mcp package cannot provide mcp.server.fastmcp ({exc}). "
+            "This gateway targets mcp 1.x; 2.0 removed that module. "
+            "Pin mcp<2, or port the gateway to the 2.x API."
+        )
+    return ""
 
-        return True
-    except Exception:  # noqa: BLE001 - extra not installed
-        return False
+
+def available() -> bool:
+    return not unavailable_reason()
 
 
 def _brief(c: Any) -> dict[str, Any]:

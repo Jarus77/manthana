@@ -250,14 +250,11 @@ def create_app(
     mcp_asgi: Any = None
     _mcp_server: Any = None
     if config.enable_founder_mcp:
-        from .founder_mcp import available as mcp_available
-        from .founder_mcp import build_founder_mcp, founder_mcp_asgi
+        from .founder_mcp import build_founder_mcp, founder_mcp_asgi, unavailable_reason
 
-        if not mcp_available():
-            raise RuntimeError(
-                "MANTHANA_SERVER_ENABLE_FOUNDER_MCP set but the 'mcp' extra is missing "
-                "— install: uv sync --extra mcp"
-            )
+        reason = unavailable_reason()
+        if reason:
+            raise RuntimeError(f"MANTHANA_SERVER_ENABLE_FOUNDER_MCP is set but {reason}")
         _mcp_server = build_founder_mcp(store, object_store, config)
         mcp_asgi = founder_mcp_asgi(_mcp_server, config, store)
 
