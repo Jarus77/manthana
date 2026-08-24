@@ -20,6 +20,7 @@ from .compare import (
 from .enricher import (
     EnrichStats,
     apply_enrichment,
+    build_rationale_notes,
     enrich_org,
     enrich_provider_for,
     rehydrate_turns,
@@ -36,6 +37,7 @@ __all__ = [
     "compare_enrichment",
     "summarize",
     "apply_enrichment",
+    "build_rationale_notes",
     "enrich_org",
     "enrich_provider_for",
     "rehydrate_turns",

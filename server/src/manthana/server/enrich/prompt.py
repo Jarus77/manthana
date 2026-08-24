@@ -54,6 +54,28 @@ single JSON object — no prose, no code fences — with EXACTLY these keys:
   dead_end_branches: string[]
   languages: string[]
   frameworks: string[]
+  human_rationale: array of { "claim": string, "quote": string,
+      "concepts": string[] }  (see below; [] when there is none)
+
+HUMAN_RATIONALE is the one field that is not about what happened. It records
+what the PERSON contributed that the session would not have reached on its own:
+a judgment call, a constraint they already knew, a correction, a reason for
+choosing one option over another. Rules, because this field is easy to fill with
+noise:
+
+  - Only turns with role="user". Never the assistant's reasoning.
+  - Steering is NOT rationale. "go", "continue", "yes", "do it", "ship it",
+      "looks good", "next" carry no judgment — skip them entirely.
+  - A correction usually IS rationale, but only with its reason. "no, use X
+      because Y" qualifies; a bare "no, use X" does not.
+  - "claim" states what they knew or decided, in the third person, so it reads
+      as durable knowledge: "The composite key is required because ids are
+      global across orgs."
+  - "quote" is their OWN WORDS, verbatim, trimmed to the sentence that carries
+      the judgment (<=200 chars). Never paraphrase into this field — it exists
+      so a reader can check the claim against what was actually said.
+  - Return [] rather than stretching. Most sessions contain no rationale at all,
+      and an empty list is the correct and common answer.
 
 Ground every field in the turns — never invent a file name, number, or fact not
 present. Use [] for unknowns. Output JSON only.
