@@ -1415,6 +1415,16 @@ class ServerStore:
                 ):
                     continue
                 note = KnowledgeNote.model_validate(data)
+                # A rationale note's BODY quotes what a person actually typed.
+                # Going ``stale`` is enough for every other kind — the claim stops
+                # being load-bearing but the model's prose about the work is
+                # harmless to leave rendered. Here it is not: purging a session is
+                # how someone removes what was said, and a stale badge over their
+                # own sentence still leaves the sentence on the page. So the note
+                # goes with the evidence.
+                if not evidence and str(note.kind) == "rationale":
+                    db.delete(note_row)
+                    continue
                 update: dict[str, Any] = {
                     "evidence": evidence,
                     "disputed_by": disputed,

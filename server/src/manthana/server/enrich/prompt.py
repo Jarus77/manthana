@@ -21,7 +21,7 @@ import json
 
 from manthana.schemas import Session, Turn
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 
 _MAX_TURNS = 400
 _HEAD_TURNS = 250

@@ -83,7 +83,7 @@ def test_compact_produces_deterministic_pending_compaction() -> None:
     assert comp.est_cost_usd == 15.0
     assert comp.total_tokens == 1_000_000
     assert comp.duration_seconds == 300.0
-    assert comp.prompt_version == "v2"
+    assert comp.prompt_version == "v3"
     assert comp.created_at is not None
     # Nothing was spent building it.
     assert comp.call_cost_usd is None

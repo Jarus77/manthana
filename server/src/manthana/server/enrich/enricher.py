@@ -186,7 +186,11 @@ def apply_enrichment(
 
 
 def build_rationale_notes(
-    compaction: BaseCompaction, data: dict[str, object], *, now: datetime | None = None
+    compaction: BaseCompaction,
+    data: dict[str, object],
+    *,
+    now: datetime | None = None,
+    limit: int = 3,
 ) -> list[KnowledgeNote]:
     """Turn the model's ``human_rationale`` into notes. Pure — no store, no model.
 
@@ -212,6 +216,11 @@ def build_rationale_notes(
     raw = data.get("human_rationale")
     if not isinstance(raw, list):
         return notes
+    # Bounded like consolidation's _MAX_NEW_NOTES, and for the same reason: model
+    # output has no length, and these skip the adjudicator that would otherwise
+    # collapse them. One long session must not put twenty notes at the top of a
+    # project page.
+    raw = raw[: max(0, limit)]
     project = getattr(compaction, "project", "") or ""
     for item in raw:
         if not isinstance(item, dict):
@@ -222,10 +231,15 @@ def build_rationale_notes(
         # exact failure this field exists to avoid — so it is dropped, not kept.
         if not claim or not quote:
             continue
-        # Clipped like every other note writer (consolidate._clip_body,
-        # overview._clip). The quote is bounded at the source, but `claim` is
-        # free text from a model and nothing else here would stop it.
-        body = f"{claim}\n\n> {quote[:200]}"
+        # EVERY line of the quote is prefixed, not just the first. The body is
+        # rendered through react-markdown: a quote containing a newline would put
+        # its remainder outside the blockquote as ordinary prose, indistinguishable
+        # from the claim — and a line starting "#" or "-" would render as a heading
+        # or a list inside someone else's article. Turn text reaches the prompt at
+        # up to 600 chars including newlines, so this is ordinary input, not an edge
+        # case.
+        quoted = "\n".join(f"> {line}" for line in quote[:200].splitlines() or [""])
+        body = f"{claim}\n\n{quoted}"
         cap = body_char_cap(NoteKind.rationale)
         if len(body) > cap:
             body = body[: cap - 1].rstrip() + "…"
@@ -349,9 +363,20 @@ def enrich_org(
             store.clear_enrichment_state(org_id, compaction.id)
             # Only after the digest lands: a rationale note whose session never
             # got written would cite evidence that does not exist.
-            for note in build_rationale_notes(compaction, data):
-                store.upsert_note(note.model_copy(update={"org_id": org_id}))
-                stats.rationale += 1
+            #
+            # NEVER ON THE SUMMARY PATH. When a native summary exists the prompt
+            # carries no turns at all (`turns` stays empty above), so the model is
+            # being asked for a VERBATIM quote from text it was never shown — it
+            # can only invent one, and "quote is present" is not a check that
+            # catches an invention. Publishing fabricated words in a named
+            # engineer's voice is worse than publishing nothing, so this field is
+            # simply not honoured there.
+            if config.enable_rationale_notes and not summary:
+                for note in build_rationale_notes(
+                    compaction, data, limit=config.rationale_max_per_session
+                ):
+                    store.upsert_note(note.model_copy(update={"org_id": org_id}))
+                    stats.rationale += 1
             stats.enriched += 1
         else:  # row disappeared mid-pass (purged) — nothing to write
             stats.failed += 1

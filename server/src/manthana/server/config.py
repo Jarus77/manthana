@@ -185,6 +185,18 @@ class ServerConfig:
     overview_min_sessions: int = 1
     overview_max_attempts: int = 3
 
+    # ── human rationale ──────────────────────────────────────────────────
+    # Mints `rationale` notes from what an ENGINEER said in a session — their
+    # judgment, quoted verbatim, in their name. OFF by default and behind its own
+    # flag rather than riding on enrichment, because it is the only pass that
+    # publishes a person's own words: an operator running enable_enrichment with
+    # enable_consolidation off has deliberately chosen "digests, no AI-written
+    # wiki notes", and this must not quietly override that choice.
+    enable_rationale_notes: bool = False
+    #: Bound on notes minted from ONE session, mirroring consolidation's
+    #: _MAX_NEW_NOTES. Model output is unbounded; a page is not.
+    rationale_max_per_session: int = 3
+
     enable_consolidation: bool = False
     # Bulk adjudication, not reasoning — same tier logic as enrich_model.
     consolidate_model: str = "claude-haiku-4-5"
@@ -266,6 +278,7 @@ class ServerConfig:
             "overview_session_limit",
             "overview_min_sessions",
             "overview_max_attempts",
+            "rationale_max_per_session",
         ):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} must be >= 1, got {getattr(self, name)}")
@@ -398,6 +411,13 @@ class ServerConfig:
             ),
             enrich_max_age_days=int(
                 env("MANTHANA_SERVER_ENRICH_MAX_AGE_DAYS", str(cls.enrich_max_age_days))
+            ),
+            enable_rationale_notes=(
+                env("MANTHANA_SERVER_ENABLE_RATIONALE_NOTES", "") in ("1", "true", "yes")
+            ),
+            rationale_max_per_session=int(
+                env("MANTHANA_SERVER_RATIONALE_MAX_PER_SESSION",
+                    str(cls.rationale_max_per_session))
             ),
             enable_project_overview=(
                 env("MANTHANA_SERVER_ENABLE_PROJECT_OVERVIEW", "") in ("1", "true", "yes")

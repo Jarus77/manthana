@@ -291,12 +291,12 @@ def test_provider_exception_does_not_kill_the_batch() -> None:
 def test_prompt_version_is_stamped_for_traceability() -> None:
     store, obj = _seeded(_pending(native="PRIOR STATE"))
     enrich_org(store, obj, MockProvider(_GOOD), _config(), org_id="o1", limit=10)
-    assert _fetch(store).prompt_version == "v2-summary"
+    assert _fetch(store).prompt_version == "v3-summary"
 
     store2, obj2 = _seeded()
     _put_raw(store2, obj2)
     enrich_org(store2, obj2, MockProvider(_GOOD), _config(), org_id="o1", limit=10)
-    assert _fetch(store2).prompt_version == "v2"
+    assert _fetch(store2).prompt_version == "v3"
 
 
 # ── batching ──────────────────────────────────────────────────────────────

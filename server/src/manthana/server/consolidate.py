@@ -142,8 +142,31 @@ def retrieve_candidates(
 ) -> list[KnowledgeNote]:
     """Top-k live notes by cosine ∪ entity-overlap hits, capped. Retrieval
     failure degrades to entity-overlap only — a broken embedder must not stall
-    consolidation."""
-    notes = store.query_notes(org_id, limit=config.consolidate_note_scan)
+    consolidation.
+
+    FILTERED TO ``ADJUDICABLE_KINDS``. That tuple used to gate creation only, and
+    the gap was silent in both directions: a kind the adjudicator may not MINT
+    could still be handed to it as a candidate and then rewritten by a `refines`
+    verdict, or have another engineer's name grafted on by a `supports` one. The
+    "one law" below is no protection — it exempts ``source == human``, and every
+    kind reachable here is ``source == ai``.
+
+    What that reached, before this filter:
+      * ``project_overview`` — a whole project article, replaceable wholesale by
+        a per-session verdict, bypassing the overview pass's version chain and
+        change_summary discipline entirely. Pre-existing, and the reason this is
+        a filter rather than a rationale-shaped special case.
+      * ``rationale`` — a person's verbatim quote replaced by a paraphrase while
+        still labelled a quote and still attributed to them, which is the exact
+        failure that kind's design exists to prevent.
+
+    A kind the adjudicator cannot create is a kind it does not own, and it should
+    not be able to edit what it does not own."""
+    notes = [
+        n
+        for n in store.query_notes(org_id, limit=config.consolidate_note_scan)
+        if n.kind in ADJUDICABLE_KINDS
+    ]
     if not notes:
         return []
     semantic: list[KnowledgeNote] = []

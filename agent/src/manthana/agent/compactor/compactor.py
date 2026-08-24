@@ -37,7 +37,7 @@ from ..cost import estimate_cost
 # version string stays here, stamped onto the deterministic digest so the
 # server's enriched output remains traceable to a template version. Keep this
 # value in step with ``manthana.server.enrich.prompt.PROMPT_VERSION``.
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 
 # Claude Code tool names + Codex's `apply_patch` (synthesized by the Codex
 # collector from `patch_apply_end`, which is where Codex records real file edits).

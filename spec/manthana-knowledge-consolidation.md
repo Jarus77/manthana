@@ -158,3 +158,40 @@ page both state the second one now; the mechanics are unchanged (personal
 sessions never sync, nothing leaves unreleased, free text redacted on the way
 out) and attribution is deliberate — a rationale with the author filed off has
 lost what makes it worth trusting.
+
+
+### Review findings, and what changed (2026-08-24)
+
+A review of the branch before merge found the design shipped three holes. All are
+fixed; two of them were not about `rationale` at all.
+
+**The adjudicator could edit what it cannot create.** `ADJUDICABLE_KINDS` gated
+creation only — `retrieve_candidates` returned every kind, and the "one law"
+exempts `source == human`, which nothing reachable there is. A `refines` verdict
+could therefore replace a rationale's body, destroying the verbatim quote while
+still labelling it one; `supports` could graft a second engineer's name onto
+words they never said. **The same hole already applied to `project_overview`**: a
+per-session verdict could replace a whole project article outside the overview
+pass's version chain and change_summary discipline. `retrieve_candidates` now
+filters to `ADJUDICABLE_KINDS` — a kind the adjudicator does not own is a kind it
+may not edit.
+
+**A verbatim quote could be fabricated.** ~14% of sessions carry a native summary,
+and on that path `turns` is empty — the prompt shows the model no user text at
+all, while still demanding a verbatim quote. It can only invent one, and "a quote
+is present" does not catch an invention. The field is not honoured on that path.
+
+**Purging stopped meaning what it says.** `delete_compactions` strips evidence and
+marks an AI note stale. Enough for model prose about the work; not enough for a
+body that is a literal copy of what someone typed, because purging is how that is
+removed. A rationale note left with no evidence is now deleted, not badged.
+
+Also: its own `enable_rationale_notes` flag (riding on enrichment overrode an
+operator's deliberate "digests, no AI notes" choice), a per-session cap mirroring
+`_MAX_NEW_NOTES`, every line of a quote prefixed so markdown cannot escape the
+blockquote, and `PROMPT_VERSION` v2 → v3.
+
+Left open, deliberately: `concepts` on these notes are dead data until the
+enrichment path writes `mentions` edges; the title and the body's first line are
+the same sentence, so list rows gloss themselves; and a longer required output
+raises truncation risk against `enrich_max_tokens`.
