@@ -119,3 +119,21 @@ def test_rationale_is_browsable_but_the_adjudicator_cannot_mint_one() -> None:
 
     assert NoteKind.rationale not in ADJUDICABLE_KINDS
     assert SECTION_ORDER[0] == NoteKind.rationale
+
+
+def test_a_rambling_claim_is_clipped_like_every_other_note() -> None:
+    """`quote` is bounded where it is read, but `claim` is free text from a model
+    and nothing else on this path would stop it. Every other writer clips
+    (consolidate._clip_body, overview._clip); this one has to as well, or one bad
+    generation puts an unbounded body in the store."""
+    from manthana.schemas import body_char_cap
+
+    cap = body_char_cap(NoteKind.rationale)
+    notes = build_rationale_notes(
+        _comp(),
+        {"human_rationale": [{"claim": "x" * (cap * 3), "quote": "because I said so"}]},
+        now=_NOW,
+    )
+    assert len(notes) == 1
+    assert len(notes[0].body) <= cap
+    assert len(notes[0].title) <= 200

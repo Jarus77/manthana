@@ -53,6 +53,7 @@ from manthana.schemas import (
     NoteStatus,
     Session,
     Turn,
+    body_char_cap,
 )
 
 from ..metering import MeteredProvider, QuotaExceededError
@@ -221,13 +222,20 @@ def build_rationale_notes(
         # exact failure this field exists to avoid — so it is dropped, not kept.
         if not claim or not quote:
             continue
+        # Clipped like every other note writer (consolidate._clip_body,
+        # overview._clip). The quote is bounded at the source, but `claim` is
+        # free text from a model and nothing else here would stop it.
+        body = f"{claim}\n\n> {quote[:200]}"
+        cap = body_char_cap(NoteKind.rationale)
+        if len(body) > cap:
+            body = body[: cap - 1].rstrip() + "…"
         notes.append(
             KnowledgeNote(
                 id=f"kn-{uuid4().hex[:12]}",
                 org_id="",  # set by the caller, which knows the tenant
                 kind=NoteKind.rationale,
                 title=claim[:200],
-                body=f'{claim}\n\n> {quote[:200]}',
+                body=body,
                 scope=f"project:{project}" if project else "org",
                 entities=NoteEntities(
                     projects=[project] if project else [],
