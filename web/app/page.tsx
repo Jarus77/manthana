@@ -204,6 +204,16 @@ export default function LandingPage() {
                 The raw transcript, behind a founder-only drill-down that records every look
               </td>
             </tr>
+            <tr>
+              <td>
+                Anything you said in a session you keep personal — the whole session stays put
+              </td>
+              <td>
+                The judgment you contributed: a constraint you knew, a correction with its
+                reason. Kept in your name, quoting your words, because it is the part of a
+                session nobody can re-derive
+              </td>
+            </tr>
           </tbody>
         </table>
         <div className="ambox ambox-style">

@@ -106,3 +106,92 @@ This is also a publishable result (fits the planned compaction-fidelity / skill-
 3. Renders: per-project digest markdown + MCP `search_knowledge`.
 4. Org-side consolidation on released corpus with per-note k-anon.
 5. Bake-off (§5.3) → lock representation → then, only if C wins, invest in entity resolution/graph.
+
+---
+
+## Addendum — `rationale`: what the human contributed (2026-08-24)
+
+Every note kind above records what the WORK established. `rationale` records what
+a PERSON knew — the judgment, constraint or correction a session would not have
+reached on its own.
+
+The argument for it is an asymmetry the rest of the system misses. Run a session
+again with the same inputs and the agent's output comes back; the engineer's
+reasoning does not. So the least reproducible thing in a session was also the
+least reachable: it survived only in the raw transcript, behind the audited
+founder-only drill-down, while everything reproducible got a typed note and a
+place on a page.
+
+Where it was being lost, precisely: `compactor.py:_fallback_intent` takes the
+FIRST user turn, truncated to 200 characters, as `task_intent`. That is the only
+user text that reaches a digest. Enrichment then writes `approach` — how the work
+went, in a model's words. Consolidation builds notes from the digest and so never
+sees a user turn at all.
+
+**Owned by enrichment, not consolidation.** Enrichment is the only pass holding
+the raw turns, and a rationale lives in what someone typed. The digest
+deliberately gains no field for it (it would be a schema change carrying text
+that only one consumer wants), so the note is minted directly — the same
+ownership shape `project_overview` has, and excluded from `ADJUDICABLE_KINDS` for
+the same reason. Unlike an overview it IS browsable, and it leads `SECTION_ORDER`.
+
+**Claim plus verbatim quote, or nothing.** The note body carries both: the claim
+makes it findable, the quote makes it checkable. A claim arriving without a quote
+is DROPPED rather than kept — writing these from a model's reading of a
+transcript risks a confident paraphrase with nothing to check it against, and
+that failure is invisible unless the original sits beside it.
+
+**Steering is not rationale.** Most user turns are "go", "continue", "ship it".
+The prompt enumerates those and instructs `[]` as the common answer;
+`EnrichStats.rationale` is counted separately from `enriched` so that a pass
+minting roughly one note per session is visible as the regression it would be.
+
+**Costs accepted.** These skip the per-session adjudicator, so they are never
+deduped or superseded the way a `decision` is — two sessions where the same
+person says the same thing produce two notes. Tolerable because a rationale is
+tied to the moment of judgment and cites the session it was said in, but it is
+where to look if the wiki starts repeating itself.
+
+**This widens the privacy claim and the docs say so.** "We keep what the AI did"
+and "we keep what you told it" are different sentences. README and the landing
+page both state the second one now; the mechanics are unchanged (personal
+sessions never sync, nothing leaves unreleased, free text redacted on the way
+out) and attribution is deliberate — a rationale with the author filed off has
+lost what makes it worth trusting.
+
+
+### Review findings, and what changed (2026-08-24)
+
+A review of the branch before merge found the design shipped three holes. All are
+fixed; two of them were not about `rationale` at all.
+
+**The adjudicator could edit what it cannot create.** `ADJUDICABLE_KINDS` gated
+creation only — `retrieve_candidates` returned every kind, and the "one law"
+exempts `source == human`, which nothing reachable there is. A `refines` verdict
+could therefore replace a rationale's body, destroying the verbatim quote while
+still labelling it one; `supports` could graft a second engineer's name onto
+words they never said. **The same hole already applied to `project_overview`**: a
+per-session verdict could replace a whole project article outside the overview
+pass's version chain and change_summary discipline. `retrieve_candidates` now
+filters to `ADJUDICABLE_KINDS` — a kind the adjudicator does not own is a kind it
+may not edit.
+
+**A verbatim quote could be fabricated.** ~14% of sessions carry a native summary,
+and on that path `turns` is empty — the prompt shows the model no user text at
+all, while still demanding a verbatim quote. It can only invent one, and "a quote
+is present" does not catch an invention. The field is not honoured on that path.
+
+**Purging stopped meaning what it says.** `delete_compactions` strips evidence and
+marks an AI note stale. Enough for model prose about the work; not enough for a
+body that is a literal copy of what someone typed, because purging is how that is
+removed. A rationale note left with no evidence is now deleted, not badged.
+
+Also: its own `enable_rationale_notes` flag (riding on enrichment overrode an
+operator's deliberate "digests, no AI notes" choice), a per-session cap mirroring
+`_MAX_NEW_NOTES`, every line of a quote prefixed so markdown cannot escape the
+blockquote, and `PROMPT_VERSION` v2 → v3.
+
+Left open, deliberately: `concepts` on these notes are dead data until the
+enrichment path writes `mentions` edges; the title and the body's first line are
+the same sentence, so list rows gloss themselves; and a longer required output
+raises truncation risk against `enrich_max_tokens`.

@@ -8,6 +8,10 @@
  */
 
 export type NoteKind =
+  // What a PERSON contributed — the judgment, constraint or correction the
+  // session would not have reached on its own. Every other kind records what
+  // the work established; this one records what someone knew.
+  | 'rationale'
   | 'decision'
   | 'convention'
   | 'gotcha'
@@ -279,6 +283,7 @@ export interface AskResult {
 
 /** Human-readable labels for the fixed note taxonomy. */
 export const KIND_LABEL: Record<NoteKind, string> = {
+  rationale: 'What people worked out',
   decision: 'Decisions',
   convention: 'Conventions',
   gotcha: 'Gotchas',
@@ -290,6 +295,7 @@ export const KIND_LABEL: Record<NoteKind, string> = {
 }
 
 export const KIND_SINGULAR: Record<NoteKind, string> = {
+  rationale: 'thing someone worked out',
   decision: 'decision',
   convention: 'convention',
   gotcha: 'gotcha',

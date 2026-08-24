@@ -87,6 +87,15 @@ digests and no wiki articles. The hosted server at `api.latentspaces.in` has the
 on, which is why articles appear there without you doing anything. See
 [privacy & budgets](docs/founders/privacy-and-budgets.md).
 
+**What an engineer TELLS the AI is captured too, not just what the AI did.**
+When a session shows someone working something out — a constraint they already
+knew, a correction with a reason — that judgment becomes a cited note in their
+name. It is the one thing in a session that cannot be re-derived by running the
+work again. Same rules as everything else: personal sessions never sync, nothing
+leaves unreleased, free text is redacted on the way out. Say this out loud when
+you roll Manthana out; "we keep what the AI did" and "we keep what you told it"
+are different sentences and your team will notice which one is true.
+
 **Cross-engineer features need ≥4 contributors.** The k-anonymity floor withholds
 aggregates that could re-identify someone, so with three people most org-wide
 output is empty by design. Onboard the team, not one person.

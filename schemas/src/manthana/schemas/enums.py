@@ -129,6 +129,22 @@ class NoteKind(StrEnum):
     from ``pages.SECTION_ORDER`` (so it is not browsable "knowledge") and from
     ``consolidate.ADJUDICABLE_KINDS`` (so the per-session adjudicator cannot
     create one).
+
+    ``rationale`` records WHAT A HUMAN CONTRIBUTED — the judgment, constraint or
+    correction an engineer supplied that the session would not have reached on
+    its own. Every other kind describes what the work established; this one
+    describes what a person knew. That distinction is the point: an agent's
+    output is reproducible from the same inputs and a person's reasoning is not,
+    so it was the single most replaceable-looking thing in the system and
+    actually the least.
+
+    It shares ``project_overview``'s ownership shape — written by one pass
+    (enrichment, the only pass holding the raw turns) and excluded from
+    ``ADJUDICABLE_KINDS`` so the per-session adjudicator cannot mint one — but
+    unlike an overview it IS browsable knowledge and appears in SECTION_ORDER.
+    Evidence is the session it was said in, and ``actors`` is the person who said
+    it: this kind attributes rather than anonymises, because a rationale with the
+    person filed off has lost the thing that makes it trustworthy.
     """
 
     decision = "decision"
@@ -138,6 +154,7 @@ class NoteKind(StrEnum):
     procedure_ref = "procedure_ref"
     faq = "faq"
     benchmark = "benchmark"
+    rationale = "rationale"
     project_overview = "project_overview"
 
 

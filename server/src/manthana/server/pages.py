@@ -70,6 +70,10 @@ def article_lead(body: str) -> str:
 
 #: Notes are grouped into these sections, in this order, on a project page.
 SECTION_ORDER = [
+    # First, deliberately: what a PERSON knew is the scarcest thing on the page.
+    # Everything below it is what the work established, which the work can
+    # establish again; a rationale is the one section that cannot be re-derived.
+    NoteKind.rationale,
     NoteKind.decision,
     NoteKind.convention,
     NoteKind.gotcha,

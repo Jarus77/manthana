@@ -41,12 +41,19 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, TypeVar
+from uuid import uuid4
 
 from manthana.schemas import (
     BaseCompaction,
     EngineeringCompaction,
+    KnowledgeNote,
+    NoteEntities,
+    NoteKind,
+    NoteSource,
+    NoteStatus,
     Session,
     Turn,
+    body_char_cap,
 )
 
 from ..metering import MeteredProvider, QuotaExceededError
@@ -78,6 +85,10 @@ class EnrichStats:
     abandoned: int = 0  # attempts/age exhausted — will NOT retry
     failed: int = 0  # call or parse failed — will retry
     quota_blocked: int = 0  # org hit its monthly cap; digests left pending
+    # Rationale notes minted this pass. Counted separately from `enriched`
+    # because most sessions contain none, and a pass that suddenly mints one per
+    # session means the prompt has started calling steering "judgment".
+    rationale: int = 0
     orgs: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
@@ -87,6 +98,7 @@ class EnrichStats:
             "abandoned": self.abandoned,
             "failed": self.failed,
             "quota_blocked": self.quota_blocked,
+            "rationale": self.rationale,
             "orgs": self.orgs,
         }
 
@@ -171,6 +183,90 @@ def apply_enrichment(
     merged.source = "claude_summary" if used_summary else "full"
     merged.prompt_version = f"{PROMPT_VERSION}-summary" if used_summary else PROMPT_VERSION
     return merged
+
+
+def build_rationale_notes(
+    compaction: BaseCompaction,
+    data: dict[str, object],
+    *,
+    now: datetime | None = None,
+    limit: int = 3,
+) -> list[KnowledgeNote]:
+    """Turn the model's ``human_rationale`` into notes. Pure — no store, no model.
+
+    This kind is minted HERE rather than in ``consolidate`` for one reason:
+    enrichment is the only pass that holds the raw turns, and a rationale lives in
+    what a person typed. Consolidation works from digests, and the digest
+    deliberately does not carry the turns.
+
+    Consequence, stated because it is a real cost: these skip the per-session
+    adjudicator, so they are never deduped against an existing note the way a
+    decision is. Two sessions where the same person says the same thing produce
+    two notes. That is tolerable — a rationale is tied to the moment of judgment,
+    and its evidence is the session it was said in — but it is not free, and if
+    the wiki starts repeating itself this is where to look.
+
+    Both halves are kept: ``claim`` is what makes it findable, ``quote`` is what
+    makes it checkable. Dropping the quote was the known risk of writing these
+    from a model's reading rather than from the words themselves, and carrying
+    the sentence costs a line.
+    """
+    now = now or datetime.now(UTC)
+    notes: list[KnowledgeNote] = []
+    raw = data.get("human_rationale")
+    if not isinstance(raw, list):
+        return notes
+    # Bounded like consolidation's _MAX_NEW_NOTES, and for the same reason: model
+    # output has no length, and these skip the adjudicator that would otherwise
+    # collapse them. One long session must not put twenty notes at the top of a
+    # project page.
+    raw = raw[: max(0, limit)]
+    project = getattr(compaction, "project", "") or ""
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        claim = str(item.get("claim") or "").strip()
+        quote = str(item.get("quote") or "").strip()
+        # A claim with no quote is a paraphrase nobody can check, which is the
+        # exact failure this field exists to avoid — so it is dropped, not kept.
+        if not claim or not quote:
+            continue
+        # EVERY line of the quote is prefixed, not just the first. The body is
+        # rendered through react-markdown: a quote containing a newline would put
+        # its remainder outside the blockquote as ordinary prose, indistinguishable
+        # from the claim — and a line starting "#" or "-" would render as a heading
+        # or a list inside someone else's article. Turn text reaches the prompt at
+        # up to 600 chars including newlines, so this is ordinary input, not an edge
+        # case.
+        quoted = "\n".join(f"> {line}" for line in quote[:200].splitlines() or [""])
+        body = f"{claim}\n\n{quoted}"
+        cap = body_char_cap(NoteKind.rationale)
+        if len(body) > cap:
+            body = body[: cap - 1].rstrip() + "…"
+        notes.append(
+            KnowledgeNote(
+                id=f"kn-{uuid4().hex[:12]}",
+                org_id="",  # set by the caller, which knows the tenant
+                kind=NoteKind.rationale,
+                title=claim[:200],
+                body=body,
+                scope=f"project:{project}" if project else "org",
+                entities=NoteEntities(
+                    projects=[project] if project else [],
+                    concepts=str_list(item.get("concepts")),
+                ),
+                evidence=[compaction.id],
+                # Attributed, never anonymised: a rationale whose author is filed
+                # off has lost what makes it worth trusting.
+                actors=[compaction.actor] if compaction.actor else [],
+                source=NoteSource.ai,
+                status=NoteStatus.candidate,
+                confidence=0.5,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    return notes
 
 
 def enrich_org(
@@ -265,6 +361,22 @@ def enrich_org(
         enriched = apply_enrichment(compaction, data, used_summary=bool(summary))
         if store.save_enriched(enriched, org_id=org_id):
             store.clear_enrichment_state(org_id, compaction.id)
+            # Only after the digest lands: a rationale note whose session never
+            # got written would cite evidence that does not exist.
+            #
+            # NEVER ON THE SUMMARY PATH. When a native summary exists the prompt
+            # carries no turns at all (`turns` stays empty above), so the model is
+            # being asked for a VERBATIM quote from text it was never shown — it
+            # can only invent one, and "quote is present" is not a check that
+            # catches an invention. Publishing fabricated words in a named
+            # engineer's voice is worse than publishing nothing, so this field is
+            # simply not honoured there.
+            if config.enable_rationale_notes and not summary:
+                for note in build_rationale_notes(
+                    compaction, data, limit=config.rationale_max_per_session
+                ):
+                    store.upsert_note(note.model_copy(update={"org_id": org_id}))
+                    stats.rationale += 1
             stats.enriched += 1
         else:  # row disappeared mid-pass (purged) — nothing to write
             stats.failed += 1
@@ -307,6 +419,7 @@ def run_enrichment_pass(
         total.abandoned += stats.abandoned
         total.failed += stats.failed
         total.quota_blocked += stats.quota_blocked
+        total.rationale += stats.rationale
         total.orgs.append(org_id)
         # Only real work consumes the pass budget; waiting/abandoned digests cost
         # no tokens, so they must not crowd out another org's enrichable ones.
